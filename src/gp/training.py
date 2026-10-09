@@ -28,7 +28,8 @@ def _batch_state(batch):
     return {
         "assay_id": batch.assay_id, "variant_ids": tuple(batch.variant_ids),
         "targets": None if batch.targets is None else batch.targets.detach().cpu(),
-        "scores": batch.scores.detach().cpu(), "global_features": batch.global_features.detach().cpu(),
+        "scores": batch.scores.detach().cpu(),
+        "global_features": None if batch.global_features is None else batch.global_features.detach().cpu(),
         "local_features": {k: v.detach().cpu() for k, v in batch.local_features.items()},
         "owners": batch.owners.detach().cpu(), "mutation_positions": batch.mutation_positions.detach().cpu(),
         "reference_sequence": batch.reference_sequence, "sequences": tuple(batch.sequences),
@@ -44,7 +45,8 @@ def _freeze_batch(batch):
     """Own detached copies so cached inputs stay constant throughout fitting."""
     frozen = lambda value: value.detach().clone()
     return replace(batch, targets=None if batch.targets is None else frozen(batch.targets),
-                   scores=frozen(batch.scores), global_features=frozen(batch.global_features),
+                   scores=frozen(batch.scores),
+                   global_features=None if batch.global_features is None else frozen(batch.global_features),
                    local_features={k: frozen(v) for k, v in batch.local_features.items()},
                    owners=frozen(batch.owners), mutation_positions=frozen(batch.mutation_positions),
                    feature_signature=dict(batch.feature_signature))
@@ -70,7 +72,7 @@ class FittedGP:
         if self.train.reference_sequence and test.reference_sequence != self.train.reference_sequence:
             raise ValueError("Prediction reference sequence differs from training")
         if tuple(test.score_names) != tuple(self.train.score_names):
-            raise ValueError("Prediction zero-shot scorers or their order differ from training")
+            raise ValueError("Prediction mean scorers or their order differ from training")
         if test.feature_signature != self.train.feature_signature:
             raise ValueError("Prediction feature sources or preprocessing differ from training")
         test = self.transform.apply(test.to(self.train.scores.device))

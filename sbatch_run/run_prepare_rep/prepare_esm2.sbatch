@@ -31,7 +31,11 @@ cd -- "$project_root"
 
 # Prevent ~/.local packages from shadowing the Conda environment.
 export PYTHONNOUSERSITE=1
-module load anaconda3
+# Reuse Conda inherited from the submission shell. Reloading the module can run
+# deactivation hooks before this noninteractive shell has initialized Conda.
+if ! command -v conda >/dev/null 2>&1; then
+  module load anaconda3
+fi
 conda_base="$(conda info --base)"
 source "$conda_base/etc/profile.d/conda.sh"
 conda activate nkn_protein

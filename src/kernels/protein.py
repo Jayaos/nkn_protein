@@ -7,12 +7,13 @@ import math
 import torch
 from torch import Tensor, nn
 
+from config import BRANCH_NAMES, validate_enabled_branches
 from .nkn import NeuralKernelNetwork, PrimitiveNKN
 from .primitives import IF_KERNELS, VECTOR_KERNELS, initial_lengthscale
 
 
 LOCAL_BRANCHES = ("inverse_folding", "structure", "sequence_site")
-BRANCHES = (*LOCAL_BRANCHES, "sequence_global")
+BRANCHES = BRANCH_NAMES
 
 
 def aggregate_mutations(
@@ -32,7 +33,7 @@ def aggregate_mutations(
 
 
 class ProteinKernel(nn.Module):
-    """Four local/global representation branches followed by a final NKN.
+    """Selected local/global representation branches followed by a final NKN.
 
     ``train``, ``left`` and ``right`` follow the FeatureBatch interface. The kernel
     does not own feature generation or fit transformations using held-out inputs.
@@ -42,40 +43,46 @@ class ProteinKernel(nn.Module):
         super().__init__()
         if not math.isfinite(lengthscale_multiplier) or lengthscale_multiplier <= 0:
             raise ValueError("The initial lengthscale multiplier must be finite and positive")
-        if set(config.branches) != set(BRANCHES):
-            raise ValueError(f"Model branches must be exactly {BRANCHES}")
+        # Older configurations without a selection retain the original four branches.
+        self.enabled_branches = validate_enabled_branches(getattr(config, "enabled_branches", BRANCHES))
+        missing = set(self.enabled_branches) - set(config.branches)
+        if missing:
+            raise ValueError(f"Missing enabled branch configurations: {sorted(missing)}")
         self._validate_batch(train)
         self.feature_dimensions = {
-            name: (train.global_features if name == "sequence_global" else train.local_features[name]).shape[1]
-            for name in BRANCHES
+            name: self._features(train, name).shape[1] for name in self.enabled_branches
         }
         branches = {}
-        for name in BRANCHES:
+        for name in self.enabled_branches:
             branch_config = config.branches[name]
             allowed = IF_KERNELS if name == "inverse_folding" else VECTOR_KERNELS
             if set(branch_config.copies) - allowed:
                 raise ValueError(f"Invalid primitive kernels for {name}: {set(branch_config.copies) - allowed}")
-            features = train.global_features if name == "sequence_global" else train.local_features[name]
+            features = self._features(train, name)
             scale = initial_lengthscale(features, hellinger=name == "inverse_folding")
             branches[name] = PrimitiveNKN(
                 branch_config.copies, branch_config.widths, scale * lengthscale_multiplier
             )
         self.branches = nn.ModuleDict(branches)
-        self.final_nkn = NeuralKernelNetwork(len(BRANCHES), config.final_widths)
-        self.to(device=train.global_features.device, dtype=torch.float64)
+        self.final_nkn = NeuralKernelNetwork(len(self.enabled_branches), config.final_widths)
+        self.to(device=train.owners.device, dtype=torch.float64)
 
     @staticmethod
-    def _validate_batch(batch) -> None:
+    def _features(batch, name):
+        features = (
+            getattr(batch, "global_features", None) if name == "sequence_global"
+            else getattr(batch, "local_features", {}).get(name)
+        )
+        if features is None:
+            raise ValueError(f"Missing features for enabled branch: {name}")
+        return features
+
+    def _validate_batch(self, batch) -> None:
         if isinstance(batch.num_variants, bool) or not isinstance(batch.num_variants, int) or batch.num_variants < 0:
             raise ValueError("FeatureBatch.num_variants must be a nonnegative integer")
-        if batch.global_features.ndim != 2 or batch.global_features.shape[0] != batch.num_variants:
-            raise ValueError("Global features must contain one row per variant")
-        for name in LOCAL_BRANCHES:
-            if name not in batch.local_features:
-                raise ValueError(f"Missing local features: {name}")
-        device = batch.global_features.device
-        if batch.owners.ndim != 1 or batch.owners.dtype != torch.long or batch.owners.device != device:
-            raise ValueError("Mutation owners must be a one-dimensional long tensor on the feature device")
+        if batch.owners.ndim != 1 or batch.owners.dtype != torch.long:
+            raise ValueError("Mutation owners must be a one-dimensional long tensor")
+        device = batch.owners.device
         if (
             batch.mutation_positions.ndim != 1
             or batch.mutation_positions.dtype != torch.long
@@ -85,24 +92,28 @@ class ProteinKernel(nn.Module):
             raise ValueError("Mutation positions must align with the mutation owners")
         if ((batch.owners < 0) | (batch.owners >= batch.num_variants)).any():
             raise ValueError("Mutation owners must index variants in their own batch")
-        for features in [batch.global_features, *(batch.local_features[name] for name in LOCAL_BRANCHES)]:
-            if features.ndim != 2 or features.shape[1] == 0 or not features.is_floating_point():
-                raise ValueError("Feature arrays must be floating-point matrices with nonempty feature dimensions")
+        for name in self.enabled_branches:
+            features = self._features(batch, name)
+            if not isinstance(features, Tensor) or features.ndim != 2 or features.shape[1] == 0 or not features.is_floating_point():
+                raise ValueError(f"Features for {name} must be floating-point matrices with nonempty feature dimensions")
             if features.device != device:
-                raise ValueError("All feature arrays must use the same device")
-        if any(batch.local_features[name].shape[0] != batch.owners.numel() for name in LOCAL_BRANCHES):
-            raise ValueError("Local feature rows must align with mutation occurrences")
+                raise ValueError("All enabled feature arrays and mutation owners must use the same device")
+            expected_rows = batch.num_variants if name == "sequence_global" else batch.owners.numel()
+            if features.shape[0] != expected_rows:
+                raise ValueError(f"Feature rows for {name} must align with " + (
+                    "variants" if name == "sequence_global" else "mutation occurrences"
+                ))
 
     def forward(self, left, right=None) -> Tensor:
         right = left if right is None else right
         self._validate_batch(left)
         self._validate_batch(right)
-        if left.global_features.device != right.global_features.device:
+        if left.owners.device != right.owners.device:
             raise ValueError("Both feature batches must use the same device")
         covariance_parts = []
-        for name in BRANCHES:
-            left_features = left.global_features if name == "sequence_global" else left.local_features[name]
-            right_features = right.global_features if name == "sequence_global" else right.local_features[name]
+        for name in self.enabled_branches:
+            left_features = self._features(left, name)
+            right_features = self._features(right, name)
             if left_features.shape[1] != self.feature_dimensions[name] or right_features.shape[1] != self.feature_dimensions[name]:
                 raise ValueError(f"Feature dimension for {name} differs from its training dimension")
             local_covariance = self.branches[name](left_features, right_features)

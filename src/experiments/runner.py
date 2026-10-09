@@ -281,6 +281,8 @@ def run_predict(
     torch.set_num_threads(config.num_threads)
     batch = batch.to(config.device)
     fitted = FittedGP.load(checkpoint, device=config.device)
+    if config.model.enabled_branches != fitted.model_config.enabled_branches:
+        raise ValueError("Prediction enabled branches differ from the fitted checkpoint")
     prediction = fitted.predict(batch)
     output = prepare_output(output_dir, config)
     rows = _prediction_rows(batch, prediction)

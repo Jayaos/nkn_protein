@@ -14,6 +14,8 @@ from typing import Mapping, Sequence
 import torch
 from torch import Tensor
 
+from config import BRANCH_NAMES, validate_enabled_branches
+
 
 ALPHABET = "ACDEFGHIKLMNPQRSTVWY"
 FEATURE_TYPES = ("sequence", "structure", "inverse_folding")
@@ -67,7 +69,7 @@ class FeatureBatch:
     variant_ids: tuple[str, ...]
     targets: Tensor | None
     scores: Tensor
-    global_features: Tensor
+    global_features: Tensor | None
     local_features: dict[str, Tensor]
     owners: Tensor
     mutation_positions: Tensor
@@ -82,7 +84,7 @@ class FeatureBatch:
             raise ValueError("Variant IDs must be unique within a batch")
         if self.scores.ndim != 2 or self.scores.shape[0] != n or self.scores.shape[1] < 1:
             raise ValueError("Scores must have shape [variants, scorers], with at least one scorer")
-        if self.global_features.ndim != 2 or self.global_features.shape[0] != n or self.global_features.shape[1] < 1:
+        if self.global_features is not None and (self.global_features.ndim != 2 or self.global_features.shape[0] != n or self.global_features.shape[1] < 1):
             raise ValueError("Global features must have shape [variants, features]")
         if self.targets is not None and self.targets.shape != (n,):
             raise ValueError("Targets must have shape [variants]")
@@ -96,8 +98,10 @@ class FeatureBatch:
             raise ValueError("Mutation positions must be one-based")
         if self.reference_sequence and (self.mutation_positions > len(self.reference_sequence)).any():
             raise ValueError("Mutation positions exceed the reference length")
-        if set(self.local_features) != set(LOCAL_FEATURES):
-            raise ValueError(f"Local features must have keys {LOCAL_FEATURES}")
+        if set(self.local_features) - set(LOCAL_FEATURES):
+            raise ValueError(f"Unknown local feature; expected a subset of {LOCAL_FEATURES}")
+        if self.global_features is None and not self.local_features:
+            raise ValueError("At least one local or global feature branch is required")
         for name, values in self.local_features.items():
             if values.ndim != 2 or values.shape[0] != self.owners.numel() or values.shape[1] < 1:
                 raise ValueError(f"Invalid packed local feature shape: {name}")
@@ -105,7 +109,9 @@ class FeatureBatch:
             raise ValueError("Sequence count must match variant count")
         if self.score_names and (len(self.score_names) != self.num_scores or len(set(self.score_names)) != self.num_scores):
             raise ValueError("Score names must identify every score column uniquely and in order")
-        tensors = [self.scores, self.global_features, *self.local_features.values()]
+        tensors = [self.scores, *self.local_features.values()]
+        if self.global_features is not None:
+            tensors.append(self.global_features)
         if self.targets is not None:
             tensors.append(self.targets)
         if any(not x.is_floating_point() or not torch.isfinite(x).all() for x in tensors):
@@ -113,6 +119,10 @@ class FeatureBatch:
         devices = {x.device for x in [*tensors, self.owners, self.mutation_positions]}
         if len(devices) != 1:
             raise ValueError("All batch tensors must reside on the same device")
+
+    @property
+    def device(self) -> torch.device:
+        return self.scores.device
 
     @property
     def num_variants(self) -> int:
@@ -147,7 +157,7 @@ class FeatureBatch:
             variant_ids=tuple(self.variant_ids[i] for i in python_index),
             targets=None if self.targets is None else self.targets[index],
             scores=self.scores[index],
-            global_features=self.global_features[index],
+            global_features=None if self.global_features is None else self.global_features[index],
             local_features={key: value[occurrence] for key, value in self.local_features.items()},
             owners=mapped[occurrence],
             mutation_positions=self.mutation_positions[occurrence],
@@ -159,7 +169,7 @@ class FeatureBatch:
             self,
             targets=None if self.targets is None else self.targets.to(device=device, dtype=torch.float64),
             scores=self.scores.to(device=device, dtype=torch.float64),
-            global_features=self.global_features.to(device=device, dtype=torch.float64),
+            global_features=None if self.global_features is None else self.global_features.to(device=device, dtype=torch.float64),
             local_features={key: value.to(device=device, dtype=torch.float64) for key, value in self.local_features.items()},
             owners=self.owners.to(device=device, dtype=torch.long),
             mutation_positions=self.mutation_positions.to(device=device, dtype=torch.long),
@@ -223,13 +233,20 @@ def load_feature_bundle(
     score_sources: Sequence[str] | None = None,
     pooling: str = "mean",
     device: str | torch.device = "cpu",
+    enabled_branches: Sequence[str] | None = None,
 ) -> FeatureBatch:
     """Load schema-v2 caches; selection and score sources never depend on labels.
 
     Feature selections map feature types to ``family/checkpoint``. Score sources
-    use ``feature_type/family/checkpoint`` and default to the selected three
-    feature leaves. Global pooling currently supports mean pooling over residues.
+    use ``feature_type/family/checkpoint`` and default to the distinct leaves
+    needed by enabled branches. Explicit score sources are independent of branch
+    selection and require only score files, not their representation tensors.
+    New score leaves use scores/family/recipe and a mean_score descriptor; legacy
+    zero_shot descriptors in representation leaves remain supported.
+    Omitting enabled_branches retains all four branches.
     """
+    branches = BRANCH_NAMES if enabled_branches is None else validate_enabled_branches(enabled_branches)
+    needed_types = {"sequence" if name.startswith("sequence_") else name for name in branches}
     root = Path(feature_dir).resolve()
     metadata = json.loads((root / "assay.json").read_text(encoding="utf-8"))
     if metadata.get("schema_version") != 2 or metadata.get("layout_version") != 1:
@@ -264,14 +281,19 @@ def load_feature_bundle(
     stores, configs, sources = {}, {}, {}
     defaults = metadata.get("features", {})
     for name in FEATURE_TYPES:
-        if name not in defaults or not isinstance(defaults[name], Mapping):
-            raise ValueError(f"Missing default feature descriptor: {name}")
-        default = defaults[name]
-        suffix = selection.get(name, f"{default.get('model_family')}/{default.get('checkpoint')}")
+        if name not in needed_types:
+            continue
+        if name in selection:
+            suffix = selection[name]
+        else:
+            default = defaults.get(name)
+            if not isinstance(default, Mapping):
+                raise ValueError(f"Missing default feature descriptor: {name}")
+            suffix = f"{default.get('model_family')}/{default.get('checkpoint')}"
+            if default.get("path") != f"{name}/{suffix}":
+                raise ValueError(f"Default feature path is inconsistent: {name}")
         _inside(root, suffix, parts=2)
         source = f"{name}/{suffix}"
-        if name not in selection and default.get("path") != source:
-            raise ValueError(f"Default feature path is inconsistent: {name}")
         stores[name], configs[name] = _load_leaf(root, source, assay_id, 2)
         sources[name] = source
         store = stores[name]
@@ -282,36 +304,55 @@ def load_feature_bundle(
             raise ValueError(f"Expected complete one-based reference positions: {name}")
         if "synthetic" in metadata and store.get("synthetic") != metadata["synthetic"]:
             raise ValueError(f"Assay and feature provenance disagree: {name}")
-    sequence_store = stores["sequence"]
-    embedding = _float_tensor(sequence_store.get("embeddings"), "Sequence embeddings", 3, convert=False)
-    cached_ids = sequence_store.get("variant_ids", [])
-    hashes = sequence_store.get("sequence_hashes", [])
-    if len(cached_ids) != len(set(cached_ids)) or set(cached_ids) != set(ids) or len(cached_ids) != embedding.shape[0]:
-        raise ValueError("Sequence cache must cover exactly the variant table, with unique IDs")
-    if len(hashes) != len(cached_ids) or embedding.shape[1] != len(reference):
-        raise ValueError("Sequence cache residue axis or hash count is invalid")
-    lookup = {variant_id: i for i, variant_id in enumerate(cached_ids)}
-    order = [lookup[variant_id] for variant_id in ids]
-    for sequence, i in zip(sequences, order):
-        if hashlib.sha256(sequence.encode("utf-8")).hexdigest() != hashes[i]:
-            raise ValueError("Sequence hash mismatch")
-    structural = _float_tensor(stores["structure"].get("embeddings"), "Structural embeddings", 2)
-    inverse = _float_tensor(stores["inverse_folding"].get("probabilities"), "Inverse-folding probabilities", 2)
-    if structural.shape[0] != len(reference) or inverse.shape != (len(reference), 20):
-        raise ValueError("Structural and probability features must cover the reference residues")
-    if stores["inverse_folding"].get("alphabet") != ALPHABET:
-        raise ValueError("Inverse-folding amino-acid alphabet mismatch")
-    if (inverse < 0).any() or not torch.allclose(inverse.sum(-1), torch.ones(len(reference), dtype=torch.float64), atol=1e-5, rtol=1e-5):
-        raise ValueError("Inverse-folding distributions must be nonnegative and sum to one")
-    if "log_probs" in stores["inverse_folding"]:
-        log_probs = stores["inverse_folding"]["log_probs"]
-        if not isinstance(log_probs, Tensor) or log_probs.shape != inverse.shape or not torch.allclose(log_probs.double(), inverse.log(), atol=1e-5, rtol=1e-5):
-            raise ValueError("Inverse-folding log probabilities are inconsistent")
-    selected_scores = list(score_sources) if score_sources is not None else [sources[name] for name in FEATURE_TYPES]
+    owners = torch.tensor([i for i, positions in enumerate(mutations) for _ in positions], dtype=torch.long)
+    positions = torch.tensor([position for values in mutations for position in values], dtype=torch.long)
+    global_features = None
+    local_features = {}
+    if "sequence" in stores:
+        sequence_store = stores["sequence"]
+        embedding = _float_tensor(sequence_store.get("embeddings"), "Sequence embeddings", 3, convert=False)
+        cached_ids = sequence_store.get("variant_ids", [])
+        hashes = sequence_store.get("sequence_hashes", [])
+        if len(cached_ids) != len(set(cached_ids)) or set(cached_ids) != set(ids) or len(cached_ids) != embedding.shape[0]:
+            raise ValueError("Sequence cache must cover exactly the variant table, with unique IDs")
+        if len(hashes) != len(cached_ids) or embedding.shape[1] != len(reference):
+            raise ValueError("Sequence cache residue axis or hash count is invalid")
+        lookup = {variant_id: i for i, variant_id in enumerate(cached_ids)}
+        order = [lookup[variant_id] for variant_id in ids]
+        for sequence, i in zip(sequences, order):
+            if hashlib.sha256(sequence.encode("utf-8")).hexdigest() != hashes[i]:
+                raise ValueError("Sequence hash mismatch")
+        cache_order = torch.tensor(order, dtype=torch.long)
+        if "sequence_global" in branches:
+            global_features = embedding.mean(dim=1, dtype=torch.float64)[cache_order]
+        if "sequence_site" in branches:
+            local_features["sequence_site"] = embedding[cache_order[owners], positions - 1].double()
+    if "structure" in stores:
+        structural = _float_tensor(stores["structure"].get("embeddings"), "Structural embeddings", 2)
+        if structural.shape[0] != len(reference):
+            raise ValueError("Structural features must cover the reference residues")
+        local_features["structure"] = structural[positions - 1]
+    if "inverse_folding" in stores:
+        inverse_store = stores["inverse_folding"]
+        inverse = _float_tensor(inverse_store.get("probabilities"), "Inverse-folding probabilities", 2)
+        if inverse.shape != (len(reference), 20):
+            raise ValueError("Probability features must cover the reference residues")
+        if inverse_store.get("alphabet") != ALPHABET:
+            raise ValueError("Inverse-folding amino-acid alphabet mismatch")
+        if (inverse < 0).any() or not torch.allclose(inverse.sum(-1), torch.ones(len(reference), dtype=torch.float64), atol=1e-5, rtol=1e-5):
+            raise ValueError("Inverse-folding distributions must be nonnegative and sum to one")
+        if "log_probs" in inverse_store:
+            log_probs = inverse_store["log_probs"]
+            if not isinstance(log_probs, Tensor) or log_probs.shape != inverse.shape or not torch.allclose(log_probs.double(), inverse.log(), atol=1e-5, rtol=1e-5):
+                raise ValueError("Inverse-folding log probabilities are inconsistent")
+        local_features["inverse_folding"] = inverse[positions - 1]
+    selected_scores = list(score_sources) if score_sources is not None else list(sources.values())
     if not selected_scores or len(set(selected_scores)) != len(selected_scores):
-        raise ValueError("Select at least one unique zero-shot score source")
+        raise ValueError("Select at least one unique mean score source")
     columns = []
     signature = {"schema_version": "2", "layout_version": "1", "pooling": pooling, **sources}
+    if branches != BRANCH_NAMES:
+        signature["enabled_branches"] = json.dumps(branches, separators=(",", ":"))
     for name, config in configs.items():
         signature[f"{name}.config_sha256"] = _config_fingerprint(config)
     for source in selected_scores:
@@ -320,10 +361,18 @@ def load_feature_bundle(
         source_type, family, checkpoint = source.split("/")
         if any(config.get(key) != value for key, value in (("feature_type", source_type), ("model_family", family), ("checkpoint", checkpoint))):
             raise ValueError(f"Score configuration does not match its directory: {source}")
+        if source_type == "scores":
+            from feature_generation.score_storage import validate_score_cache
+
+            validate_score_cache(root, model_family=family, cache_id=checkpoint)
         signature[f"score:{source}.config_sha256"] = _config_fingerprint(config)
-        descriptor = config.get("zero_shot")
+        descriptor = config.get("mean_score", config.get("zero_shot"))
+        if "mean_score" in config and "zero_shot" in config and config["mean_score"] != config["zero_shot"]:
+            raise ValueError(f"Conflicting mean_score and legacy zero_shot descriptors: {leaf}")
         if not isinstance(descriptor, Mapping):
-            raise ValueError(f"Missing zero-shot descriptor: {leaf}")
+            raise ValueError(f"Missing mean score descriptor: {leaf}")
+        if not {"file", "id_column", "score_column"}.issubset(descriptor):
+            raise ValueError(f"Incomplete mean score descriptor: {leaf}")
         score_path = _inside(root, f"{source}/{descriptor['file']}")
         score_rows = read_csv(score_path)
         id_column, score_column = descriptor["id_column"], descriptor["score_column"]
@@ -333,18 +382,15 @@ def load_feature_bundle(
         if len(table) != len(score_rows) or set(table) != set(ids):
             raise ValueError(f"Score IDs must cover exactly the variant table: {score_path}")
         if not all(math.isfinite(value) for value in table.values()):
-            raise ValueError(f"Zero-shot scores must be finite: {score_path}")
+            raise ValueError(f"Mean scores must be finite: {score_path}")
         columns.append(torch.tensor([table[variant_id] for variant_id in ids], dtype=torch.float64))
-    owners = torch.tensor([i for i, positions in enumerate(mutations) for _ in positions], dtype=torch.long)
-    positions = torch.tensor([position for values in mutations for position in values], dtype=torch.long)
-    cache_order = torch.tensor(order, dtype=torch.long)
     batch = FeatureBatch(
         assay_id=assay_id,
         variant_ids=ids,
         targets=targets,
         scores=torch.stack(columns, dim=1),
-        global_features=embedding.mean(dim=1, dtype=torch.float64)[cache_order],
-        local_features={"inverse_folding": inverse[positions - 1], "structure": structural[positions - 1], "sequence_site": embedding[cache_order[owners], positions - 1].double()},
+        global_features=global_features,
+        local_features={name: local_features[name] for name in LOCAL_FEATURES if name in local_features},
         owners=owners,
         mutation_positions=positions,
         reference_sequence=reference,

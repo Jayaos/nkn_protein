@@ -1,4 +1,4 @@
-"""Download, extract, and validate frozen protein representations."""
+"""Download frozen models, extract representations, and prepare GP mean scores."""
 
 from __future__ import annotations
 
@@ -32,9 +32,26 @@ def _parser() -> argparse.ArgumentParser:
     extraction.add_argument("--resume", action="store_true", help="Reuse only matching, fully validated completed caches")
     extraction.add_argument("--continue-on-error", action="store_true", help="Report failed assays and continue; exit status remains nonzero")
     extraction.add_argument("--quiet", action="store_true")
+    scoring = commands.add_parser("score", help="Prepare ProteinMPNN sequence likelihoods in mean_score.csv")
+    scoring.add_argument("--config", required=True, type=Path, help="ProteinMPNN extraction config supplies checkpoint, paths and seed")
+    score_assays = scoring.add_mutually_exclusive_group(required=True)
+    score_assays.add_argument("--assay", action="append", help="Assay ID; repeat to select several assays")
+    score_assays.add_argument("--all-assays", action="store_true")
+    scoring.add_argument("--assay-index", type=Path)
+    scoring.add_argument("--output-root", type=Path)
+    scoring.add_argument("--structure-manifest-dir", type=Path)
+    scoring.add_argument("--device", choices=("auto", "cpu", "cuda"))
+    scoring.add_argument("--batch-size", type=int, default=8, help="Variant sequences per forward pass")
+    scoring.add_argument("--num-orders", type=int, default=1, help="Random decoding orders to average; default 1")
+    scoring.add_argument("--cache-id", help="Score recipe directory; default includes checkpoint, order count and seed")
+    scoring.add_argument("--limit", type=int, help="Explicit first-N-variant subset; use a separate output root")
+    scoring.add_argument("--singles-only", action="store_true")
+    scoring.add_argument("--resume", action="store_true", help="Reuse only matching, fully validated score caches")
+    scoring.add_argument("--continue-on-error", action="store_true")
+    scoring.add_argument("--quiet", action="store_true")
     validation = commands.add_parser("validate", help="Validate one cache without requiring other feature modalities")
     validation.add_argument("--features", required=True, type=Path, help="Assay directory containing assay.json")
-    validation.add_argument("--feature-type", choices=("sequence", "inverse_folding"), help="Defaults to sequence, or inferred from --model-family")
+    validation.add_argument("--feature-type", choices=("sequence", "inverse_folding", "scores"), help="Use scores for mean_score.csv; otherwise inferred from --model-family")
     validation.add_argument("--model-family", choices=("esm2", "prosst", "proteinmpnn", "esm_if1"))
     validation.add_argument("--cache-id", help="Model recipe directory; defaults to the selected feature descriptor")
     for command, help_text in (
@@ -60,6 +77,8 @@ def _progress(event: dict) -> None:
     assay, status = event["assay_id"], event["status"]
     if status == "batch":
         print(f"{assay}: {event['completed']}/{event['num_variants']} variants", file=sys.stderr)
+    elif status == "scoring":
+        print(f"{assay}: scoring {event['num_variants']} variants ({event['num_orders']} decoding orders)", file=sys.stderr)
     elif status == "extracting":
         if "reference_length" in event:
             print(f"{assay}: extracting inverse-folding distributions for {event['reference_length']} residues", file=sys.stderr)
@@ -105,6 +124,11 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"assay_id": args.assay, "manifest": str(path)}, indent=2))
             return 0
         if args.command == "validate":
+            if args.feature_type == "scores":
+                from .score_storage import validate_score_cache
+                report = validate_score_cache(args.features, model_family=args.model_family or "proteinmpnn", cache_id=args.cache_id)
+                print(json.dumps(report, indent=2))
+                return 0
             family_type = ("inverse_folding" if args.model_family in ("proteinmpnn", "esm_if1")
                            else "sequence" if args.model_family in ("esm2", "prosst") else None)
             feature_type = args.feature_type or family_type or "sequence"
@@ -136,13 +160,24 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         overrides = {}
         for name in ("assay_index", "output_root", "device", "max_tokens_per_batch", "structure_manifest_dir", "structure_token_dir"):
-            value = getattr(args, name)
+            value = getattr(args, name, None)
             if value is not None:
                 if not hasattr(config, name):
                     raise ValueError(f"--{name.replace('_', '-')} does not apply to this model")
                 overrides[name] = value.resolve() if isinstance(value, Path) else value
         config = replace(config, **overrides)
         from data_loading import AssayCatalog
+        if args.command == "score":
+            from .score_runner import score
+            assay_ids = [record.assay_id for record in AssayCatalog(config.assay_index)] if args.all_assays else args.assay
+            results = score(
+                config, assay_ids, batch_size=args.batch_size, num_orders=args.num_orders,
+                cache_id=args.cache_id, singles_only=args.singles_only, limit=args.limit,
+                resume=args.resume, continue_on_error=args.continue_on_error,
+                progress=None if args.quiet else _progress,
+            )
+            print(json.dumps({"results": results}, indent=2))
+            return int(any(result["status"] == "failed" for result in results))
         if prosst:
             from .prosst_runner import extract
         elif inverse:

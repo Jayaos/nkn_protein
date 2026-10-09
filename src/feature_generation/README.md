@@ -34,8 +34,9 @@ inputs. The supported initial recipes have different conditioning:
 
 ESM-IF1 output is an autoregressive reference-context distribution, not an exact
 backbone-only marginal or a conditional on the complete remaining WT sequence.
-This milestone does not implement Kermut's separate ProteinMPNN rest-of-WT
-conditional recipe, sequence generation, variant likelihoods, or zero-shot scores.
+The extraction recipe does not implement Kermut's averaged WT-prefix distributions
+or sequence generation. ProteinMPNN variant sequence likelihoods are prepared
+separately with the `score` command below.
 
 Install/update from `env.yaml`, or use `python -m pip install -r requirements.txt`
 in a Python 3.10 venv. Added inference dependencies are Biopython, Biotite, SciPy,
@@ -109,11 +110,99 @@ agree with their probabilities. Special tokens and ProteinMPNN's X are excluded.
 
 Both model leaves can coexist; the first completed leaf becomes the inverse-folding
 default. Select either using `feature_selection["inverse_folding"] = "<family>/<recipe>"`
-in the experiment config. A full GP run still also requires structure embeddings
-and at least one zero-shot score source; standalone inverse cache validation does not.
+in the experiment config. GP experiments load only the feature types required by
+`model.enabled_branches`; structure embeddings are needed only when `structure` is
+enabled. At least one mean score source is still required for the GP mean;
+standalone inverse cache validation does not require scores.
 
 Upstream implementations: [ProteinMPNN](https://github.com/dauparas/ProteinMPNN),
 [ESM-IF1](https://github.com/facebookresearch/esm/tree/main/examples/inverse_folding).
+
+## ProteinMPNN scores for the GP mean
+
+The `score` command runs the pinned official ProteinMPNN forward pass on every
+complete variant sequence and the fixed reference backbone. It stores the
+negative of the official mean negative log-likelihood: higher values indicate
+higher sequence likelihood. All reference residues contribute, including unchanged
+positions. Probabilities retain the native 21-token vocabulary (including X in
+the normalization); the score is not derived from the canonical 20-way extraction
+cache. There is no WT subtraction, DMS-label input, or finetuning.
+
+```bash
+python -m feature_generation.cli score --config src/configs/extraction/proteinmpnn_v48_020.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --batch-size 8 --resume
+python -m feature_generation.cli validate --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --feature-type scores --model-family proteinmpnn --cache-id v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb
+```
+
+Use `--device cpu` when no GPU is available. This reuses the existing ProteinMPNN
+checkpoint and structure manifest; no new dependencies or model downloads are
+needed if extraction already ran. Scoring can also run before extraction.
+`prepare_proteinmpnn.sbatch` downloads and verifies the pinned checkpoint/source
+and chain-A ProteinGym reference structure, then runs extraction and scoring.
+No checkpoint or structure needs to be downloaded before submission. The Conda
+environment and ProteinGym assay CSVs must already exist, and the allocated
+compute node needs outbound HTTPS access. Valid assets and completed caches are
+verified and reused on subsequent submissions.
+
+`--num-orders` defaults to 1. Larger values average the mean log-likelihoods over
+that many random decoding orders. The config's `seed` drives a local CPU random
+generator; the same orders are shared across variants and batch sizes. This uses
+the official sequence-scoring formula with reproducible common decoding orders,
+not a claim of identical random draws to ProteinGym's scoring script. Batch size
+changes memory use, not the recipe; device/batching can introduce floating-point
+roundoff. The default score cache ID includes the checkpoint revision, number of
+orders and seed. `--cache-id` can select an explicit name, but `--resume` rejects
+any changed recipe under that name. The extraction config's `cache_id` and
+`conditioning_mode` describe only the representation cache and are not used as
+the score recipe identity.
+
+Scores use the same immutable assay/variant table as representations. A subset
+requires its own `--output-root`, consistently with extraction. Repeat `--assay`
+or use `--all-assays`; `--continue-on-error` records failures with a nonzero exit.
+No model inference runs for a matching validated completed score cache.
+
+```text
+data/features/pretrained/<assay>/
+  assay.json
+  variants.csv
+  scores/proteinmpnn/v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb/
+    mean_score.csv
+    config.json
+    provenance.json
+    completion.json
+```
+
+`mean_score.csv` contains `variant_id,score`, exactly one finite value per shared
+variant ID. Its `config.json` declares `mean_score` with `file`, `id_column`, and
+`score_column`, as well as the conditioning, score direction, normalization,
+checkpoint, structure, seed and decoding-order settings. Completion hashes protect
+the score file and metadata. Score generation never rewrites representation
+configs or changes the default feature selections.
+
+Set experiment `score_sources` explicitly to the generated score source:
+
+```json
+{
+  "model": {"enabled_branches": ["sequence_global", "inverse_folding"]},
+  "score_sources": [
+    "scores/proteinmpnn/v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb"
+  ]
+}
+```
+
+`src/configs/esm2_proteinmpnn_mean_score_smoke.json` selects the existing ESM2-8M
+and ProteinMPNN representations with these scores and five GP training steps.
+This is an integration smoke test, not a converged performance experiment:
+
+```bash
+python -m experiments.cli fit --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config src/configs/esm2_proteinmpnn_mean_score_smoke.json --development-splits --scheme random --test-fold 0 --output src/runs/esm2_proteinmpnn_mean_smoke
+```
+
+The GP loader validates dedicated score caches, joins scores by variant ID and
+standardizes each score using training variants only. Legacy `zero_shot`
+descriptors remain readable; all new score artifacts use `mean_score.csv`.
+
+Official scoring sources: [ProteinMPNN sequence scoring](https://github.com/dauparas/ProteinMPNN/blob/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/protein_mpnn_run.py),
+[ProteinMPNN NLL reduction](https://github.com/dauparas/ProteinMPNN/blob/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/protein_mpnn_utils.py).
 
 ## ProSST: sequence embeddings conditioned on a reference structure
 
@@ -122,7 +211,7 @@ at revision `e94ffee7846d7f55c1bf5efa8ec7372a336ac4b8`. It saves the final
 layer (12) as float32 `embeddings[N, L, 768]`, excluding special tokens and padding.
 Each unmasked variant sequence is paired with the **same reference backbone**.
 These are joint sequence/structure representations for substitution variants;
-this recipe does not calculate candidate probabilities or zero-shot scores.
+this recipe does not calculate candidate probabilities or mean scores.
 
 The official GVP encoder and 2048-cluster codebook first convert the reference
 structure to one discrete token per residue. This pipeline uses the pinned
@@ -332,11 +421,11 @@ recipe becomes the assay default. Select another recipe explicitly with
 
 The existing synthetic fixture is preserved. The new sequence cache is
 compatible with the sequence portion of `data_loading.load_feature_bundle`;
-standalone extraction validation works before other modalities exist. A full GP
-run still requires structure embeddings, inverse-folding probabilities and at
-least one score source. This milestone does not generate zero-shot scores or
-fabricate the other features. Masked-marginal scoring can be added to the adapter
-later and saved as `zero_shot.csv`.
+standalone extraction validation works before other modalities exist. GP runs
+require the modalities selected by `model.enabled_branches` (all four branches by
+default) and at least one score source. ProteinMPNN sequence likelihoods can be
+generated with `score` and selected through `score_sources`. Structure embeddings
+and ESM-2 sequence scores are not generated by the current extraction commands.
 
 ## Validation
 

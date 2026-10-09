@@ -12,7 +12,7 @@ class ExactProteinGP(nn.Module):
     def __init__(self, train, model_config, training_config, lengthscale_multiplier=1.0):
         super().__init__()
         if train.num_scores < 1:
-            raise ValueError("At least one zero-shot scorer is required")
+            raise ValueError("At least one mean scorer is required")
         self.kernel = ProteinKernel(model_config, train, lengthscale_multiplier=lengthscale_multiplier)
         device = train.scores.device
         self.intercept = nn.Parameter(torch.zeros((), dtype=torch.float64, device=device))

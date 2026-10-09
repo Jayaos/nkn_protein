@@ -64,6 +64,7 @@ def _load_batch(args, config):
         score_sources=config.score_sources,
         pooling=config.pooling,
         device=config.device,
+        enabled_branches=config.model.enabled_branches,
     )
     if args.singles_only:
         counts = torch.bincount(batch.owners, minlength=batch.num_variants)
@@ -132,7 +133,8 @@ def main(argv: list[str] | None = None) -> int:
                 "n_mutation_occurrences": batch.owners.numel(),
                 "n_score_sources": batch.num_scores,
                 "has_targets": batch.targets is not None,
-                "global_feature_dimension": batch.global_features.shape[1],
+                "enabled_branches": list(config.model.enabled_branches),
+                "global_feature_dimension": None if batch.global_features is None else batch.global_features.shape[1],
                 "local_feature_dimensions": {name: values.shape[1] for name, values in batch.local_features.items()},
             }
             (output / "validation.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

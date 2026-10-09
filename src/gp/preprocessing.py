@@ -17,7 +17,7 @@ class FoldTransform:
         if y is None or len(y) < 2 or not torch.isfinite(y).all():
             raise ValueError("Training needs at least two finite observed targets")
         if scores.ndim != 2 or scores.shape[1] < 1 or not torch.isfinite(scores).all():
-            raise ValueError("Training needs finite scores from at least one zero-shot scorer")
+            raise ValueError("Training needs finite scores from at least one mean scorer")
         target_scale = y.std(unbiased=False)
         if not torch.isfinite(target_scale) or target_scale <= 0:
             raise ValueError("Cannot standardize constant training targets or a nonfinite target scale")
@@ -33,7 +33,7 @@ class FoldTransform:
 
     def apply(self, batch):
         if batch.num_scores != self.score_mean.numel():
-            raise ValueError("Prediction zero-shot scorer count differs from training")
+            raise ValueError("Prediction mean scorer count differs from training")
         return batch.with_scores((batch.scores - self.score_mean) / self.score_scale)
 
     def state_dict(self):

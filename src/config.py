@@ -11,6 +11,20 @@ IF_PRIMITIVES = ("hellinger_exp", "hellinger_rbf", "bhattacharyya")
 BRANCH_NAMES = ("inverse_folding", "structure", "sequence_site", "sequence_global")
 
 
+def validate_enabled_branches(values):
+    """Return a nonempty branch selection in stable model channel order."""
+    if not isinstance(values, (list, tuple)) or not values:
+        raise ValueError("enabled_branches must be a nonempty list or tuple of branch names")
+    if any(not isinstance(name, str) for name in values):
+        raise ValueError("enabled_branches must contain branch names as strings")
+    if len(set(values)) != len(values):
+        raise ValueError("enabled_branches must not contain duplicate names")
+    unknown = set(values) - set(BRANCH_NAMES)
+    if unknown:
+        raise ValueError(f"Unknown enabled branches: {sorted(unknown)}; choose from {BRANCH_NAMES}")
+    return tuple(name for name in BRANCH_NAMES if name in values)
+
+
 def validate_widths(widths):
     widths = tuple(widths)
     if not widths or len(widths) % 2 != 1 or widths[-1] != 1:
@@ -46,13 +60,21 @@ def _branches():
 class ModelConfig:
     branches: dict = field(default_factory=_branches)
     final_widths: tuple = (8, 4, 4, 2, 1)
+    enabled_branches: tuple = BRANCH_NAMES
 
     def __post_init__(self):
+        self.enabled_branches = validate_enabled_branches(self.enabled_branches)
         self.final_widths = validate_widths(self.final_widths)
-        if set(self.branches) != set(BRANCH_NAMES):
-            raise ValueError(f"Exactly these branches are required: {BRANCH_NAMES}")
-        self.branches = {k: v if isinstance(v, BranchConfig) else BranchConfig(**v)
-                         for k, v in self.branches.items()}
+        unknown = set(self.branches) - set(BRANCH_NAMES)
+        if unknown:
+            raise ValueError(f"Unknown branch configurations: {sorted(unknown)}")
+        # Omitted hyperparameters keep their defaults, including for disabled branches.
+        defaults = _branches()
+        branches = {**defaults, **self.branches}
+        self.branches = {
+            k: v if isinstance(v, BranchConfig) else BranchConfig(**{**asdict(defaults[k]), **v})
+            for k, v in branches.items()
+        }
         for name, branch in self.branches.items():
             allowed = IF_PRIMITIVES if name == "inverse_folding" else VECTOR_PRIMITIVES
             if set(branch.copies) - set(allowed):

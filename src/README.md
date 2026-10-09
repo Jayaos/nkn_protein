@@ -94,9 +94,10 @@ The cache adapter accepts the existing schema-version-2/layout-version-1 format:
 features/<assay>/
   assay.json
   variants.csv
-  sequence/<family>/<checkpoint>/{config.json,features.pt,zero_shot.csv}
-  structure/<family>/<checkpoint>/{config.json,features.pt,zero_shot.csv}
-  inverse_folding/<family>/<checkpoint>/{config.json,features.pt,zero_shot.csv}
+  sequence/<family>/<checkpoint>/{config.json,features.pt}
+  structure/<family>/<checkpoint>/{config.json,features.pt}
+  inverse_folding/<family>/<checkpoint>/{config.json,features.pt}
+  scores/<family>/<recipe>/{config.json,mean_score.csv,provenance.json,completion.json}
 ```
 
 `variants.csv` identifies the requested variants. Sequence cache IDs and hashes
@@ -108,12 +109,15 @@ branch. Model-specific preprocessing and other pooling can later be supplied
 through the model-independent `FeatureBatch` API. The old
 `ProteinFitnessDataset.as_feature_matrices` demo transformations are not used.
 
-Zero-shot sources default to the three selected representation directories.
-`score_sources` may instead list any selected score directories in a fixed order,
-using `feature_type/family/checkpoint`. Scores are joined by ID and standardized
-on training variants only. Score direction must be `higher_is_better` or
-`lower_is_better`, as declared in its configuration. Source identity and order
-are saved in checkpoints and validated during prediction.
+Mean score sources default to the distinct representation directories required
+by enabled branches, for compatibility with existing fixtures. For generated
+scores, set `score_sources` explicitly to `scores/family/recipe`. Scores are joined
+by ID and standardized on training variants only. `mean_score` in the score config
+declares the CSV file and ID/value columns; legacy `zero_shot` descriptors are still
+readable. New ProteinMPNN scores are negative mean sequence NLL (higher values
+indicate greater likelihood), with direction recorded in the config. The loader
+uses values as stored; it does not automatically flip score direction. Source
+identity and order are saved in checkpoints and validated during prediction.
 
 The ProteinGym catalog reads `DMS_id`, `DMS_filename`, and `target_seq` from its
 index. It validates processed mutation positions directly against the reference;
@@ -173,8 +177,67 @@ experiment, not five-fold cross-validation.
 ## Configuration and numerical behavior
 
 JSON configurations can override any `ExperimentConfig` field. Unspecified
-fields use the validated defaults in `config.py`. If overriding `model.branches`,
-supply all four branches. For example:
+fields use the validated defaults in `config.py`.
+
+### Selecting NKN branches
+
+Set `model.enabled_branches` to any nonempty combination of these names:
+
+| Branch | Required feature cache | Representation |
+| --- | --- | --- |
+| `inverse_folding` | `inverse_folding` | Reference amino-acid distributions at mutation positions |
+| `structure` | `structure` | Reference structural embeddings at mutation positions |
+| `sequence_site` | `sequence` | Variant residue embeddings at mutation positions |
+| `sequence_global` | `sequence` | Mean-pooled variant residue embeddings |
+
+For exactly two branches using sequence and inverse-folding features:
+
+```json
+{
+  "model": {
+    "enabled_branches": ["sequence_global", "inverse_folding"]
+  }
+}
+```
+
+Add `sequence_site` to also use mutation-site sequence features; both sequence
+branches share the same selected cache. Only enabled branches are constructed,
+and the final NKN automatically receives that many inputs. Disabled feature
+caches and default descriptors are not required. Any remaining enabled branch
+still requires its actual features. Empty, duplicate and unknown branch selections
+are rejected. Omit the setting to retain the original four-branch model.
+
+`feature_selection` independently chooses the family/checkpoint for each feature
+type. For example, select `esm2/esm2_t6_8M_UR50D-layer6-c731040fcd8d` for
+`sequence` and `proteinmpnn/v_48_020-backbone_only-8907e6671bfb` for
+`inverse_folding`. Enabling an NKN branch does not select a different pretrained
+model or regenerate its representations.
+
+The GP mean requires at least one mean score source. `score_sources` remains
+independent of kernel branches: when omitted, it uses the distinct feature caches
+required by the enabled branches; when supplied, only the declared score tables
+are read. The `feature_generation.cli score` command generates ProteinMPNN sequence
+likelihoods in a dedicated `scores/proteinmpnn/<recipe>/mean_score.csv` cache.
+See [score preparation](feature_generation/README.md#proteinmpnn-scores-for-the-gp-mean)
+and `src/configs/esm2_proteinmpnn_mean_score_smoke.json` for the full pilot example.
+Branch selection alone does not supply missing scores.
+
+The branch selection is saved in resolved configs and GP checkpoints. Construction
+uses a fixed canonical branch order, regardless of JSON ordering. Older configs
+and checkpoints without the new setting retain all four branches. Prediction must
+use the fitted checkpoint's branch selection; CLI prediction automatically reads
+its adjacent `resolved_config.json` when no `--config` is supplied. When moving
+a checkpoint, keep that config beside it or supply `--config` explicitly.
+
+`configs/sequence_inverse_smoke.json` exercises two branches with the existing
+synthetic fixture (five updates per restart; not a scientific fit):
+
+```bash
+python -m experiments.cli cv --features data/features/A0A1I9GEU1_NEIME_Kennouche_2019 --config src/configs/sequence_inverse_smoke.json --development-splits --scheme random --output src/runs/sequence_inverse_smoke
+```
+
+Per-branch kernel settings remain under `model.branches`. Overrides may specify
+just the branches/settings being changed; omitted settings use defaults. For example:
 
 ```json
 {
