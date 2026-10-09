@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv*/
+.ipynb_checkpoints/
+/.validation/
+/data/
+/docs/
+/notebooks/
+/script/
+/scripts/
+src/runs/
+/kermut/
+/Neural-Kernel-Network/
+requirements.txt

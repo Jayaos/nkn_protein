@@ -1,0 +1,15 @@
+{
+  "model_id": "facebook/esm2_t33_650M_UR50D",
+  "revision": "08e4846e537177426273712802403f7ba8261b6c",
+  "cache_id": "esm2_t33_650M_UR50D-layer33-08e4846e5371",
+  "model_dir": "data/models/esm2",
+  "output_root": "data/features/pretrained",
+  "assay_index": "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv",
+  "layer": 33,
+  "device": "auto",
+  "max_tokens_per_batch": 1024,
+  "max_length": 1022,
+  "inference_dtype": "float32",
+  "output_dtype": "float32",
+  "max_output_gib": 4.0
+}

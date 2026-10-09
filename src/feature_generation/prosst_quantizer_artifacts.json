@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "upstream_repository": "https://github.com/ai4protein/ProSST",
+  "revision": "13bd56495641a84cd5475eaef7aa98b14fdc6ed5",
+  "structure_vocab_size": 2048,
+  "weights_filename": "quantizer/AE.pt",
+  "codebook_filename": "quantizer/2048.joblib",
+  "artifacts": {
+    "quantizer/2048.joblib": {
+      "size_bytes": 23137772,
+      "url": "https://raw.githubusercontent.com/ai4protein/ProSST/13bd56495641a84cd5475eaef7aa98b14fdc6ed5/prosst/structure/static/2048.joblib",
+      "sha256": "7e4a47885983b9f9adc1c3c8a9b549fd4b77a32685e1ffbad592ae6fccc5a20b"
+    },
+    "quantizer/AE.pt": {
+      "size_bytes": 23669861,
+      "url": "https://raw.githubusercontent.com/ai4protein/ProSST/13bd56495641a84cd5475eaef7aa98b14fdc6ed5/prosst/structure/static/AE.pt",
+      "sha256": "57cf97ace00c8e0413e3c2a1407d299d86d99ed22982202c1bc652f7f762b3a3"
+    },
+    "source/prosst/structure/__init__.py": {
+      "size_bytes": 0,
+      "url": "https://raw.githubusercontent.com/ai4protein/ProSST/13bd56495641a84cd5475eaef7aa98b14fdc6ed5/prosst/structure/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "source/prosst/structure/build_graph.py": {
+      "size_bytes": 4604,
+      "url": "https://raw.githubusercontent.com/ai4protein/ProSST/13bd56495641a84cd5475eaef7aa98b14fdc6ed5/prosst/structure/build_graph.py",
+      "sha256": "6cbdaf156f6d36a9828e8453b30d334ee37a2f635f59792d66a136004fcc0c70"
+    },
+    "source/prosst/structure/build_subgraph.py": {
+      "size_bytes": 3622,
+      "url": "https://raw.githubusercontent.com/ai4protein/ProSST/13bd56495641a84cd5475eaef7aa98b14fdc6ed5/prosst/structure/build_subgraph.py",
+      "sha256": "9431f705ab6250f086cd649ce712bdf7a4fb4d5cf882d66247882a63f1f91fb2"
+    },
+    "source/prosst/structure/encoder/__init__.py": {
+      "size_bytes": 33,
+      "url": "https://raw.githubusercontent.com/ai4protein/ProSST/13bd56495641a84cd5475eaef7aa98b14fdc6ed5/prosst/structure/encoder/__init__.py",
+      "sha256": "63ddf405728300f80eb44bc243581b470fbc4234ec5633d3baf4b99ab2c2b142"
+    },
+    "source/prosst/structure/encoder/gvp.py": {
+      "size_bytes": 6284,
+      "url": "https://raw.githubusercontent.com/ai4protein/ProSST/13bd56495641a84cd5475eaef7aa98b14fdc6ed5/prosst/structure/encoder/gvp.py",
+      "sha256": "0dc4c927c99248ee42569eb010beeda5431e39bc7885eb6574827f548d9d0f9f"
+    },
+    "source/prosst/structure/encoder/layer.py": {
+      "size_bytes": 14758,
+      "url": "https://raw.githubusercontent.com/ai4protein/ProSST/13bd56495641a84cd5475eaef7aa98b14fdc6ed5/prosst/structure/encoder/layer.py",
+      "sha256": "4bdf3a7e315d3bc34e3eca02d5125f492e2cefca8d00277c26073e40c8f970ec"
+    },
+    "source/prosst/structure/get_sst_seq.py": {
+      "size_bytes": 18064,
+      "url": "https://raw.githubusercontent.com/ai4protein/ProSST/13bd56495641a84cd5475eaef7aa98b14fdc6ed5/prosst/structure/get_sst_seq.py",
+      "sha256": "5f5f83bf4ed00ce39afa0bbe985830bd7d2749517259f58f7eb84d1ef9500ed6"
+    },
+    "source/prosst/structure/utils/data_utils.py": {
+      "size_bytes": 6521,
+      "url": "https://raw.githubusercontent.com/ai4protein/ProSST/13bd56495641a84cd5475eaef7aa98b14fdc6ed5/prosst/structure/utils/data_utils.py",
+      "sha256": "7925db715301940d23e24f39e2bad31219543d96b875404181515885227e4576"
+    }
+  }
+}

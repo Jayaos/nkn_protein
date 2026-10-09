@@ -1,0 +1,45 @@
+{
+  "model_id": "AI4Protein/ProSST-2048",
+  "revision": "e94ffee7846d7f55c1bf5efa8ec7372a336ac4b8",
+  "num_layers": 12,
+  "hidden_size": 768,
+  "structure_vocab_size": 2048,
+  "upstream_repository": "https://huggingface.co/AI4Protein/ProSST-2048",
+  "artifacts": {
+    "model/config.json": {
+      "url": "https://huggingface.co/AI4Protein/ProSST-2048/resolve/e94ffee7846d7f55c1bf5efa8ec7372a336ac4b8/config.json",
+      "sha256": "29fad6db61fb0d3ae6bccdca7dd2cda9d32cec0c15601e289da2e057865c6a5b",
+      "size_bytes": 1086
+    },
+    "model/configuration_prosst.py": {
+      "url": "https://huggingface.co/AI4Protein/ProSST-2048/resolve/e94ffee7846d7f55c1bf5efa8ec7372a336ac4b8/configuration_prosst.py",
+      "sha256": "c2ef4d754543e7bafb49c6e0db71ef57b574c57b3d67c40b78d9d6bce371e32b",
+      "size_bytes": 2553
+    },
+    "model/modeling_prosst.py": {
+      "url": "https://huggingface.co/AI4Protein/ProSST-2048/resolve/e94ffee7846d7f55c1bf5efa8ec7372a336ac4b8/modeling_prosst.py",
+      "sha256": "6cf93c4a069173483359789f9d27b980d6efd47f91a9a678481b98b158f5147c",
+      "size_bytes": 53274
+    },
+    "model/special_tokens_map.json": {
+      "url": "https://huggingface.co/AI4Protein/ProSST-2048/resolve/e94ffee7846d7f55c1bf5efa8ec7372a336ac4b8/special_tokens_map.json",
+      "sha256": "3aedcd4211c0d43aec4e607ff60a63255f3174ead795e997350f09a5f8cd9ee1",
+      "size_bytes": 125
+    },
+    "model/tokenizer_config.json": {
+      "url": "https://huggingface.co/AI4Protein/ProSST-2048/resolve/e94ffee7846d7f55c1bf5efa8ec7372a336ac4b8/tokenizer_config.json",
+      "sha256": "4936dbd615e4bf865502171fcf6e281f9e77d31061439ee7fa1e1396cb6bf182",
+      "size_bytes": 1100
+    },
+    "model/vocab.txt": {
+      "url": "https://huggingface.co/AI4Protein/ProSST-2048/resolve/e94ffee7846d7f55c1bf5efa8ec7372a336ac4b8/vocab.txt",
+      "sha256": "89b5c54e41dff9efbc23323f0750ab329585cb01ccb77144dd8838adddaf358c",
+      "size_bytes": 70
+    },
+    "model/model.safetensors": {
+      "url": "https://huggingface.co/AI4Protein/ProSST-2048/resolve/e94ffee7846d7f55c1bf5efa8ec7372a336ac4b8/model.safetensors",
+      "sha256": "aa6742cd2fd4c0ad3b908f19358136c66614f07093cdf9a995120723c6d54368",
+      "size_bytes": 468620656
+    }
+  }
+}

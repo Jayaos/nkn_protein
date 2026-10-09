@@ -1,0 +1,165 @@
+{
+  "proteinmpnn": {
+    "model_id": "dauparas/ProteinMPNN/v_48_020",
+    "revision": "8907e6671bfbfc92303b5f79c4b5e6ce47cdef57",
+    "weights_filename": "v_48_020.pt",
+    "conditioning_mode": "backbone_only",
+    "upstream_repository": "https://github.com/dauparas/ProteinMPNN",
+    "artifacts": {
+      "source/LICENSE": {
+        "url": "https://raw.githubusercontent.com/dauparas/ProteinMPNN/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/LICENSE",
+        "sha256": "82009d25ce585631f452b2b24589bdb29c559ccfefa2f200ef312ed5b501a586",
+        "size_bytes": 1072
+      },
+      "source/protein_mpnn_utils.py": {
+        "url": "https://raw.githubusercontent.com/dauparas/ProteinMPNN/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/protein_mpnn_utils.py",
+        "sha256": "74c8f9b7553422a7a0bbd705874844ee103c8926c2c96f154a87e0b824071e1b",
+        "size_bytes": 63491
+      },
+      "v_48_020.pt": {
+        "url": "https://raw.githubusercontent.com/dauparas/ProteinMPNN/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/vanilla_model_weights/v_48_020.pt",
+        "sha256": "c9cb4a671d79604111231f8dbfc7c590e06f1197453b7a6854ac6661a642f5bd",
+        "size_bytes": 6681301
+      }
+    }
+  },
+  "esm_if1": {
+    "model_id": "facebookresearch/esm/esm_if1_gvp4_t16_142M_UR50",
+    "revision": "2b369911bb5b4b0dda914521b9475cad1656b2ac",
+    "weights_filename": "esm_if1_gvp4_t16_142M_UR50.pt",
+    "conditioning_mode": "reference_prefix",
+    "upstream_repository": "https://github.com/facebookresearch/esm",
+    "artifacts": {
+      "esm_if1_gvp4_t16_142M_UR50.pt": {
+        "url": "https://dl.fbaipublicfiles.com/fair-esm/models/esm_if1_gvp4_t16_142M_UR50.pt",
+        "sha256": "be4ba36edec22a9bfaa4946ff6b2815f1f19d8a3d7e0eada8b796d5a0eae9fd4",
+        "size_bytes": 1700450121
+      },
+      "source/esm/__init__.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/__init__.py",
+        "sha256": "e43f3e42991926802a5b5c6607e1d00f28681e38dcb8cae4464af444f27ee2da",
+        "size_bytes": 479
+      },
+      "source/esm/axial_attention.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/axial_attention.py",
+        "sha256": "0ce361f1c8e9642030035da038ebca94682b70b66abad8b0e986202bd2ee1621",
+        "size_bytes": 8529
+      },
+      "source/esm/constants.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/constants.py",
+        "sha256": "8bf9231414c6e2e61efc53be627225597eeb9fc72310b756becb3c68139a59a1",
+        "size_bytes": 371
+      },
+      "source/esm/data.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/data.py",
+        "sha256": "a43ef573057fb2ae1d37396ba377408934435499161773c241f798ca8c5860b3",
+        "size_bytes": 17245
+      },
+      "source/esm/inverse_folding/__init__.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/inverse_folding/__init__.py",
+        "sha256": "b6b935f99a9d509a3081a4407e30c2c60c44bfdb737253cd9a649f085649d4cf",
+        "size_bytes": 257
+      },
+      "source/esm/inverse_folding/features.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/inverse_folding/features.py",
+        "sha256": "b6d23fd0f597ee540ca9fa3afc1da03934344bf93a2e171a3042c9088614d905",
+        "size_bytes": 14819
+      },
+      "source/esm/inverse_folding/gvp_encoder.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/inverse_folding/gvp_encoder.py",
+        "sha256": "d8a4cad54d27946f3b4b9ee3429aed94456f548c18e39cdc1c1d97bd4e9927e2",
+        "size_bytes": 1875
+      },
+      "source/esm/inverse_folding/gvp_modules.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/inverse_folding/gvp_modules.py",
+        "sha256": "952dac2ab0bc0fbf8f5d17e22a2a9cfcd8b477f5a5a3c7e4e8648de4e17b2485",
+        "size_bytes": 18604
+      },
+      "source/esm/inverse_folding/gvp_transformer.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/inverse_folding/gvp_transformer.py",
+        "sha256": "4b2cd6a2bf38d9b124afd131fd05c5c2040854e55b751a4cd2008499cfdfe597",
+        "size_bytes": 5132
+      },
+      "source/esm/inverse_folding/gvp_transformer_encoder.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/inverse_folding/gvp_transformer_encoder.py",
+        "sha256": "b623add3c8ff72463e33205a3d3d62bbf78231dd783d094f0ea5b74bf8f2d86c",
+        "size_bytes": 7146
+      },
+      "source/esm/inverse_folding/gvp_utils.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/inverse_folding/gvp_utils.py",
+        "sha256": "96dad3864d56654e6504fcb041aa7667e4c228457a7120ecef11b3e79751c93f",
+        "size_bytes": 2967
+      },
+      "source/esm/inverse_folding/multichain_util.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/inverse_folding/multichain_util.py",
+        "sha256": "2e96144a0df928949b4d7b732a8a3c330d7a74fc9860679af77aa2a6123ebe23",
+        "size_bytes": 5997
+      },
+      "source/esm/inverse_folding/transformer_decoder.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/inverse_folding/transformer_decoder.py",
+        "sha256": "5539c70ea6224a0cc265b76ebe37a9b2521ce7bc64d79cd551a0f25463b87ba8",
+        "size_bytes": 7586
+      },
+      "source/esm/inverse_folding/transformer_layer.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/inverse_folding/transformer_layer.py",
+        "sha256": "8d8ec4711638d670aa8ff1125a41228995ad5a28fdb12647cb7af373f01458a9",
+        "size_bytes": 10669
+      },
+      "source/esm/inverse_folding/util.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/inverse_folding/util.py",
+        "sha256": "09568a9b1b9650c364eb369d9118c852fb1a10d71fb9f9e6ebcf0c2d2a3a651f",
+        "size_bytes": 11754
+      },
+      "source/esm/model/__init__.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/model/__init__.py",
+        "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+        "size_bytes": 1
+      },
+      "source/esm/model/esm1.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/model/esm1.py",
+        "sha256": "2cd40f22658af251a5a66616f30af00a0e1bb69887292c0944ef74f1904a67c9",
+        "size_bytes": 7338
+      },
+      "source/esm/model/esm2.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/model/esm2.py",
+        "sha256": "c779eefd1a3bda6f9c0b0476b24c2f0752a731f51927d5adde12ddfc9800e537",
+        "size_bytes": 5115
+      },
+      "source/esm/model/msa_transformer.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/model/msa_transformer.py",
+        "sha256": "d32de66799cea065563c42865b6b5caec6e59b7a682496623e39a4544be26e2b",
+        "size_bytes": 8206
+      },
+      "source/esm/modules.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/modules.py",
+        "sha256": "dc1e217103cabe36c96dba6f8e7a1c5696a3bb3c15f122a7d84e8e16381673cb",
+        "size_bytes": 13902
+      },
+      "source/esm/multihead_attention.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/multihead_attention.py",
+        "sha256": "b0b7042204ec7cb7c71b5a8f337b81add7f7587978d3351a623f03ba5b9cc22e",
+        "size_bytes": 20332
+      },
+      "source/esm/pretrained.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/pretrained.py",
+        "sha256": "1938be9951639bcc57419f18d67ef41a4e5cb276603f76215023ffdfea140c78",
+        "size_bytes": 20138
+      },
+      "source/esm/rotary_embedding.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/rotary_embedding.py",
+        "sha256": "b1dd8c57fd4829d40ac0f3fb498317f684704a670dccb4de62556b5867a56398",
+        "size_bytes": 2721
+      },
+      "source/esm/version.py": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/esm/version.py",
+        "sha256": "e0e324cc5a5198109c1402831df4c3e489dba5e57f88171e6eda11eb44d30a47",
+        "size_bytes": 198
+      },
+      "source/LICENSE": {
+        "url": "https://raw.githubusercontent.com/facebookresearch/esm/2b369911bb5b4b0dda914521b9475cad1656b2ac/LICENSE",
+        "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+        "size_bytes": 1088
+      }
+    }
+  }
+}
