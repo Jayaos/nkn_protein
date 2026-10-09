@@ -389,7 +389,7 @@ class MeanScoreCLITests(unittest.TestCase):
         self.assertEqual(json.loads(output), {"num_variants": 4})
 
     def test_unsupported_score_models_are_rejected_before_inference(self):
-        for family in ("esm2", "esm_if1", "prosst"):
+        for family in ("esm_if1", "prosst"):
             with self.subTest(family=family):
                 self.config.write_text(json.dumps({"model_family": family}), encoding="utf-8")
                 with patch("feature_generation.adapters.proteinmpnn.ProteinMPNNAdapter") as adapter:

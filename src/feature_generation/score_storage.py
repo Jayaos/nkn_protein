@@ -17,7 +17,7 @@ from .inverse_storage import _validate_assay
 from .storage import _assay_lock, _ensure_assay, _inside, _read_json, _write_json
 from .structure_inputs import validate_structure_metadata
 
-FAMILIES = ("proteinmpnn",)
+FAMILIES = ("proteinmpnn", "esm2")
 SCORE_DESCRIPTOR = {"file": "mean_score.csv", "id_column": "variant_id", "score_column": "score"}
 
 
@@ -32,7 +32,9 @@ def _leaf(root: Path, model_family: str, cache_id: str) -> Path:
     return _inside(root, f"scores/{model_family}/{cache_id}")
 
 
-def make_score_config(cache_id: str, model_family: str, model_metadata: dict, structure_metadata: dict) -> dict:
+def make_score_config(
+    cache_id: str, model_family: str, model_metadata: dict, structure_metadata: dict | None = None,
+) -> dict:
     if model_metadata.get("model_family", model_family) != model_family:
         raise ValueError("Model metadata family does not match the requested score family")
     config = {
@@ -45,8 +47,11 @@ def make_score_config(cache_id: str, model_family: str, model_metadata: dict, st
         "synthetic": False,
         "mean_score": dict(SCORE_DESCRIPTOR),
         "score_direction": "higher_is_more_likely",
-        "structure": structure_metadata,
     }
+    if model_family == "proteinmpnn":
+        config["structure"] = structure_metadata
+    elif structure_metadata is not None:
+        raise ValueError("ESM2 mean scores do not use structure metadata")
     stable_json(config)
     _validate_config(config, model_family, cache_id)
     return config
@@ -63,6 +68,20 @@ def _validate_config(config: dict, model_family: str, cache_id: str) -> None:
     }
     if any(config.get(key) != value for key, value in expected.items()):
         raise ValueError("Score configuration does not match its cache directory or format")
+    if model_family == "esm2":
+        recipe = {
+            "scoring_recipe_version": 1,
+            "score_definition": "sum_masked_marginal_log_odds",
+            "conditioning_mode": "masked_wild_type",
+            "inference_method": "masked_marginals",
+            "normalization": "model_vocabulary",
+            "output_dtype": "float32",
+        }
+        if any(config.get(key) != value for key, value in recipe.items()):
+            raise ValueError("Unsupported ESM2 mean-score recipe")
+        if "structure" in config:
+            raise ValueError("ESM2 mean scores do not use structure metadata")
+        return
     recipe = {
         "scoring_recipe_version": 1,
         "score_definition": "negative_mean_sequence_nll",
@@ -102,7 +121,8 @@ def _validate_provenance(provenance: dict, config: dict) -> None:
     if (
         not isinstance(provenance, dict)
         or provenance.get("uses_dms_labels") is not False
-        or provenance.get("structure_input_signature") != config["structure"]["input_signature"]
+        or (config["model_family"] == "proteinmpnn"
+            and provenance.get("structure_input_signature") != config["structure"]["input_signature"])
     ):
         raise ValueError("Mean-score provenance mismatch")
 
@@ -117,7 +137,8 @@ def check_existing(
 ) -> bool:
     root = Path(root).resolve()
     _validate_config(config, model_family, cache_id)
-    validate_structure_metadata(config["structure"], inputs.reference_sequence)
+    if model_family == "proteinmpnn":
+        validate_structure_metadata(config["structure"], inputs.reference_sequence)
     with _assay_lock(root):
         _ensure_assay(root, inputs)
         leaf = _leaf(root, model_family, cache_id)
@@ -143,7 +164,8 @@ def write_score_cache(
     """Publish complete scores in immutable variant order under a distinct leaf."""
     root = Path(root).resolve()
     _validate_config(config, model_family, cache_id)
-    validate_structure_metadata(config["structure"], inputs.reference_sequence)
+    if model_family == "proteinmpnn":
+        validate_structure_metadata(config["structure"], inputs.reference_sequence)
     _validate_scores(scores, len(inputs.rows))
     _validate_provenance(provenance, config)
     stable_json(provenance)
@@ -163,15 +185,17 @@ def write_score_cache(
         _write_json(pending / "provenance.json", provenance)
         files = {name: sha256_file(pending / name) for name in ("mean_score.csv", "config.json", "provenance.json")}
         files["variants.csv"] = inputs.variants_sha256
-        _write_json(pending / "completion.json", {
+        completion = {
             "schema_version": 1,
             "model_family": model_family,
             "cache_id": cache_id,
             "input_signature": inputs.input_signature,
-            "structure_input_signature": config["structure"]["input_signature"],
             "config_signature": _signature(config),
             "files_sha256": files,
-        })
+        }
+        if model_family == "proteinmpnn":
+            completion["structure_input_signature"] = config["structure"]["input_signature"]
+        _write_json(pending / "completion.json", completion)
         pending.rename(leaf)
     return leaf
 
@@ -220,8 +244,13 @@ def validate_score_cache(root: str | Path, model_family: str = "proteinmpnn", ca
         raise ValueError("Assay variant checksum mismatch")
     config = _read_json(_inside(leaf, "config.json"))
     _validate_config(config, model_family, cache_id)
-    validate_structure_metadata(config["structure"], metadata["reference_sequence"])
-    if completion.get("config_signature") != _signature(config) or completion.get("structure_input_signature") != config["structure"]["input_signature"]:
+    if model_family == "proteinmpnn":
+        validate_structure_metadata(config["structure"], metadata["reference_sequence"])
+    if (
+        completion.get("config_signature") != _signature(config)
+        or (model_family == "proteinmpnn"
+            and completion.get("structure_input_signature") != config["structure"]["input_signature"])
+    ):
         raise ValueError("Mean-score checkpoint, configuration, or structure identity mismatch")
     _validate_provenance(_read_json(_inside(leaf, "provenance.json")), config)
     rows = read_csv(_inside(leaf, "mean_score.csv"))
@@ -236,7 +265,7 @@ def validate_score_cache(root: str | Path, model_family: str = "proteinmpnn", ca
         raise ValueError("Mean scores must be finite numeric values") from error
     if not all(math.isfinite(value) for value in values):
         raise ValueError("Mean scores must be finite numeric values")
-    return {
+    report = {
         "assay_id": metadata["assay_id"],
         "model_family": model_family,
         "cache_id": cache_id,
@@ -248,6 +277,8 @@ def validate_score_cache(root: str | Path, model_family: str = "proteinmpnn", ca
         "mean_score": dict(SCORE_DESCRIPTOR),
         "path": str(leaf),
         "input_signature": metadata["input_signature"],
-        "structure_input_signature": config["structure"]["input_signature"],
         "config_signature": _signature(config),
     }
+    if model_family == "proteinmpnn":
+        report["structure_input_signature"] = config["structure"]["input_signature"]
+    return report

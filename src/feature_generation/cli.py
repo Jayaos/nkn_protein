@@ -32,8 +32,8 @@ def _parser() -> argparse.ArgumentParser:
     extraction.add_argument("--resume", action="store_true", help="Reuse only matching, fully validated completed caches")
     extraction.add_argument("--continue-on-error", action="store_true", help="Report failed assays and continue; exit status remains nonzero")
     extraction.add_argument("--quiet", action="store_true")
-    scoring = commands.add_parser("score", help="Prepare ProteinMPNN sequence likelihoods in mean_score.csv")
-    scoring.add_argument("--config", required=True, type=Path, help="ProteinMPNN extraction config supplies checkpoint, paths and seed")
+    scoring = commands.add_parser("score", help="Prepare ProteinMPNN or ESM2 mean_score.csv for the GP mean")
+    scoring.add_argument("--config", required=True, type=Path, help="ESM2 or ProteinMPNN extraction config supplies checkpoint and paths")
     score_assays = scoring.add_mutually_exclusive_group(required=True)
     score_assays.add_argument("--assay", action="append", help="Assay ID; repeat to select several assays")
     score_assays.add_argument("--all-assays", action="store_true")
@@ -41,9 +41,10 @@ def _parser() -> argparse.ArgumentParser:
     scoring.add_argument("--output-root", type=Path)
     scoring.add_argument("--structure-manifest-dir", type=Path)
     scoring.add_argument("--device", choices=("auto", "cpu", "cuda"))
-    scoring.add_argument("--batch-size", type=int, default=8, help="Variant sequences per forward pass")
-    scoring.add_argument("--num-orders", type=int, default=1, help="Random decoding orders to average; default 1")
-    scoring.add_argument("--cache-id", help="Score recipe directory; default includes checkpoint, order count and seed")
+    scoring.add_argument("--batch-size", type=int, default=8, help="Variant sequences (ProteinMPNN) or masked WT copies (ESM2) per forward pass")
+    scoring.add_argument("--num-orders", type=int, help="ProteinMPNN only: random decoding orders to average; default 1")
+    scoring.add_argument("--max-tokens-per-batch", type=int, help="ESM2 only: token budget including BOS/EOS")
+    scoring.add_argument("--cache-id", help="Score recipe directory; default identifies checkpoint and scoring settings")
     scoring.add_argument("--limit", type=int, help="Explicit first-N-variant subset; use a separate output root")
     scoring.add_argument("--singles-only", action="store_true")
     scoring.add_argument("--resume", action="store_true", help="Reuse only matching, fully validated score caches")
@@ -78,7 +79,11 @@ def _progress(event: dict) -> None:
     if status == "batch":
         print(f"{assay}: {event['completed']}/{event['num_variants']} variants", file=sys.stderr)
     elif status == "scoring":
-        print(f"{assay}: scoring {event['num_variants']} variants ({event['num_orders']} decoding orders)", file=sys.stderr)
+        if event.get("model_family") == "esm2":
+            detail = f"ESM2 masked marginals at {event['num_masked_positions']} WT positions"
+        else:
+            detail = f"{event['num_orders']} decoding orders"
+        print(f"{assay}: scoring {event['num_variants']} variants ({detail})", file=sys.stderr)
     elif status == "extracting":
         if "reference_length" in event:
             print(f"{assay}: extracting inverse-folding distributions for {event['reference_length']} residues", file=sys.stderr)
@@ -169,9 +174,11 @@ def main(argv: list[str] | None = None) -> int:
         from data_loading import AssayCatalog
         if args.command == "score":
             from .score_runner import score
+            if args.num_orders is not None and getattr(config, "model_family", "esm2") != "proteinmpnn":
+                raise ValueError("--num-orders applies only to ProteinMPNN sequence scoring")
             assay_ids = [record.assay_id for record in AssayCatalog(config.assay_index)] if args.all_assays else args.assay
             results = score(
-                config, assay_ids, batch_size=args.batch_size, num_orders=args.num_orders,
+                config, assay_ids, batch_size=args.batch_size, num_orders=1 if args.num_orders is None else args.num_orders,
                 cache_id=args.cache_id, singles_only=args.singles_only, limit=args.limit,
                 resume=args.resume, continue_on_error=args.continue_on_error,
                 progress=None if args.quiet else _progress,

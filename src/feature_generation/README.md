@@ -118,6 +118,92 @@ standalone inverse cache validation does not require scores.
 Upstream implementations: [ProteinMPNN](https://github.com/dauparas/ProteinMPNN),
 [ESM-IF1](https://github.com/facebookresearch/esm/tree/main/examples/inverse_folding).
 
+## ESM2 scores for the GP mean
+
+ESM2 scoring uses the pretrained Hugging Face `EsmForMaskedLM` head and WT
+masked marginals. For each position mutated by any selected variant, it masks
+exactly that residue in the WT sequence and computes model log-probabilities.
+The score for variant `v` is:
+
+```text
+score(v) = sum over mutated positions i:
+    log p(mutant_i | WT with position i masked)
+  - log p(WT_i     | WT with position i masked)
+```
+
+WT has score zero. Multiple substitutions add contributions from the same WT
+context. Higher values indicate that the model favors the mutant residues over
+WT. The score does not use experimental labels or a structure. Each unique
+mutation position is evaluated once per assay and reused across variants. This
+is the masked-marginal scoring recipe; the existing embedding cache alone cannot
+supply these scores, so a separate inference stage uses the checkpoint's MLM head.
+
+Both existing ESM2 checkpoint configs work (8M and 650M). Scoring always uses the
+final pretrained MLM head; embedding `layer` and representation `cache_id` do not
+select its scoring layer or output directory. The 8M preset is appropriate for
+smoke tests; Kermut's published main ESM2 scores use the 650M checkpoint.
+
+```bash
+# Required only if weights/tokenizer are not downloaded yet; valid assets are reused.
+python -m feature_generation.cli download --config src/configs/extraction/esm2_8m.json
+
+python -m feature_generation.cli score --config src/configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --batch-size 8 --max-tokens-per-batch 2048 --resume
+
+python -m feature_generation.cli validate --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --feature-type scores --model-family esm2 --cache-id esm2_t6_8M_UR50D-masked_marginals-float32-c731040fcd8d
+```
+
+Use `--device cpu` without a GPU. `--batch-size` caps the number of masked WT
+copies per forward pass; `max_tokens_per_batch` additionally limits total tokens,
+including BOS/EOS. Scoring never truncates. `--num-orders` and structure-manifest
+options apply to ProteinMPNN and are rejected for ESM2. New dependencies are not
+needed: the verified safetensors checkpoint already contains the MLM head.
+
+`prepare_esm2.sbatch` downloads/verifies the checkpoint and then runs both embedding
+extraction and scoring for the pilot assay. The Conda environment and ProteinGym
+assay CSVs must already exist. First-time downloads need outbound HTTPS from the
+compute node; verified completed caches are reused on resubmission.
+
+```text
+data/features/pretrained/<assay>/
+  scores/esm2/esm2_t6_8M_UR50D-masked_marginals-float32-c731040fcd8d/
+    mean_score.csv
+    config.json
+    provenance.json
+    completion.json
+```
+
+The CSV has `variant_id,score` with exact coverage of the shared `variants.csv`.
+The filename describes its role in the GP mean; the ESM2 value is a sum of mutation
+log-odds. Its metadata records checkpoint hashes, masking recipe, precision and
+score direction. The recipe ID includes checkpoint, inference precision and
+revision. Representation caches and ProteinMPNN score caches are preserved.
+
+Select just ESM2 scores for the mean function:
+
+```json
+{
+  "score_sources": [
+    "scores/esm2/esm2_t6_8M_UR50D-masked_marginals-float32-c731040fcd8d"
+  ]
+}
+```
+
+To use ESM2 and ProteinMPNN together, list both sources. They become separate
+score columns, each standardized using training variants only; the GP learns a
+coefficient for each. This choice is independent of `model.enabled_branches`.
+
+`src/configs/esm2_mean_score_smoke.json` selects ESM2 representations and ESM2
+scores. `src/configs/esm2_proteinmpnn_combined_mean_smoke.json` selects both kernel
+modalities and both mean-score sources. Both configs run only five training steps
+for integration testing:
+
+```bash
+python -m experiments.cli fit --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config src/configs/esm2_mean_score_smoke.json --development-splits --scheme random --test-fold 0 --output src/runs/esm2_mean_smoke
+```
+
+Recipe references: [official ESM variant scoring](https://github.com/facebookresearch/esm/blob/main/examples/variant-prediction/predict.py),
+[Kermut ESM2 scoring](https://github.com/petergroth/kermut/blob/main/kermut/cmdline/preprocess_data/extract_esm2_zero_shots.py).
+
 ## ProteinMPNN scores for the GP mean
 
 The `score` command runs the pinned official ProteinMPNN forward pass on every
@@ -423,9 +509,9 @@ The existing synthetic fixture is preserved. The new sequence cache is
 compatible with the sequence portion of `data_loading.load_feature_bundle`;
 standalone extraction validation works before other modalities exist. GP runs
 require the modalities selected by `model.enabled_branches` (all four branches by
-default) and at least one score source. ProteinMPNN sequence likelihoods can be
-generated with `score` and selected through `score_sources`. Structure embeddings
-and ESM-2 sequence scores are not generated by the current extraction commands.
+default) and at least one score source. ESM2 masked-marginal scores and ProteinMPNN
+sequence likelihoods are generated with `score` and selected through `score_sources`.
+Structure embeddings are not generated by the current extraction commands.
 
 ## Validation
 

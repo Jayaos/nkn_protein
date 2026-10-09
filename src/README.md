@@ -114,8 +114,8 @@ by enabled branches, for compatibility with existing fixtures. For generated
 scores, set `score_sources` explicitly to `scores/family/recipe`. Scores are joined
 by ID and standardized on training variants only. `mean_score` in the score config
 declares the CSV file and ID/value columns; legacy `zero_shot` descriptors are still
-readable. New ProteinMPNN scores are negative mean sequence NLL (higher values
-indicate greater likelihood), with direction recorded in the config. The loader
+readable. ProteinMPNN scores are negative mean sequence NLL; ESM2 scores sum
+masked-WT mutation log-odds. Both record their direction in the config. The loader
 uses values as stored; it does not automatically flip score direction. Source
 identity and order are saved in checkpoints and validated during prediction.
 
@@ -216,11 +216,14 @@ model or regenerate its representations.
 The GP mean requires at least one mean score source. `score_sources` remains
 independent of kernel branches: when omitted, it uses the distinct feature caches
 required by the enabled branches; when supplied, only the declared score tables
-are read. The `feature_generation.cli score` command generates ProteinMPNN sequence
-likelihoods in a dedicated `scores/proteinmpnn/<recipe>/mean_score.csv` cache.
-See [score preparation](feature_generation/README.md#proteinmpnn-scores-for-the-gp-mean)
-and `src/configs/esm2_proteinmpnn_mean_score_smoke.json` for the full pilot example.
-Branch selection alone does not supply missing scores.
+are read. The `feature_generation.cli score` command generates ESM2 masked-marginal
+scores or ProteinMPNN sequence likelihoods in `scores/<family>/<recipe>/mean_score.csv`.
+Select either family or both sources as independent GP mean columns. See
+[ESM2 score preparation](feature_generation/README.md#esm2-scores-for-the-gp-mean)
+and [ProteinMPNN score preparation](feature_generation/README.md#proteinmpnn-scores-for-the-gp-mean).
+`src/configs/esm2_mean_score_smoke.json` selects only ESM2 representations/scores;
+`src/configs/esm2_proteinmpnn_combined_mean_smoke.json` selects both modalities and
+both scorers. Branch selection alone does not supply missing scores.
 
 The branch selection is saved in resolved configs and GP checkpoints. Construction
 uses a fixed canonical branch order, regardless of JSON ordering. Older configs
