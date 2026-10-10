@@ -3,8 +3,9 @@
 An independent PyTorch implementation of the compositional-kernel exact GP in
 `nkn_protein_variant_prediction.pdf`. The local Kermut and Neural-Kernel-Network
 clones are references only: this package does not import them or require them
-on `PYTHONPATH`. All implementation, configuration examples, and tests are in
-this `src/` directory. Data loading is consolidated in `data_loading/`.
+on `PYTHONPATH`. Implementation and tests are in this `src/` directory;
+JSON configuration presets are in the repository-root `configs/` directory.
+Data loading is consolidated in `data_loading/`.
 
 ## Installation and first run
 
@@ -56,22 +57,22 @@ See [the extraction guide](feature_generation/README.md) for installation,
 checkpoint downloads, structure mapping, resumable extraction and standalone cache validation.
 Notebooks are optional smoke tests; the CLI is the default extraction workflow.
 
-## Source organization
+## Repository organization
 
 | Path | Responsibility |
 | --- | --- |
-| `config.py` | Validated model, optimizer, evaluation, and runtime settings |
-| `data_loading/` | Assay catalog, cache/score alignment, PyTorch dataset, packed mutations, folds |
-| `kernels/` | Primitive kernels, NKN layers, mutation sums, final kernel |
-| `gp/` | Fold transforms, dense Cholesky, exact GP, restarts, checkpoints |
-| `evaluation/` | Spearman, interval ECE, PairECE, fold aggregation |
-| `experiments/` | Fit/CV/prediction execution, CLI, result artifacts |
-| `tests/` | Numerical, data-contract, leakage, and integration tests |
+| `src/config.py` | Validated model, optimizer, evaluation, and runtime settings |
+| `src/data_loading/` | Assay catalog, cache/score alignment, PyTorch dataset, packed mutations, folds |
+| `src/kernels/` | Primitive kernels, NKN layers, mutation sums, final kernel |
+| `src/gp/` | Fold transforms, dense Cholesky, exact GP, restarts, checkpoints |
+| `src/evaluation/` | Spearman, interval ECE, PairECE, fold aggregation |
+| `src/experiments/` | Fit/CV/prediction execution, CLI, result artifacts |
+| `src/tests/` | Numerical, data-contract, leakage, and integration tests |
 | `configs/smoke.json` | Short fixture-validation run |
-| `feature_generation/` | Pinned checkpoints, structure mapping, ESM-2/ProSST embeddings, ProteinMPNN/ESM-IF1 distributions, cache validation |
+| `src/feature_generation/` | Pinned checkpoints, structure mapping, ESM-2/ProSST embeddings, ProteinMPNN/ESM-IF1 distributions, cache validation |
 | `configs/extraction/` | ESM-2 8M/650M, ProSST-2048, ProteinMPNN v48_020, and ESM-IF1 142M recipes |
 
-These directories are independent Python packages directly under `src/`.
+The Python packages listed above are directly under `src/`.
 Import them by their actual names, for example `from gp import fit_gp` or
 `from config import ExperimentConfig`. Add `src/` to `PYTHONPATH` before
 using these imports and module commands. Source edits take effect directly;
@@ -225,7 +226,7 @@ adjacent `resolved_config.json` unless an explicit configuration is supplied.
 
 The [ESM2 + ProteinMPNN job](../sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch)
 defaults to the real shared cache for `A0A1I9GEU1_NEIME_Kennouche_2019` and
-[`configs/esm2_proteinmpnn_nkn.json`](configs/esm2_proteinmpnn_nkn.json).
+[`configs/esm2_proteinmpnn_nkn.json`](../configs/esm2_proteinmpnn_nkn.json).
 It requests four CPUs and no GPU. ESM2 embeddings and ProteinMPNN distributions
 provide two kernel branches; their two score tables provide the GP mean inputs.
 
@@ -248,6 +249,11 @@ sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch
 # One setting
 sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles_modulo
 
+# One setting with your own JSON hyperparameters
+cp configs/esm2_proteinmpnn_nkn.json configs/my_nkn.json
+# Edit configs/my_nkn.json before submitting:
+sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles_random --config configs/my_nkn.json
+
 # All six settings; prepare the complete ESM2 + ProteinMPNN cache first
 ASSAY=A4_HUMAN_Seuma_2022 sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch all
 
@@ -258,6 +264,13 @@ ASSAY=A4_HUMAN_Seuma_2022 SAMPLE_RATIO=0.8 SPLIT_SEED=2024 sbatch sbatch_run/run
 ASSAY=A4_HUMAN_Seuma_2022 SAMPLE_RATIO=1.0 sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch single_to_double
 ```
 
+You can edit the default preset directly or copy it to keep separate experiments.
+`--config PATH` can appear before or after the optional setting; omitting the
+setting still runs `singles`. Alternatively, set `NKN_CONFIG=PATH` when submitting.
+The command-line `--config` takes precedence over `NKN_CONFIG`, which takes
+precedence over the default preset. Config paths may be absolute or relative to
+the repository root. See the hyperparameter fields below.
+
 Each submission creates
 `src/runs/<assay>/nkn_esm2_proteinmpnn_<selection>_<job-id>/`.
 CV results are saved under `cv/<setting>/`; extrapolation is under
@@ -267,6 +280,8 @@ The run saves byte-for-byte `folds/singles.csv` and/or `folds/multiples.csv`
 snapshots as needed, plus a `fold_manifest.json` with source paths, SHA-256
 hashes and selected fold sizes. When extrapolation is requested, the manifest also
 records `sample_ratio` and `split_seed`.
+The top-level `config.json` records the expanded configuration actually used,
+including defaults and the job's CPU and thread settings.
 
 `ASSAY` chooses the assay; `FEATURES` overrides its default
 `data/features/pretrained/<assay>` cache. `SINGLES_FOLDS_CSV` and
@@ -280,8 +295,40 @@ Existing pretrained features and scores are reused without extraction.
 
 ## Configuration and numerical behavior
 
-JSON configurations can override any `ExperimentConfig` field. Unspecified
-fields use the validated defaults in `config.py`.
+JSON configurations define `ExperimentConfig` fields. Unspecified fields use the
+validated defaults in `config.py`; a custom JSON is not merged with the ESM2 +
+ProteinMPNN preset. Copy that preset before editing to retain its two selected
+branches, feature caches, and score sources.
+
+The [batch preset](../configs/esm2_proteinmpnn_nkn.json) explicitly lists the current
+training, enabled-kernel, and evaluation hyperparameters:
+
+| JSON field | Controls |
+| --- | --- |
+| `training.learning_rate`, `training.betas`, `training.epsilon` | Adam optimizer settings |
+| `training.max_steps` | Maximum optimizer updates per initialization |
+| `training.min_steps`, `training.patience`, `training.tolerance` | Earliest stopping step, improvement window, and minimum improvement in NLL per variant |
+| `training.seeds`, `training.lengthscale_multipliers` | Paired initialization settings; keep `[0]` and `[1.0]` for one initialization |
+| `training.noise_initial`, `training.noise_floor` | Initial observation-noise variance and its positive lower bound |
+| `training.jitter_initial`, `training.jitter_max` | Numerical stabilization range for Cholesky factorization |
+| `training.max_train_variants` | Optional training-set size guard; `null` disables the guard |
+| `model.branches.<branch>.copies` | Number of copies of each primitive kernel in that branch |
+| `model.branches.<branch>.widths`, `model.final_widths` | Branch and final NKN layer widths |
+| `evaluation.coverage_levels` | Nominal interval coverage levels for Interval ECE |
+| `evaluation.n_bins`, `evaluation.pair_block_size` | PairECE confidence bins and computation block size |
+| `evaluation.n_folds` | Number of folds; the published-fold batch job requires `5` |
+
+For example, change `training.learning_rate` to `0.0005` and
+`training.max_steps` to `10000` in your copied JSON before submitting it. Other
+values remain as listed in that file. Initialization lists must have equal
+lengths; adding entries requests additional starts per split. NKN widths alternate
+linear and product layers, ending with linear width `1`; each product width must
+be half the preceding even linear width, as in `[8, 4, 4, 2, 1]`.
+
+The CPU batch job sets `device` to `"cpu"` and `num_threads` to the Slurm CPU
+allocation regardless of their JSON values. Extrapolation sampling remains
+controlled by the `SAMPLE_RATIO` and `SPLIT_SEED` environment variables described
+above; those are separate from model initialization seeds.
 
 ### Selecting NKN branches
 
@@ -325,8 +372,8 @@ scores or ProteinMPNN sequence likelihoods in `scores/<family>/<recipe>/mean_sco
 Select either family or both sources as independent GP mean columns. See
 [ESM2 score preparation](feature_generation/README.md#esm2-scores-for-the-gp-mean)
 and [ProteinMPNN score preparation](feature_generation/README.md#proteinmpnn-scores-for-the-gp-mean).
-`src/configs/esm2_mean_score_smoke.json` selects only ESM2 representations/scores;
-`src/configs/esm2_proteinmpnn_combined_mean_smoke.json` selects both modalities and
+`configs/esm2_mean_score_smoke.json` selects only ESM2 representations/scores;
+`configs/esm2_proteinmpnn_combined_mean_smoke.json` selects both modalities and
 both scorers. Branch selection alone does not supply missing scores.
 
 The branch selection is saved in resolved configs and GP checkpoints. Construction

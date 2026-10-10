@@ -74,10 +74,10 @@ multi-model structures. No sequence offset or cropping is inferred from `pdb_ran
 Download both checkpoints explicitly, then extract offline:
 
 ```powershell
-python -m feature_generation.cli download --config src/configs/extraction/proteinmpnn_v48_020.json
-python -m feature_generation.cli download --config src/configs/extraction/esm_if1_142m.json
-python -m feature_generation.cli extract --config src/configs/extraction/proteinmpnn_v48_020.json --assay $assay --resume
-python -m feature_generation.cli extract --config src/configs/extraction/esm_if1_142m.json --assay $assay --resume
+python -m feature_generation.cli download --config configs/extraction/proteinmpnn_v48_020.json
+python -m feature_generation.cli download --config configs/extraction/esm_if1_142m.json
+python -m feature_generation.cli extract --config configs/extraction/proteinmpnn_v48_020.json --assay $assay --resume
+python -m feature_generation.cli extract --config configs/extraction/esm_if1_142m.json --assay $assay --resume
 python -m feature_generation.cli validate --features "data/features/pretrained/$assay" --feature-type inverse_folding --model-family proteinmpnn
 python -m feature_generation.cli validate --features "data/features/pretrained/$assay" --feature-type inverse_folding --model-family esm_if1
 ```
@@ -145,9 +145,9 @@ smoke tests; Kermut's published main ESM2 scores use the 650M checkpoint.
 
 ```bash
 # Required only if weights/tokenizer are not downloaded yet; valid assets are reused.
-python -m feature_generation.cli download --config src/configs/extraction/esm2_8m.json
+python -m feature_generation.cli download --config configs/extraction/esm2_8m.json
 
-python -m feature_generation.cli score --config src/configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --batch-size 8 --max-tokens-per-batch 2048 --resume
+python -m feature_generation.cli score --config configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --batch-size 8 --max-tokens-per-batch 2048 --resume
 
 python -m feature_generation.cli validate --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --feature-type scores --model-family esm2 --cache-id esm2_t6_8M_UR50D-masked_marginals-float32-c731040fcd8d
 ```
@@ -192,13 +192,13 @@ To use ESM2 and ProteinMPNN together, list both sources. They become separate
 score columns, each standardized using training variants only; the GP learns a
 coefficient for each. This choice is independent of `model.enabled_branches`.
 
-`src/configs/esm2_mean_score_smoke.json` selects ESM2 representations and ESM2
-scores. `src/configs/esm2_proteinmpnn_combined_mean_smoke.json` selects both kernel
+`configs/esm2_mean_score_smoke.json` selects ESM2 representations and ESM2
+scores. `configs/esm2_proteinmpnn_combined_mean_smoke.json` selects both kernel
 modalities and both mean-score sources. Both configs run only five training steps
 for integration testing:
 
 ```bash
-python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config src/configs/esm2_mean_score_smoke.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --output src/runs/esm2_mean_smoke
+python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/esm2_mean_score_smoke.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --output src/runs/esm2_mean_smoke
 ```
 
 Recipe references: [official ESM variant scoring](https://github.com/facebookresearch/esm/blob/main/examples/variant-prediction/predict.py),
@@ -215,7 +215,7 @@ the normalization); the score is not derived from the canonical 20-way extractio
 cache. There is no WT subtraction, DMS-label input, or finetuning.
 
 ```bash
-python -m feature_generation.cli score --config src/configs/extraction/proteinmpnn_v48_020.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --batch-size 8 --resume
+python -m feature_generation.cli score --config configs/extraction/proteinmpnn_v48_020.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --batch-size 8 --resume
 python -m feature_generation.cli validate --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --feature-type scores --model-family proteinmpnn --cache-id v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb
 ```
 
@@ -275,12 +275,12 @@ Set experiment `score_sources` explicitly to the generated score source:
 }
 ```
 
-`src/configs/esm2_proteinmpnn_mean_score_smoke.json` selects the existing ESM2-8M
+`configs/esm2_proteinmpnn_mean_score_smoke.json` selects the existing ESM2-8M
 and ProteinMPNN representations with these scores and five GP training steps.
 This is an integration smoke test, not a converged performance experiment:
 
 ```bash
-python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config src/configs/esm2_proteinmpnn_mean_score_smoke.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --output src/runs/esm2_proteinmpnn_mean_smoke
+python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/esm2_proteinmpnn_mean_score_smoke.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --output src/runs/esm2_proteinmpnn_mean_smoke
 ```
 
 The GP loader validates dedicated score caches, joins scores by variant ID and
@@ -320,8 +320,8 @@ build, select the corresponding CPU `torch-scatter` wheel and index too.
 $env:PYTHONPATH = (Resolve-Path ./src).Path
 $assay = "A0A1I9GEU1_NEIME_Kennouche_2019"
 python -m feature_generation.cli download-structure --assay $assay
-python -m feature_generation.cli download --config src/configs/extraction/prosst_2048.json
-python -m feature_generation.cli extract --config src/configs/extraction/prosst_2048.json --assay $assay --resume
+python -m feature_generation.cli download --config configs/extraction/prosst_2048.json
+python -m feature_generation.cli extract --config configs/extraction/prosst_2048.json --assay $assay --resume
 python -m feature_generation.cli validate --features "data/features/pretrained/$assay" --model-family prosst
 ```
 
@@ -402,8 +402,8 @@ package. Notebooks contain no separate model implementation.
 ## Download and extract
 
 ```powershell
-python -m feature_generation.cli download --config src/configs/extraction/esm2_8m.json
-python -m feature_generation.cli extract --config src/configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019
+python -m feature_generation.cli download --config configs/extraction/esm2_8m.json
+python -m feature_generation.cli extract --config configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019
 python -m feature_generation.cli validate --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019
 ```
 
@@ -431,7 +431,7 @@ transport helper. It fetches the same files from the exact configured revision,
 then runs the Python verifier:
 
 ```powershell
-python scripts/download_esm2_windows.py --config src/configs/extraction/esm2_8m.json
+python scripts/download_esm2_windows.py --config configs/extraction/esm2_8m.json
 ```
 
 The helper writes each new download to a temporary filename before renaming it.
@@ -442,13 +442,13 @@ that specific file from the pinned revision and rerun verification.
 
 ```powershell
 # A small real-model development run, separate from the complete assay cache.
-python -m feature_generation.cli extract --config src/configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --limit 4 --output-root data/features/esm2_smoke
+python -m feature_generation.cli extract --config configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --limit 4 --output-root data/features/esm2_smoke
 
 # Reuse only fully verified caches matching the inputs and extraction settings.
-python -m feature_generation.cli extract --config src/configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --resume
+python -m feature_generation.cli extract --config configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --resume
 
 # Repeat --assay for selected assays, or process the whole catalog explicitly.
-python -m feature_generation.cli extract --config src/configs/extraction/esm2_8m.json --all-assays --resume --continue-on-error
+python -m feature_generation.cli extract --config configs/extraction/esm2_8m.json --all-assays --resume --continue-on-error
 ```
 
 `--limit` selects the first N eligible source rows without using labels.

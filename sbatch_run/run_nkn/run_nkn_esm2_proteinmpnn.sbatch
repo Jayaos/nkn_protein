@@ -16,7 +16,10 @@
 # two kernel branches; their scores feed the learned GP mean. CPU only.
 #
 # From the repository root (or a subdirectory):
-#   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch [singles|all|SETTING]
+#   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch [singles|all|SETTING] [--config PATH]
+# Hyperparameters come from configs/esm2_proteinmpnn_nkn.json by default.
+# Copy/edit that JSON and select it with --config PATH or NKN_CONFIG=PATH.
+# --config takes precedence over NKN_CONFIG; paths use the repository root.
 # Default: singles, the three published singles CV protocols (15 fold fits).
 # all: three singles CV runs, one shared mixed CV run, one extrapolation fit
 # (21 fits). The mixed run reports both singles and doubles evaluation settings.
@@ -28,7 +31,7 @@
 set -eo pipefail
 
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
-while [[ ! -f "$project_root/src/experiments/cli.py" || ! -f "$project_root/src/configs/esm2_proteinmpnn_nkn.json" ]]; do
+while [[ ! -f "$project_root/src/experiments/cli.py" || ! -f "$project_root/configs/esm2_proteinmpnn_nkn.json" ]]; do
   if [[ "$project_root" == "/" ]]; then
     echo "error: Submit this job from the nkn_protein repository or a subdirectory." >&2
     exit 1
@@ -37,11 +40,42 @@ while [[ ! -f "$project_root/src/experiments/cli.py" || ! -f "$project_root/src/
 done
 cd -- "$project_root"
 
-selection="${1:-singles}"
-if [[ $# -gt 1 ]]; then
-  echo "error: Use singles, all, or one of the six setting names." >&2
-  exit 1
-fi
+selection="singles"
+selection_given=false
+config_template="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn.json}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --config)
+      if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+        echo "error: --config requires a JSON file path." >&2
+        exit 1
+      fi
+      config_template="$2"
+      shift 2 ;;
+    --config=*)
+      config_template="${1#--config=}"
+      if [[ -z "$config_template" ]]; then
+        echo "error: --config requires a JSON file path." >&2
+        exit 1
+      fi
+      shift ;;
+    -h|--help)
+      printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH]\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
+      printf 'Config precedence: --config, NKN_CONFIG, configs/esm2_proteinmpnn_nkn.json\n'
+      exit 0 ;;
+    -*)
+      echo "error: Unknown option: $1" >&2
+      exit 1 ;;
+    *)
+      if [[ "$selection_given" == true ]]; then
+        echo "error: Specify only one setting: singles, all, or one of the six setting names." >&2
+        exit 1
+      fi
+      selection="$1"
+      selection_given=true
+      shift ;;
+  esac
+done
 case "$selection" in
   singles) settings=(singles_random singles_modulo singles_contiguous) ;;
   all) settings=(singles_random singles_modulo singles_contiguous mixed_random_singles single_to_double) ;;
@@ -51,6 +85,10 @@ case "$selection" in
     echo "error: Use singles, all, singles_random, singles_modulo, singles_contiguous, mixed_random_singles, mixed_random_doubles, or single_to_double." >&2
     exit 1 ;;
 esac
+if [[ ! -f "$config_template" ]]; then
+  echo "error: NKN JSON configuration file does not exist: $config_template" >&2
+  exit 1
+fi
 assay="${ASSAY:-A0A1I9GEU1_NEIME_Kennouche_2019}"
 if [[ -z "$assay" || "$assay" == *[/\\]* || "$assay" == "." || "$assay" == ".." ]]; then
   echo "error: ASSAY must be a ProteinGym assay ID, not a path." >&2
@@ -94,7 +132,6 @@ export OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"
 export CUDA_VISIBLE_DEVICES=""
 
 assay_index="data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv"
-config_template="src/configs/esm2_proteinmpnn_nkn.json"
 run_id="${SLURM_JOB_ID:-manual_$(date -u +%Y%m%dT%H%M%SZ)}"
 run_root="src/runs/$assay/nkn_esm2_proteinmpnn_${selection}_${run_id}"
 runtime_config="$run_root/config.json"
@@ -102,8 +139,8 @@ runtime_config="$run_root/config.json"
 # Refuse to reuse a previous run's directory or overwrite its results.
 mkdir -p -- "$(dirname -- "$run_root")"
 mkdir -- "$run_root"
-printf 'Job: %s\nRepository: %s\nAssay: %s\nSettings: %s\nResults: %s\n' \
-  "${SLURM_JOB_ID:-manual}" "$project_root" "$assay" "$selection" "$run_root"
+printf 'Job: %s\nRepository: %s\nAssay: %s\nSettings: %s\nConfig: %s\nResults: %s\n' \
+  "${SLURM_JOB_ID:-manual}" "$project_root" "$assay" "$selection" "$config_template" "$run_root"
 
 # Record the allocated CPU count so sbatch --cpus-per-task overrides also work.
 python -u - "$config_template" "$runtime_config" "$features" "$assay" <<'PY'
@@ -116,11 +153,14 @@ import sys
 import torch
 from config import ExperimentConfig
 
-config = replace(
-    ExperimentConfig.load(sys.argv[1]),
-    device="cpu",
-    num_threads=int(os.environ["OMP_NUM_THREADS"]),
-)
+try:
+    config = replace(
+        ExperimentConfig.load(sys.argv[1]),
+        device="cpu",
+        num_threads=int(os.environ["OMP_NUM_THREADS"]),
+    )
+except (OSError, ValueError, TypeError) as error:
+    raise SystemExit(f"error: Invalid NKN JSON configuration {sys.argv[1]}: {error}") from error
 if config.evaluation.n_folds != 5:
     raise SystemExit("error: Published ProteinGym protocols require five folds.")
 metadata = json.loads((Path(sys.argv[3]) / "assay.json").read_text(encoding="utf-8"))
@@ -130,7 +170,7 @@ Path(sys.argv[2]).write_text(json.dumps(config.to_dict(), indent=2) + "\n", enco
 print(f"Python: {sys.executable}")
 print(f"PyTorch: {torch.__version__}; device: cpu; threads: {config.num_threads}")
 print(f"Kernel branches: {', '.join(config.model.enabled_branches)}")
-print(f"GP mean score sources: {len(config.score_sources)}")
+print(f"GP mean score sources: {len(config.score_sources) if config.score_sources is not None else 'cache defaults'}")
 print(f"Training: up to {config.training.max_steps} steps per initialization; seeds {config.training.seeds}")
 PY
 

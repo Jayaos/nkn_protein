@@ -22,7 +22,7 @@
 set -eo pipefail
 
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
-while [[ ! -f "$project_root/src/feature_generation/cli.py" || ! -f "$project_root/src/configs/extraction/esm2_8m.json" ]]; do
+while [[ ! -f "$project_root/src/feature_generation/cli.py" || ! -f "$project_root/configs/extraction/esm2_8m.json" ]]; do
   if [[ "$project_root" == "/" ]]; then
     echo "error: Submit this job from the nkn_protein repository or a subdirectory." >&2
     exit 1
@@ -48,7 +48,7 @@ export PYTHONPATH="$project_root/src${PYTHONPATH:+:$PYTHONPATH}"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 
-config="src/configs/extraction/esm2_8m.json"
+config="configs/extraction/esm2_8m.json"
 assay="A0A1I9GEU1_NEIME_Kennouche_2019"
 printf 'Job: %s\nRepository: %s\nAssay: %s\n' "${SLURM_JOB_ID:-manual}" "$project_root" "$assay"
 python -u - "$config" "$assay" <<'PY'
