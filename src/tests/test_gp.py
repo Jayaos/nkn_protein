@@ -91,7 +91,7 @@ class ExactGPTests(unittest.TestCase):
 
     def test_restart_selection_restore_rescaling_and_reload(self):
         train, test = self.batch.select(range(10)), self.batch.select(range(10, 16))
-        cfg = TrainingConfig(max_steps=3)
+        cfg = TrainingConfig(max_steps=3, seeds=(0, 1, 2), lengthscale_multipliers=(0.5, 1.0, 2.0))
         fitted = fit_gp(train, small_config(), cfg)
         self.assertEqual(len(fitted.restart_summaries), 3)
         self.assertEqual(fitted.best_nll_per_variant, min(row["best_nll_per_variant"] for row in fitted.restart_summaries))

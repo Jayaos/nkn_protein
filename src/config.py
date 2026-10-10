@@ -90,8 +90,8 @@ class TrainingConfig:
     learning_rate: float = 1e-3
     betas: tuple = (0.9, 0.999)
     epsilon: float = 1e-8
-    seeds: tuple = (0, 1, 2)
-    lengthscale_multipliers: tuple = (0.5, 1.0, 2.0)
+    seeds: tuple = (0,)
+    lengthscale_multipliers: tuple = (1.0,)
     noise_initial: float = 0.01
     noise_floor: float = 1e-4
     jitter_initial: float = 1e-6

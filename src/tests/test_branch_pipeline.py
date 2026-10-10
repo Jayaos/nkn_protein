@@ -13,7 +13,7 @@ import torch
 
 from config import BRANCH_NAMES
 from data_loading import load_feature_bundle
-from experiments import run_cv, run_fit, run_predict
+from experiments import run_cv, run_extrapolation, run_predict
 from experiments.cli import main
 from gp.training import FittedGP, fit_gp
 from test_data import make_bundle, write_csv
@@ -104,7 +104,7 @@ class BranchPipelineTests(unittest.TestCase):
         config = branch_config(("sequence_global",))
         batch = select_branches(self.batch, config.model.enabled_branches)
         output = self.root / "fit"
-        run_fit(batch, config, output)
+        run_extrapolation(batch, config, output)
         mismatched = branch_config(("inverse_folding",))
         with self.assertRaisesRegex(ValueError, "branches.*checkpoint"):
             run_predict(replace(batch, targets=None), output / "checkpoint.pt", mismatched, self.root / "rejected")
@@ -119,7 +119,7 @@ class BranchPipelineTests(unittest.TestCase):
         batch = select_branches(self.batch, config.model.enabled_branches)
         folds = torch.tensor([0, 1, 2, 0, 1, 2, 0, 1])
         output = self.root / "inverse_cv"
-        report = run_cv(batch, folds, config, output, split_source="development")
+        report = run_cv(batch, folds, config, output, split_source="provided")
         self.assertEqual(report["n_folds"], 3)
         self.assertEqual(report["n_variants"], batch.num_variants)
         for fold in range(3):
@@ -165,9 +165,10 @@ class BranchExperimentCLITests(unittest.TestCase):
                 config_path = directory / "config.json"
                 config_path.write_text(json.dumps(config.to_dict()), encoding="utf-8")
                 for command in ("validate", "fit"):
+                    split_options = ["--setting", "single_to_double"] if command == "fit" else []
                     status, output, errors = self.invoke([
                         command, "--features", feature_root, "--config", config_path,
-                        "--output", directory / command, "--quiet",
+                        "--output", directory / command, "--quiet", *split_options,
                     ])
                     self.assertEqual(status, 0, errors)
                     summary = json.loads(output)

@@ -6,7 +6,7 @@
   "cache_id": "v_48_020-backbone_only-8907e6671bfb",
   "model_dir": "data/models/proteinmpnn",
   "output_root": "data/features/pretrained",
-  "assay_index": "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv",
+  "assay_index": "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv",
   "structure_manifest_dir": "data/structures/manifests",
   "conditioning_mode": "backbone_only",
   "device": "auto",

@@ -5,14 +5,16 @@ from __future__ import annotations
 import argparse
 from dataclasses import replace
 import json
+import math
 from pathlib import Path
 import sys
 
 import torch
 
 from config import ExperimentConfig
-from data_loading import development_folds, load_feature_bundle, load_folds, validate_assay_coverage
-from .runner import prepare_output, run_cv, run_extrapolation, run_fit, run_predict
+from data_loading import load_feature_bundle, load_folds, validate_assay_coverage
+from .runner import prepare_output, run_cv, run_extrapolation, run_predict
+from .settings import CV_SETTINGS, SETTING_SCHEMES, select_setting_batch
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -29,17 +31,26 @@ def _parser() -> argparse.ArgumentParser:
         coverage = sub.add_mutually_exclusive_group()
         coverage.add_argument("--full-assay", action="store_true", help="Require complete indexed assay coverage (default with --assay-index)")
         coverage.add_argument("--allow-subset", action="store_true", help="Explicitly allow a cached subset of the indexed assay")
-        sub.add_argument("--singles-only", action="store_true", help="Select variants with exactly one substitution")
+        if command in ("validate", "predict"):
+            sub.add_argument("--singles-only", action="store_true", help="Select variants with exactly one substitution")
+        else:
+            sub.set_defaults(singles_only=False)
         if command in ("fit", "cv"):
-            splits = sub.add_mutually_exclusive_group(required=command == "cv")
-            splits.add_argument("--folds", type=Path, help="ID-aligned CSV containing supplied fold assignments")
-            splits.add_argument("--development-splits", action="store_true", help="Construct development splits; these are not benchmark folds")
-            if command == "fit":
-                splits.add_argument("--single-to-double", action="store_true", help="Train all single mutants and evaluate double mutants in one fixed split")
-            sub.add_argument("--scheme", choices=("random", "modulo", "contiguous"), default="random")
-            sub.add_argument("--split-seed", type=int, default=0)
-        if command == "fit":
-            sub.add_argument("--test-fold", type=int, help="Held-out fold for split fitting (default 0)")
+            sub.add_argument(
+                "--setting", required=True, choices=CV_SETTINGS if command == "cv" else ("single_to_double",),
+                help="Kermut domain setting for all CV folds" if command == "cv" else "Fixed single-to-double extrapolation setting",
+            )
+            if command == "cv":
+                sub.add_argument("--folds", required=True, type=Path, help="ID-aligned CSV containing supplied fold assignments")
+            else:
+                sub.add_argument(
+                    "--sample-ratio", type=float, default=0.8,
+                    help="Fraction of singles used for training, in (0, 1] (default 0.8; 1 uses all singles)",
+                )
+                sub.add_argument(
+                    "--split-seed", type=int, default=2024,
+                    help="Seed for sampling training singles (default 2024; no split effect when --sample-ratio is 1)",
+                )
         if command == "predict":
             sub.add_argument("--checkpoint", required=True, type=Path)
     return parser
@@ -76,20 +87,6 @@ def _load_batch(args, config):
     return batch
 
 
-def _splits(args, batch, config):
-    if args.folds is not None:
-        return (
-            load_folds(args.folds, batch.variant_ids, args.scheme, config.evaluation.n_folds),
-            "provided",
-        )
-    if args.development_splits:
-        return (
-            development_folds(batch, args.scheme, config.evaluation.n_folds, args.split_seed),
-            "development",
-        )
-    return None, "none"
-
-
 def _progress(event):
     if event.get("event") == "fold_start":
         print(f"Fold {event['fold']}: {event['n_train']} training, {event['n_test']} held-out variants", file=sys.stderr)
@@ -98,7 +95,7 @@ def _progress(event):
         print(f"{fold}seed {event['seed']} step {event['step']}: NLL/variant={event['nll_per_variant']:.6g}", file=sys.stderr)
 
 
-def _input_manifest(args, batch):
+def _input_manifest(args, batch, excluded_variant_ids=()):
     metadata = json.loads((args.features / "assay.json").read_text(encoding="utf-8"))
     return {
         "feature_directory": str(args.features.resolve()),
@@ -109,20 +106,42 @@ def _input_manifest(args, batch):
         "assay_index": str(args.assay_index.resolve()) if args.assay_index else None,
         "coverage": "subset_allowed" if args.allow_subset else "full" if args.assay_index else "not_checked_against_index",
         "singles_only": args.singles_only,
+        "setting": getattr(args, "setting", None),
+        "excluded_variant_ids": list(excluded_variant_ids),
         "fold_source": str(args.folds.resolve()) if getattr(args, "folds", None) else None,
-        "development_split_seed": args.split_seed if getattr(args, "development_splits", False) else None,
+        "extrapolation_sample_ratio": args.sample_ratio if getattr(args, "setting", None) == "single_to_double" else None,
+        "extrapolation_split_seed": args.split_seed if getattr(args, "setting", None) == "single_to_double" else None,
     }
+
+
+def _validate_setting_arguments(args):
+    if args.command not in ("fit", "cv"):
+        return
+    args.scheme = SETTING_SCHEMES[args.setting]
+    if args.command == "fit":
+        if not math.isfinite(args.sample_ratio) or not 0 < args.sample_ratio <= 1:
+            raise ValueError("--sample-ratio must be finite and greater than 0 and at most 1")
+        if not 0 <= args.split_seed < 2**32:
+            raise ValueError("--split-seed must be between 0 and 2**32 - 1")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
+        _validate_setting_arguments(args)
         config = _load_config(args)
-        if getattr(args, "single_to_double", False) and (args.singles_only or args.test_fold is not None):
-            raise ValueError("--single-to-double cannot be combined with --singles-only or --test-fold")
         torch.set_num_threads(config.num_threads)
         batch = _load_batch(args, config)
+        excluded_variant_ids = ()
+        if args.command in ("fit", "cv"):
+            selected = select_setting_batch(batch, args.setting)
+            selected_ids = set(selected.variant_ids)
+            excluded_variant_ids = tuple(value for value in batch.variant_ids if value not in selected_ids)
+            # Keep the full batch for extrapolation so its partition manifest
+            # records unused singles and excluded WT/higher-order variants.
+            if args.setting != "single_to_double":
+                batch = selected
         progress = None if args.quiet else _progress
         if args.command == "validate":
             output = prepare_output(args.output, config)
@@ -140,24 +159,28 @@ def main(argv: list[str] | None = None) -> int:
             (output / "validation.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         elif args.command == "predict":
             result = run_predict(batch, args.checkpoint, config, args.output)
-        elif getattr(args, "single_to_double", False):
-            result = run_extrapolation(batch, config, args.output, progress=progress)
+        elif args.command == "fit":
+            result = run_extrapolation(
+                batch, config, args.output, sample_ratio=args.sample_ratio,
+                split_seed=args.split_seed, progress=progress,
+            )
         else:
-            folds, source = _splits(args, batch, config)
-            if args.command == "cv":
-                result = run_cv(batch, folds, config, args.output, scheme=args.scheme, split_source=source, progress=progress)
-            else:
-                if args.test_fold is not None and folds is None:
-                    raise ValueError("--test-fold requires --folds or --development-splits")
-                result = run_fit(
-                    batch, config, args.output, folds=folds,
-                    test_fold=0 if args.test_fold is None else args.test_fold,
-                    scheme=args.scheme, split_source=source, progress=progress,
-                )
+            folds = load_folds(
+                args.folds, batch.variant_ids, args.scheme, config.evaluation.n_folds,
+                allowed_extra_ids=excluded_variant_ids,
+            )
+            result = run_cv(
+                batch, folds, config, args.output, scheme=args.scheme, setting=args.setting,
+                split_source="provided", progress=progress,
+            )
         (args.output / "input_manifest.json").write_text(
-            json.dumps(_input_manifest(args, batch), indent=2, allow_nan=False) + "\n", encoding="utf-8"
+            json.dumps(_input_manifest(args, batch, excluded_variant_ids), indent=2, allow_nan=False) + "\n", encoding="utf-8"
         )
-        summary = {name: value for name, value in result.items() if name not in ("fold_metrics", "metrics", "variance_summary")}
+        summary = {
+            name: value for name, value in result.items()
+            if name not in ("fold_metrics", "metrics", "variance_summary", "setting_metrics")
+            and not name.endswith("variant_ids")
+        }
         summary["output_directory"] = str(args.output.resolve())
         print(json.dumps(summary, indent=2, allow_nan=False))
         return 0

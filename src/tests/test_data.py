@@ -13,7 +13,6 @@ import torch
 
 from data_loading import (
     AssayCatalog,
-    development_folds,
     load_feature_bundle,
     load_folds,
     parse_substitutions,
@@ -23,7 +22,7 @@ from data_loading import (
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "data/features/A0A1I9GEU1_NEIME_Kennouche_2019"
-INDEX = ROOT / "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv"
+INDEX = ROOT / "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv"
 
 
 def write_csv(path, header, rows):
@@ -167,15 +166,15 @@ class FeatureLoaderTests(unittest.TestCase):
 
 class SplitTests(unittest.TestCase):
     def test_saved_generic_assignments_round_trip_and_specific_scheme_takes_precedence(self):
-        batch = load_feature_bundle(FIXTURE)
-        folds = development_folds(batch, "random", seed=37)
+        variant_ids = ("a", "b", "c", "d", "e", "f")
+        folds = torch.tensor([3, 0, 4, 1, 2, 0])
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "fold_assignments.csv"
-            rows = list(zip(batch.variant_ids, folds.tolist()))
+            rows = list(zip(variant_ids, folds.tolist()))
             write_csv(path, ["variant_id", "fold"], reversed(rows))
-            torch.testing.assert_close(load_folds(path, batch.variant_ids, "random"), folds)
+            torch.testing.assert_close(load_folds(path, variant_ids, "random"), folds)
             write_csv(path, ["variant_id", "fold", "fold_random_5"], [[variant_id, (fold + 1) % 5, fold] for variant_id, fold in rows])
-            torch.testing.assert_close(load_folds(path, batch.variant_ids, "random"), folds)
+            torch.testing.assert_close(load_folds(path, variant_ids, "random"), folds)
 
     def test_official_folds_join_by_id_and_require_complete_scheme(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -187,20 +186,25 @@ class SplitTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "exactly"):
                 load_folds(path, ["a", "b"], "random", n_folds=3)
 
-    def test_development_splits_are_deterministic_and_position_grouped(self):
-        batch = load_feature_bundle(FIXTURE)
-        for scheme in ("random", "modulo", "contiguous"):
-            folds = development_folds(batch, scheme, seed=123)
-            self.assertEqual(set(folds.tolist()), set(range(5)))
-            torch.testing.assert_close(folds, development_folds(batch, scheme, seed=123))
-            if scheme != "random":
-                positions = batch.mutation_positions.tolist()
-                for i, position in enumerate(positions):
-                    self.assertEqual(len({int(folds[j]) for j, other in enumerate(positions) if other == position}), 1)
+    def test_multiples_column_and_known_depth_exclusions_preserve_assignments(self):
         with tempfile.TemporaryDirectory() as temp:
-            make_bundle(Path(temp))
-            with self.assertRaisesRegex(ValueError, "single substitutions"):
-                development_folds(load_feature_bundle(temp), "modulo", n_folds=2)
+            path = Path(temp) / "multiples.csv"
+            write_csv(path, ["mutant", "fold_rand_multiples"], [["double", 2], ["triple", 1], ["single_b", 1], ["single_a", 0]])
+            selected = ["single_a", "single_b", "double"]
+            self.assertEqual(
+                load_folds(path, selected, "random_multiples", n_folds=3, allowed_extra_ids=["triple"]).tolist(),
+                [0, 1, 2],
+            )
+            with self.assertRaises(ValueError):
+                load_folds(path, selected, "random_multiples", n_folds=3)
+            with self.assertRaises(ValueError):
+                load_folds(path, [*selected, "missing"], "random_multiples", n_folds=3, allowed_extra_ids=["triple"])
+            with self.assertRaises(ValueError):
+                load_folds(path, selected, "random_multiples", n_folds=3, allowed_extra_ids=["unknown"])
+            # Permitting excluded IDs must not permit duplicate rows or lose a selected fold.
+            write_csv(path, ["mutant", "fold_rand_multiples"], [["double", 2], ["triple", 1], ["triple", 1], ["single_b", 1], ["single_a", 0]])
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                load_folds(path, selected, "random_multiples", n_folds=3, allowed_extra_ids=["triple"])
 
 
 class ExistingFixtureTests(unittest.TestCase):

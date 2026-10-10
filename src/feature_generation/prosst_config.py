@@ -20,7 +20,7 @@ class ProSSTConfig:
     cache_id: str | None = None
     model_dir: Path = Path("data/models/prosst")
     output_root: Path = Path("data/features/pretrained")
-    assay_index: Path = Path("data/DMS_ProteinGym_substitutions/DMS_substitutions.csv")
+    assay_index: Path = Path("data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv")
     structure_manifest_dir: Path = Path("data/structures/manifests")
     structure_token_dir: Path = Path("data/structures/tokens/prosst")
     layer: int = 12

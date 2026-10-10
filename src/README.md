@@ -34,19 +34,20 @@ PowerShell session. If you already have the named Conda environment, update its
 dependencies with `conda env update -f env.yaml`. Then run the fixture checks:
 
 ```powershell
-python -m experiments.cli validate --features data/features/A0A1I9GEU1_NEIME_Kennouche_2019 --assay-index data/DMS_ProteinGym_substitutions/DMS_substitutions.csv --allow-subset --output src/runs/fixture_validation
-python -m experiments.cli cv --features data/features/A0A1I9GEU1_NEIME_Kennouche_2019 --config src/configs/smoke.json --development-splits --scheme random --output src/runs/fixture_smoke
+python -m experiments.cli validate --features data/features/A0A1I9GEU1_NEIME_Kennouche_2019 --assay-index data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv --allow-subset --output src/runs/fixture_validation
+python -m unittest discover -s src/tests -p test_pipeline.py -v
 ```
 
 Run experiments with `python -m experiments.cli` and extraction with
 `python -m feature_generation.cli`. Experiment commands require a new or empty
 output directory.
-The smoke configuration uses five Adam updates for each of three restarts; it is
-an integration check, not a completed scientific fit. The example's cached
-representations and zero-shot scores are synthetic, while its labels are real.
+The validation example's cached representations and zero-shot scores are
+synthetic, while its labels are real. The pipeline tests use small synthetic
+inputs and explicit fold assignments for integration checks.
 
-Without `--config`, training uses the paper's 5,000-step maximum, 1,000-step
-minimum before early stopping, 500-step comparison window, and three restarts.
+Without `--config`, training uses the project's 5,000-step maximum, 1,000-step
+minimum before early stopping, 500-step comparison window, and one initialization
+per training split.
 Device defaults to CPU. Use `--device cuda` with a suitable PyTorch installation.
 The experiment CLI consumes saved features. The separate feature-generation
 CLI prepares structures, downloads checkpoints, extracts frozen ESM-2 and structure-conditioned ProSST embeddings,
@@ -127,13 +128,43 @@ include the assay ID. No feature extraction is inferred from a raw assay CSV.
 When `--assay-index` is supplied, complete indexed assay coverage is required
 unless `--allow-subset` is explicit. The current fixture contains 16 of its
 assay's 922 variants, so the validation example uses that flag. With
-`--singles-only`, completeness refers to all indexed single substitutions. Rows
-are not silently removed to match an incomplete feature cache.
+`--singles-only` on validation or prediction, completeness refers to all indexed
+single substitutions. Training commands validate full assay coverage before
+selecting the mutation depths required by `--setting`. Rows are not silently
+removed to match an incomplete feature cache.
 
 ## Fold inputs and experiments
 
-The raw ProteinGym CSVs in this workspace contain no official fold assignments.
-For benchmark CV supply a separate ID-aligned CSV:
+Raw assay CSVs and the assay index are under
+`data/DMS_ProteinGym_substitutions/raw_substitutions/`. They contain no fold
+assignments. Downloaded ProteinGym benchmark CSVs with assignments are under
+`data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/` and
+`data/DMS_ProteinGym_substitutions/cv_folds_multiples_substitutions/`.
+Both `fit` and `cv` require `--setting`. The first five settings below use
+published five-fold assignments and run with `cv`, which evaluates all five
+folds automatically and requires a fold CSV through `--folds`. `fit` accepts only
+`--setting single_to_double` for the single extrapolation experiment. Full-data
+fitting is not an experiment mode.
+
+| Setting | Training variants | Evaluation variants | Fold CSV column |
+| --- | --- | --- | --- |
+| `singles_random` | 1M in four folds | 1M in the held-out fold | `fold_random_5` |
+| `singles_modulo` | 1M in four folds | 1M in the held-out fold | `fold_modulo_5` |
+| `singles_contiguous` | 1M in four folds | 1M in the held-out fold | `fold_contiguous_5` |
+| `mixed_random_singles` | 1M and 2M in four folds | Held-out 1M | `fold_rand_multiples` |
+| `mixed_random_doubles` | 1M and 2M in four folds | Held-out 2M | `fold_rand_multiples` |
+| `single_to_double` | Sampled fraction of 1M (default 80%; configurable up to all singles) | All 2M | None |
+
+1M and 2M mean exactly one and two substitutions. Mixed settings exclude wild
+type and mutation depths above two. They use the same models and held-out
+predictions: either mixed setting produces separate metrics for **both** domains
+in `setting_metrics`; the chosen setting determines the top-level metrics.
+Running both mixed setting commands separately is unnecessary.
+
+Supply the singles archive for any `singles_*` setting, and the multiples archive
+for either `mixed_*` setting. The multiples archive includes singles as well as
+multiple substitutions. The loader accepts the published CSVs directly, including
+their `mutant` ID column:
 
 ```text
 variant_id,fold_random_5,fold_modulo_5,fold_contiguous_5
@@ -141,38 +172,111 @@ M7V,0,1,2
 ...
 ```
 
-`mutant` can replace `variant_id`. A column named `random`, `modulo`, or
-`contiguous` is also accepted, and a generic `fold` column is the fallback.
-IDs must exactly cover the selected variants; folds are numbered `0` through
-`n_folds - 1`, with every fold present. The chosen `--scheme` identifies the
-protocol. Positional schemes require single substitutions and disjoint mutation
-positions across folds. Multi-mutant positional protocols remain deferred.
+`mutant` can replace `variant_id`. Short column aliases `random`, `modulo`,
+`contiguous`, and `random_multiples` are accepted, with `fold` as a fallback.
+Every selected variant must have an assignment. Extra CSV IDs are permitted only
+when they belong to known cached variants excluded by the setting; unknown IDs
+are rejected. Folds are numbered `0` through `n_folds - 1`, with every fold
+present after mutation-depth selection. Positional settings require disjoint
+mutation positions across folds. Published ProteinGym protocols have five folds;
+test configurations with explicit assignments can use fewer folds.
 
 ```powershell
-python -m experiments.cli cv --features PATH_TO_CACHE --folds PATH_TO_FOLDS.csv --scheme random --output src/runs/assay_random
-python -m experiments.cli fit --features PATH_TO_CACHE --folds PATH_TO_FOLDS.csv --scheme random --test-fold 0 --output src/runs/fold_0
-python -m experiments.cli fit --features PATH_TO_CACHE --output src/runs/full_fit
-python -m experiments.cli predict --features PATH_TO_NEW_VARIANTS --checkpoint src/runs/full_fit/checkpoint.pt --output src/runs/prediction
+python -m experiments.cli cv --features PATH_TO_CACHE --folds PATH_TO_SINGLES_FOLDS.csv --setting singles_random --output src/runs/assay_random
+python -m experiments.cli cv --features PATH_TO_CACHE --folds PATH_TO_SINGLES_FOLDS.csv --setting singles_modulo --output src/runs/assay_modulo
+python -m experiments.cli cv --features PATH_TO_MIXED_CACHE --folds PATH_TO_MULTIPLES_FOLDS.csv --setting mixed_random_singles --output src/runs/assay_mixed
+python -m experiments.cli fit --features PATH_TO_MIXED_CACHE --setting single_to_double --sample-ratio 0.8 --split-seed 2024 --output src/runs/single_to_double
+# Train on all singles and test on all doubles:
+python -m experiments.cli fit --features PATH_TO_MIXED_CACHE --setting single_to_double --sample-ratio 1.0 --output src/runs/single_to_double_all_singles
+python -m experiments.cli predict --features PATH_TO_NEW_VARIANTS --checkpoint src/runs/assay_modulo/fold_0/checkpoint.pt --output src/runs/prediction
 ```
 
-`fit` without a split fits all requested variants. `predict` does not need labels;
-omit `DMS_score` or leave every value blank in the prediction cache's variant
-table. The checkpoint includes training representations, standardized training
+The extrapolation setting accepts two `fit` options: `--sample-ratio` (default
+`0.8`) and `--split-seed` (default `2024`). The ratio must be finite and satisfy
+`0 < sample_ratio <= 1`; the seed must be an integer from `0` through `2**32 - 1`.
+For ratios below `1.0`, it samples `round(sample_ratio * n_singles)` singles
+without replacement using NumPy's `RandomState` and the supplied seed. Python's
+`round` rounds halfway cases to the nearest even integer. Matching the exact
+sampled singles requires the same source single-mutant order. With
+`--sample-ratio 1.0`, all singles are retained in their original order without
+random sampling, so the seed does not affect the split.
+
+The defaults follow Kermut's
+[reproduction code](https://github.com/petergroth/kermut/blob/e6500221b5159a1896272bfc4a3c6e3896eb0027/src/experiments/proteingym_domains.py#L122-L139);
+the paper does not specify the 80% training fraction. All double mutants are
+tested for any ratio. Remaining singles are unused for this doubles-only
+evaluation; wild type and depths above two are excluded. Saved partition
+assignments identify the training, test, unused, and excluded variants. Metrics
+and the run summary record `sample_ratio`, `split_seed`, and the legacy alias
+`training_single_fraction`; the input manifest records
+`extrapolation_sample_ratio` and `extrapolation_split_seed`. The recorded fraction
+is the requested ratio; the actual training count follows the rounding above.
+This setting takes no fold CSV and has no fold mean or standard deviation. At
+least two sampled training singles and one test double are required. `cv` does
+not accept either sampling option and always uses the published fold assignments.
+
+`predict` can use an experiment checkpoint and does not need labels; omit
+`DMS_score` or leave every value blank in the prediction cache's variant table.
+The checkpoint includes training representations, standardized training
 scores/targets, and fitted transformations. A prediction command uses the
 adjacent `resolved_config.json` unless an explicit configuration is supplied.
 
-Development splits require the explicit `--development-splits` flag and are
-labelled accordingly in the outputs. They are suitable for fixture tests, not
-substitutes for supplied benchmark assignments. Random splits can include mixed
-mutation counts. For the single-to-double experiment:
+### CPU batch job with published ProteinGym folds
 
-```powershell
-python -m experiments.cli fit --features PATH_TO_MIXED_CACHE --single-to-double --output src/runs/single_to_double
+The [ESM2 + ProteinMPNN job](../sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch)
+defaults to the real shared cache for `A0A1I9GEU1_NEIME_Kennouche_2019` and
+[`configs/esm2_proteinmpnn_nkn.json`](configs/esm2_proteinmpnn_nkn.json).
+It requests four CPUs and no GPU. ESM2 embeddings and ProteinMPNN distributions
+provide two kernel branches; their two score tables provide the GP mean inputs.
+
+By default, the job runs `singles`: the three singles settings, five folds each.
+This matches the default assay, whose 922 variants are all single mutants.
+`all` requests all six settings on an assay with singles and doubles: three
+singles CV runs, one mixed CV run reporting both domains, and one extrapolation
+fit. This totals 21 fits, with one initialization per fit in the preset.
+Every requested setting and fold file is checked before the first training run.
+An assay without doubles fails when a mixed or extrapolation setting is requested;
+settings are never silently skipped. The job requires published column names and
+five folds, and never generates replacement assignments.
+
+Submit from the repository root on the cluster:
+
+```bash
+# Default assay, all three singles settings: 15 fold fits
+sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch
+
+# One setting
+sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles_modulo
+
+# All six settings; prepare the complete ESM2 + ProteinMPNN cache first
+ASSAY=A4_HUMAN_Seuma_2022 sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch all
+
+# Only extrapolation, using an 80% sample of singles for training
+ASSAY=A4_HUMAN_Seuma_2022 SAMPLE_RATIO=0.8 SPLIT_SEED=2024 sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch single_to_double
+
+# Extrapolation with all singles for training
+ASSAY=A4_HUMAN_Seuma_2022 SAMPLE_RATIO=1.0 sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch single_to_double
 ```
 
-This fits all single substitutions and evaluates double substitutions once.
-Higher mutation counts are excluded and counted. It is a fixed train/test
-experiment, not five-fold cross-validation.
+Each submission creates
+`src/runs/<assay>/nkn_esm2_proteinmpnn_<selection>_<job-id>/`.
+CV results are saved under `cv/<setting>/`; extrapolation is under
+`fit/single_to_double/`. For `all`, both mixed-domain results are in
+`cv/mixed_random_singles/metrics.json` under `setting_metrics`.
+The run saves byte-for-byte `folds/singles.csv` and/or `folds/multiples.csv`
+snapshots as needed, plus a `fold_manifest.json` with source paths, SHA-256
+hashes and selected fold sizes. When extrapolation is requested, the manifest also
+records `sample_ratio` and `split_seed`.
+
+`ASSAY` chooses the assay; `FEATURES` overrides its default
+`data/features/pretrained/<assay>` cache. `SINGLES_FOLDS_CSV` and
+`MULTIPLES_FOLDS_CSV` override the corresponding published files. `SAMPLE_RATIO`
+(default `0.8`) controls the fraction of singles used for extrapolation training;
+`SPLIT_SEED` (default `2024`) selects the reproducible sample when the ratio is
+below `1.0`. Both are used only when extrapolation is requested and are then
+recorded in the batch manifest; neither changes published CV folds. Relative paths resolve from the repository
+root. The former positional `cv`/`fit` modes and `FOLDS_CSV` variable are rejected.
+Existing pretrained features and scores are reused without extraction.
 
 ## Configuration and numerical behavior
 
@@ -232,12 +336,10 @@ use the fitted checkpoint's branch selection; CLI prediction automatically reads
 its adjacent `resolved_config.json` when no `--config` is supplied. When moving
 a checkpoint, keep that config beside it or supply `--config` explicitly.
 
-`configs/sequence_inverse_smoke.json` exercises two branches with the existing
-synthetic fixture (five updates per restart; not a scientific fit):
-
-```bash
-python -m experiments.cli cv --features data/features/A0A1I9GEU1_NEIME_Kennouche_2019 --config src/configs/sequence_inverse_smoke.json --development-splits --scheme random --output src/runs/sequence_inverse_smoke
-```
+`configs/sequence_inverse_smoke.json` selects two branches for synthetic fixture
+features and limits training to five updates per restart. Using this preset with
+`cv` requires a fold CSV matching the selected fixture variants; the full-assay
+ProteinGym fold CSV does not match the 16-variant fixture cache.
 
 Per-branch kernel settings remain under `model.branches`. Overrides may specify
 just the branches/settings being changed; omitted settings use defaults. For example:
@@ -271,9 +373,10 @@ Target and score scales use population standard deviations (`ddof=0`). Constant
 score columns become zero after centering with scale one; constant training
 targets are rejected. Training inputs are detached and copied before fitting.
 Lengthscale medians exclude zero distances but retain repeated occurrences;
-even-sized medians average the middle two values. Seeds default to `0,1,2` and
-lengthscale multipliers to `0.5,1,2`. NKN biases and noise start at `0.01`; the
-noise lower bound is `1e-4`.
+even-sized medians average the middle two values. Training defaults to one
+initialization with seed `0` and lengthscale multiplier `1.0`. Multiple starts
+can be configured with matching `seeds` and `lengthscale_multipliers` lists.
+NKN biases and noise start at `0.01`; the noise lower bound is `1e-4`.
 
 The training matrix always includes jitter starting at `1e-6`, escalating by ten
 through `1e-3` on factorization failure. A failed restart is ineligible for
@@ -294,15 +397,39 @@ restart diagnostics, and CSV predictions in original and standardized units.
 CLI runs also record input-cache provenance. CV outputs include per-fold
 artifacts and an ID-ordered out-of-fold prediction table.
 
-* Spearman uses combined original-unit out-of-fold means.
-* Interval ECE is computed in each fold and then equally averaged.
+* `spearman_oof` uses combined original-unit out-of-fold means.
+* `spearman_oof_standardized` pools targets and means standardized separately
+  using each fold's training target mean and standard deviation, following
+  Kermut's pooled Spearman aggregation pattern. The existing NKN transformations
+  use population standard deviation (`ddof=0`), while Kermut's reference uses
+  sample standard deviation; this is not identical numerical reproduction.
+  Prediction CSVs retain both original and standardized targets and predictions.
+* `avg_spearman` and `std_spearman` summarize the individual fold correlations,
+  with equal fold weights and population standard deviation (`ddof=0`). Undefined
+  correlations are excluded and `n_valid_spearman_folds` records the count. With
+  no valid folds both summaries are JSON `null`; with one valid fold the standard
+  deviation is zero. These fields appear in each CV `metrics.json` and CLI summary.
+* Interval ECE is computed in each nonempty held-out fold and then equally
+  averaged. For mixed runs it is computed separately within each mutation depth.
 * PairECE uses the observation covariance for pairs within the same held-out
   fold, excludes exact observed and predicted ties, and then averages eligible
   fold-level values equally. Bins have equal width on `[0.5,1]`, are left-closed
   and right-open, and the last bin includes one. Empty eligible-pair sets produce
   JSON `null`, with contributing-fold and pair counts recorded.
-* Uncertainty summaries average observation variances in training-standardized
-  units, including separate single/double summaries when present.
+* Uncertainty summaries average latent and observation variances in
+  training-standardized units over held-out variants, including separate
+  single/double summaries when present.
+
+Mixed CV `setting_metrics` contains a complete summary for each of
+`mixed_random_singles` and `mixed_random_doubles`, including subgroup per-fold
+Spearman, pooled Spearman, interval ECE, PairECE, and variance summaries. PairECE
+uses the covariance restricted to the subgroup; it never compares variants
+across folds or mutation depths. A fold can contain no variants of one depth:
+that subgroup's fold metrics are undefined and excluded from the corresponding
+averages. Contributing counts are recorded separately for each metric; a
+constant-target subgroup can still contribute calibration metrics even when
+Spearman is undefined. Single-fold `fit` and fixed extrapolation report their
+held-out metrics directly, without inventing a five-fold mean or deviation.
 
 Labels supplied to prediction are only exported alongside predictions; they
 are not used for conditioning, model selection, or automatic recalibration.

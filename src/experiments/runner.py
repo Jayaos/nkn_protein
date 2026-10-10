@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 from torch import Tensor
 
@@ -16,6 +18,11 @@ from data_loading import FeatureBatch
 from evaluation import aggregate_folds, evaluate_fold, spearman
 from gp.linalg import NumericalError
 from gp.training import FittedGP, fit_gp
+
+from .settings import SETTING_SCHEMES
+
+
+_MIXED_DEPTHS = {"mixed_random_singles": 1, "mixed_random_doubles": 2}
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -46,7 +53,7 @@ def _mutation_counts(batch: FeatureBatch) -> Tensor:
 
 
 def _validate_fold_assignments(batch: FeatureBatch, folds: Tensor, config: ExperimentConfig, scheme: str) -> Tensor:
-    if scheme not in ("random", "modulo", "contiguous"):
+    if scheme not in ("random", "modulo", "contiguous", "random_multiples"):
         raise ValueError(f"Unknown splitting scheme: {scheme}")
     if not isinstance(folds, Tensor) or folds.ndim != 1 or len(folds) != batch.num_variants:
         raise ValueError("One fold assignment is required for every variant")
@@ -76,6 +83,21 @@ def _require_targets(batch: FeatureBatch) -> None:
         raise ValueError("Training requires at least two variants")
 
 
+def _validate_setting(batch: FeatureBatch, setting: str | None, scheme: str) -> None:
+    if setting is None:
+        return
+    if setting not in SETTING_SCHEMES or SETTING_SCHEMES[setting] != scheme:
+        raise ValueError(f"Setting {setting!r} does not use splitting scheme {scheme!r}")
+    counts = _mutation_counts(batch)
+    if setting in _MIXED_DEPTHS:
+        if not bool(((counts == 1) | (counts == 2)).all()):
+            raise ValueError("Mixed settings require a batch containing only single and double mutants")
+        if not bool((counts == 1).any()) or not bool((counts == 2).any()):
+            raise ValueError("Mixed settings require both single and double mutants")
+    elif not bool((counts == 1).all()):
+        raise ValueError("Single-mutant settings require a batch containing only single mutants")
+
+
 def _save_fit(fitted: FittedGP, output: Path, n_train: int) -> dict[str, Any]:
     fitted.save(output / "checkpoint.pt")
     _write_json(output / "history.json", fitted.history)
@@ -99,7 +121,12 @@ def _fit_with_failure_artifacts(training: FeatureBatch, config: ExperimentConfig
         raise
 
 
-def _prediction_rows(batch: FeatureBatch, prediction: Any, fold: int | None = None) -> list[dict[str, Any]]:
+def _prediction_rows(
+    batch: FeatureBatch,
+    prediction: Any,
+    fitted: FittedGP,
+    fold: int | None = None,
+) -> list[dict[str, Any]]:
     columns = {
         "mean": prediction.mean,
         "latent_variance": prediction.latent_covariance.diagonal(),
@@ -111,6 +138,10 @@ def _prediction_rows(batch: FeatureBatch, prediction: Any, fold: int | None = No
     values = {name: tensor.detach().cpu().tolist() for name, tensor in columns.items()}
     counts = _mutation_counts(batch).cpu().tolist()
     targets = batch.targets.detach().cpu().tolist() if batch.targets is not None else [None] * batch.num_variants
+    standardized_targets = (
+        fitted.transform.standardize_targets(batch.targets).detach().cpu().tolist()
+        if batch.targets is not None else [None] * batch.num_variants
+    )
     rows = []
     for index, variant_id in enumerate(batch.variant_ids):
         row = {
@@ -118,6 +149,7 @@ def _prediction_rows(batch: FeatureBatch, prediction: Any, fold: int | None = No
             "variant_id": variant_id,
             "fold": fold,
             "target": targets[index],
+            "target_standardized": standardized_targets[index],
             "n_mutations": counts[index],
         }
         row.update({name: value[index] for name, value in values.items()})
@@ -146,18 +178,100 @@ def _variance_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _evaluate(batch: FeatureBatch, prediction: Any, config: ExperimentConfig) -> dict[str, Any]:
+def _evaluate(
+    batch: FeatureBatch,
+    prediction: Any,
+    config: ExperimentConfig,
+    indices: Tensor | None = None,
+) -> dict[str, Any]:
     settings = config.evaluation
+    targets = batch.targets
+    mean = prediction.mean
+    covariance = prediction.observation_covariance
+    if indices is not None:
+        indices = indices.to(device=mean.device)
+        targets = targets.index_select(0, indices)
+        mean = mean.index_select(0, indices)
+        covariance = covariance.index_select(0, indices).index_select(1, indices)
+    if mean.numel() == 0:
+        return {
+            "interval_ece": None, "pair_ece": None, "spearman": None,
+            "n_variants": 0, "n_pairs": 0, "coverage": [], "bin_stats": [],
+        }
     metrics = evaluate_fold(
-        batch.targets,
-        prediction.mean,
-        prediction.observation_covariance,
+        targets,
+        mean,
+        covariance,
         settings.coverage_levels,
         settings.n_bins,
         settings.pair_block_size,
     )
-    metrics["spearman"] = spearman(batch.targets, prediction.mean)
+    metrics["spearman"] = spearman(targets, mean)
     return metrics
+
+
+def _evaluate_settings(
+    batch: FeatureBatch,
+    prediction: Any,
+    config: ExperimentConfig,
+    rows: list[dict[str, Any]],
+    setting: str | None,
+    fold: int,
+) -> dict[str, Any]:
+    """Evaluate both mixed domains from the same fold posterior."""
+    if setting not in _MIXED_DEPTHS:
+        metrics = _evaluate(batch, prediction, config)
+        metrics.update({"fold": fold, "variance_summary": _variance_summary(rows)})
+        if setting is not None:
+            metrics["setting"] = setting
+        return metrics
+    counts = _mutation_counts(batch)
+    setting_metrics = {}
+    for name, depth in _MIXED_DEPTHS.items():
+        indices = torch.nonzero(counts == depth, as_tuple=False).flatten()
+        metrics = _evaluate(batch, prediction, config, indices)
+        selected_rows = [row for row in rows if row["n_mutations"] == depth]
+        metrics.update({
+            "setting": name, "fold": fold,
+            "variance_summary": _variance_summary(selected_rows),
+        })
+        setting_metrics[name] = metrics
+    result = dict(setting_metrics[setting])
+    result.update({"setting_metrics": setting_metrics, "n_predicted_variants": len(rows)})
+    return result
+
+
+def _aggregate_evaluations(
+    fold_metrics: list[dict[str, Any]], rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Keep empty depth folds explicit while averaging only defined errors."""
+    evaluated = [fold for fold in fold_metrics if fold["n_variants"] > 0]
+    if evaluated:
+        result = aggregate_folds(evaluated)
+    else:
+        result = {
+            "avg_spearman": None, "std_spearman": None,
+            "n_valid_spearman_folds": 0, "interval_ece": None,
+            "pair_ece": None, "n_valid_pair_folds": 0,
+            "n_variants": 0, "n_pairs": 0,
+        }
+    result.update({
+        "n_folds": len(fold_metrics),
+        "n_valid_interval_folds": len(evaluated),
+        "fold_n_variants": [fold["n_variants"] for fold in fold_metrics],
+        "fold_n_pairs": [fold["n_pairs"] for fold in fold_metrics],
+        "fold_metrics": fold_metrics,
+        "variance_summary": _variance_summary(rows),
+        "spearman_oof": spearman(
+            torch.tensor([row["target"] for row in rows], dtype=torch.float64),
+            torch.tensor([row["mean"] for row in rows], dtype=torch.float64),
+        ),
+        "spearman_oof_standardized": spearman(
+            torch.tensor([row["target_standardized"] for row in rows], dtype=torch.float64),
+            torch.tensor([row["mean_standardized"] for row in rows], dtype=torch.float64),
+        ),
+    })
+    return result
 
 
 def _write_fold_assignments(output: Path, batch: FeatureBatch, folds: Tensor) -> None:
@@ -167,49 +281,6 @@ def _write_fold_assignments(output: Path, batch: FeatureBatch, folds: Tensor) ->
     )
 
 
-def run_fit(
-    batch: FeatureBatch,
-    config: ExperimentConfig,
-    output_dir: str | Path,
-    *,
-    folds: Tensor | None = None,
-    test_fold: int = 0,
-    scheme: str = "random",
-    split_source: str = "provided",
-    progress: Callable[[dict], None] | None = None,
-) -> dict[str, Any]:
-    """Fit all variants, or train on the complement of one explicit test fold."""
-    _require_targets(batch)
-    torch.set_num_threads(config.num_threads)
-    batch = batch.to(config.device)
-    if folds is None:
-        training = batch
-        test = None
-    else:
-        folds = _validate_fold_assignments(batch, folds, config, scheme)
-        if isinstance(test_fold, bool) or not isinstance(test_fold, int) or not 0 <= test_fold < config.evaluation.n_folds:
-            raise ValueError("test_fold must name one configured fold")
-        training = batch.select(torch.nonzero(folds != test_fold, as_tuple=False).flatten())
-        test = batch.select(torch.nonzero(folds == test_fold, as_tuple=False).flatten())
-    output = prepare_output(output_dir, config)
-    if folds is not None:
-        _write_fold_assignments(output, batch, folds)
-    fitted = _fit_with_failure_artifacts(training, config, output, progress)
-    summary = _save_fit(fitted, output, training.num_variants)
-    summary.update({"assay_id": batch.assay_id, "mode": "fit", "n_test": 0 if test is None else test.num_variants})
-    if test is not None:
-        prediction = fitted.predict(test)
-        rows = _prediction_rows(test, prediction, test_fold)
-        _write_csv(output / "predictions.csv", rows)
-        metrics = _evaluate(test, prediction, config)
-        metrics["variance_summary"] = _variance_summary(rows)
-        metrics.update({"scheme": scheme, "split_source": split_source, "test_fold": test_fold})
-        _write_json(output / "metrics.json", metrics)
-        summary["metrics"] = metrics
-    _write_json(output / "run_summary.json", summary)
-    return summary
-
-
 def run_cv(
     batch: FeatureBatch,
     folds: Tensor,
@@ -217,11 +288,13 @@ def run_cv(
     output_dir: str | Path,
     *,
     scheme: str = "random",
+    setting: str | None = None,
     split_source: str = "provided",
     progress: Callable[[dict], None] | None = None,
 ) -> dict[str, Any]:
     """Cross-validate one assay/scheme; average calibration errors within folds."""
     _require_targets(batch)
+    _validate_setting(batch, setting, scheme)
     torch.set_num_threads(config.num_threads)
     batch = batch.to(config.device)
     folds = _validate_fold_assignments(batch, folds, config, scheme)
@@ -240,11 +313,9 @@ def run_cv(
         fitted = _fit_with_failure_artifacts(training, config, fold_output, callback)
         _save_fit(fitted, fold_output, training.num_variants)
         prediction = fitted.predict(test)
-        rows = _prediction_rows(test, prediction, fold)
+        rows = _prediction_rows(test, prediction, fitted, fold)
         _write_csv(fold_output / "predictions.csv", rows)
-        metrics = _evaluate(test, prediction, config)
-        metrics["fold"] = fold
-        metrics["variance_summary"] = _variance_summary(rows)
+        metrics = _evaluate_settings(test, prediction, config, rows, setting, fold)
         _write_json(fold_output / "metrics.json", metrics)
         fold_metrics.append(metrics)
         by_variant.update({row["variant_id"]: row for row in rows})
@@ -253,18 +324,23 @@ def run_cv(
 
     ordered_rows = [by_variant[variant_id] for variant_id in batch.variant_ids]
     _write_csv(output / "predictions.csv", ordered_rows)
-    oof_means = torch.tensor([row["mean"] for row in ordered_rows], dtype=torch.float64)
-    metrics = aggregate_folds(fold_metrics)
-    metrics.update(
-        {
-            "assay_id": batch.assay_id,
-            "scheme": scheme,
-            "split_source": split_source,
-            "spearman_oof": spearman(batch.targets, oof_means),
-            "variance_summary": _variance_summary(ordered_rows),
-            "fold_metrics": fold_metrics,
-        }
-    )
+    metadata = {"assay_id": batch.assay_id, "scheme": scheme, "split_source": split_source}
+    if setting in _MIXED_DEPTHS:
+        setting_metrics = {}
+        for name, depth in _MIXED_DEPTHS.items():
+            depth_folds = [fold["setting_metrics"][name] for fold in fold_metrics]
+            depth_rows = [row for row in ordered_rows if row["n_mutations"] == depth]
+            setting_metrics[name] = {
+                **_aggregate_evaluations(depth_folds, depth_rows), **metadata, "setting": name,
+            }
+        metrics = dict(setting_metrics[setting])
+        metrics.update({
+            "setting_metrics": setting_metrics, "n_predicted_variants": len(ordered_rows),
+        })
+    else:
+        metrics = {**_aggregate_evaluations(fold_metrics, ordered_rows), **metadata}
+        if setting is not None:
+            metrics["setting"] = setting
     _write_json(output / "metrics.json", metrics)
     return metrics
 
@@ -285,7 +361,7 @@ def run_predict(
         raise ValueError("Prediction enabled branches differ from the fitted checkpoint")
     prediction = fitted.predict(batch)
     output = prepare_output(output_dir, config)
-    rows = _prediction_rows(batch, prediction)
+    rows = _prediction_rows(batch, prediction, fitted)
     _write_csv(output / "predictions.csv", rows)
     summary = {
         "assay_id": batch.assay_id,
@@ -303,24 +379,48 @@ def run_extrapolation(
     config: ExperimentConfig,
     output_dir: str | Path,
     *,
+    sample_ratio: float = 0.8,
+    split_seed: int = 2024,
     progress: Callable[[dict], None] | None = None,
 ) -> dict[str, Any]:
-    """Train on all single mutants and evaluate all doubles in one fixed split.
+    """Train on a configurable sample of singles and evaluate every double.
 
-    Wild-type and higher-order variants are excluded from both partitions and
-    counted in the output. This protocol does not average across artificial CV
-    folds or assign multi-mutants to positional folds.
+    Below a ratio of one, sample size and RNG match pandas
+    ``sample(frac=sample_ratio, random_state=split_seed)`` given the same incoming
+    single-mutant order. A ratio of one uses all singles in their original order.
+    Unused singles, wild type, and higher-order variants are recorded without
+    entering either partition.
     """
     _require_targets(batch)
+    if (
+        isinstance(sample_ratio, bool) or not isinstance(sample_ratio, (int, float))
+        or not math.isfinite(sample_ratio) or not 0 < sample_ratio <= 1
+    ):
+        raise ValueError("sample_ratio must be finite and greater than 0 and at most 1")
+    sample_ratio = float(sample_ratio)
+    if isinstance(split_seed, bool) or not isinstance(split_seed, int) or not 0 <= split_seed < 2**32:
+        raise ValueError("split_seed must be an integer between 0 and 2**32 - 1")
     torch.set_num_threads(config.num_threads)
     batch = batch.to(config.device)
     counts = _mutation_counts(batch)
-    training = batch.select(torch.nonzero(counts == 1, as_tuple=False).flatten())
-    test = batch.select(torch.nonzero(counts == 2, as_tuple=False).flatten())
-    if training.num_variants < 2 or test.num_variants < 1:
-        raise ValueError("Single-to-double extrapolation requires at least two singles and one double mutant")
+    single_indices = torch.nonzero(counts == 1, as_tuple=False).flatten().cpu()
+    test_indices = torch.nonzero(counts == 2, as_tuple=False).flatten().cpu()
+    n_train = round(sample_ratio * len(single_indices))
+    if n_train < 2 or len(test_indices) < 1:
+        raise ValueError("Single-to-double extrapolation requires at least two sampled training singles and one double mutant")
+    if sample_ratio == 1.0:
+        train_indices = single_indices
+        sampling_method = "all_singles"
+    else:
+        sampled = np.random.RandomState(split_seed).choice(len(single_indices), size=n_train, replace=False)
+        train_indices = single_indices[torch.as_tensor(sampled, dtype=torch.long)]
+        sampling_method = "numpy_randomstate_choice_without_replacement"
+    training = batch.select(train_indices)
+    test = batch.select(test_indices)
     output = prepare_output(output_dir, config)
-    partitions = ["train_single" if count == 1 else "test_double" if count == 2 else "excluded" for count in counts.cpu().tolist()]
+    partitions = ["unused_single" if count == 1 else "test_double" if count == 2 else "excluded" for count in counts.cpu().tolist()]
+    for index in train_indices.tolist():
+        partitions[index] = "train_single"
     _write_csv(
         output / "partition_assignments.csv",
         [{"variant_id": variant_id, "partition": partition} for variant_id, partition in zip(batch.variant_ids, partitions)],
@@ -331,18 +431,39 @@ def run_extrapolation(
         {
             "assay_id": batch.assay_id,
             "mode": "single_to_double",
+            "setting": "single_to_double",
             "n_test": test.num_variants,
-            "n_excluded": batch.num_variants - training.num_variants - test.num_variants,
+            "n_available_singles": len(single_indices),
+            "n_unused_singles": partitions.count("unused_single"),
+            "n_excluded": partitions.count("excluded"),
+            "sample_ratio": sample_ratio,
+            "training_single_fraction": sample_ratio,
+            "split_seed": split_seed,
+            "sampling_method": sampling_method,
+            "train_variant_ids": list(training.variant_ids),
+            "test_variant_ids": list(test.variant_ids),
+            "unused_single_variant_ids": [
+                variant_id for variant_id, partition in zip(batch.variant_ids, partitions)
+                if partition == "unused_single"
+            ],
+            "excluded_variant_ids": [
+                variant_id for variant_id, partition in zip(batch.variant_ids, partitions)
+                if partition == "excluded"
+            ],
         }
     )
     prediction = fitted.predict(test)
-    rows = _prediction_rows(test, prediction)
+    rows = _prediction_rows(test, prediction, fitted)
     _write_csv(output / "predictions.csv", rows)
     metrics = _evaluate(test, prediction, config)
     metrics.update(
         {
             "evaluation_protocol": "single_to_double",
+            "setting": "single_to_double",
             "aggregation": "single_fixed_split",
+            "sample_ratio": sample_ratio,
+            "training_single_fraction": sample_ratio,
+            "split_seed": split_seed,
             "variance_summary": _variance_summary(rows),
         }
     )

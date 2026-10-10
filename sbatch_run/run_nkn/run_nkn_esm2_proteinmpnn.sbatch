@@ -1,0 +1,258 @@
+#!/bin/bash
+#SBATCH --job-name=nkn_esm2_proteinmpnn
+#SBATCH --account=gts-yxie77-paid
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
+#SBATCH --time=24:00:00
+#SBATCH --qos=inferno
+#SBATCH --output=%x-%j.out
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=jlee3541@gatech.edu
+
+# Requires the nkn_protein Conda environment and completed outputs from both
+# run_prepare_rep jobs. ESM2 embeddings and ProteinMPNN distributions feed the
+# two kernel branches; their scores feed the learned GP mean. CPU only.
+#
+# From the repository root (or a subdirectory):
+#   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch [singles|all|SETTING]
+# Default: singles, the three published singles CV protocols (15 fold fits).
+# all: three singles CV runs, one shared mixed CV run, one extrapolation fit
+# (21 fits). The mixed run reports both singles and doubles evaluation settings.
+# The default ASSAY has only singles; all requires another assay with doubles.
+# Set ASSAY and optionally FEATURES, SINGLES_FOLDS_CSV, MULTIPLES_FOLDS_CSV,
+# SAMPLE_RATIO (default 0.8), or SPLIT_SEED (default 2024) before sbatch.
+# SAMPLE_RATIO=1.0 trains on all singles. Relative paths use the repository root.
+# Logs go to the submission directory. Every job creates a new results directory.
+set -eo pipefail
+
+project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
+while [[ ! -f "$project_root/src/experiments/cli.py" || ! -f "$project_root/src/configs/esm2_proteinmpnn_nkn.json" ]]; do
+  if [[ "$project_root" == "/" ]]; then
+    echo "error: Submit this job from the nkn_protein repository or a subdirectory." >&2
+    exit 1
+  fi
+  project_root="$(dirname -- "$project_root")"
+done
+cd -- "$project_root"
+
+selection="${1:-singles}"
+if [[ $# -gt 1 ]]; then
+  echo "error: Use singles, all, or one of the six setting names." >&2
+  exit 1
+fi
+case "$selection" in
+  singles) settings=(singles_random singles_modulo singles_contiguous) ;;
+  all) settings=(singles_random singles_modulo singles_contiguous mixed_random_singles single_to_double) ;;
+  singles_random|singles_modulo|singles_contiguous|mixed_random_singles|mixed_random_doubles|single_to_double)
+    settings=("$selection") ;;
+  *)
+    echo "error: Use singles, all, singles_random, singles_modulo, singles_contiguous, mixed_random_singles, mixed_random_doubles, or single_to_double." >&2
+    exit 1 ;;
+esac
+assay="${ASSAY:-A0A1I9GEU1_NEIME_Kennouche_2019}"
+if [[ -z "$assay" || "$assay" == *[/\\]* || "$assay" == "." || "$assay" == ".." ]]; then
+  echo "error: ASSAY must be a ProteinGym assay ID, not a path." >&2
+  exit 1
+fi
+features="${FEATURES:-data/features/pretrained/$assay}"
+singles_folds="${SINGLES_FOLDS_CSV:-data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/$assay.csv}"
+multiples_folds="${MULTIPLES_FOLDS_CSV:-data/DMS_ProteinGym_substitutions/cv_folds_multiples_substitutions/$assay.csv}"
+split_seed="${SPLIT_SEED:-2024}"
+sample_ratio="${SAMPLE_RATIO:-0.8}"
+if [[ -n "${FOLDS_CSV:-}" ]]; then
+  echo "error: Replace FOLDS_CSV with SINGLES_FOLDS_CSV or MULTIPLES_FOLDS_CSV." >&2
+  exit 1
+fi
+for setting in "${settings[@]}"; do
+  case "$setting" in
+    singles_*) fold_source="$singles_folds" ;;
+    mixed_*) fold_source="$multiples_folds" ;;
+    single_to_double) continue ;;
+  esac
+  if [[ ! -f "$fold_source" ]]; then
+    echo "error: Published ProteinGym fold CSV is required for $setting: $fold_source" >&2
+    exit 1
+  fi
+done
+
+# Match the environment setup in run_prepare_rep, without requesting a GPU.
+export PYTHONNOUSERSITE=1
+if ! command -v conda >/dev/null 2>&1; then
+  module load anaconda3
+fi
+conda_base="$(conda info --base)"
+source "$conda_base/etc/profile.d/conda.sh"
+conda activate nkn_protein
+set -u
+
+export PYTHONPATH="$project_root/src${PYTHONPATH:+:$PYTHONPATH}"
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
+export MKL_NUM_THREADS="$OMP_NUM_THREADS"
+export OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"
+export CUDA_VISIBLE_DEVICES=""
+
+assay_index="data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv"
+config_template="src/configs/esm2_proteinmpnn_nkn.json"
+run_id="${SLURM_JOB_ID:-manual_$(date -u +%Y%m%dT%H%M%SZ)}"
+run_root="src/runs/$assay/nkn_esm2_proteinmpnn_${selection}_${run_id}"
+runtime_config="$run_root/config.json"
+
+# Refuse to reuse a previous run's directory or overwrite its results.
+mkdir -p -- "$(dirname -- "$run_root")"
+mkdir -- "$run_root"
+printf 'Job: %s\nRepository: %s\nAssay: %s\nSettings: %s\nResults: %s\n' \
+  "${SLURM_JOB_ID:-manual}" "$project_root" "$assay" "$selection" "$run_root"
+
+# Record the allocated CPU count so sbatch --cpus-per-task overrides also work.
+python -u - "$config_template" "$runtime_config" "$features" "$assay" <<'PY'
+from dataclasses import replace
+import json
+import os
+from pathlib import Path
+import sys
+
+import torch
+from config import ExperimentConfig
+
+config = replace(
+    ExperimentConfig.load(sys.argv[1]),
+    device="cpu",
+    num_threads=int(os.environ["OMP_NUM_THREADS"]),
+)
+if config.evaluation.n_folds != 5:
+    raise SystemExit("error: Published ProteinGym protocols require five folds.")
+metadata = json.loads((Path(sys.argv[3]) / "assay.json").read_text(encoding="utf-8"))
+if metadata.get("assay_id") != sys.argv[4] or metadata.get("synthetic") is not False:
+    raise SystemExit("error: Expected real pretrained features for the selected assay.")
+Path(sys.argv[2]).write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
+print(f"Python: {sys.executable}")
+print(f"PyTorch: {torch.__version__}; device: cpu; threads: {config.num_threads}")
+print(f"Kernel branches: {', '.join(config.model.enabled_branches)}")
+print(f"GP mean score sources: {len(config.score_sources)}")
+print(f"Training: up to {config.training.max_steps} steps per initialization; seeds {config.training.seeds}")
+PY
+
+printf '[1/3] Validating shared features, scores, and full assay coverage\n'
+python -u -m experiments.cli validate \
+  --features "$features" \
+  --config "$runtime_config" \
+  --assay-index "$assay_index" \
+  --full-assay \
+  --device cpu \
+  --output "$run_root/validation"
+
+# Check every requested setting before the first model fit. Published assignments
+# are snapshotted unchanged; only known variants outside the setting are excluded.
+printf '[2/3] Checking settings and snapshotting published fold assignments\n'
+python -u - "$runtime_config" "$features" "$singles_folds" "$multiples_folds" "$split_seed" "$sample_ratio" "${settings[@]}" <<'PY'
+import csv
+import hashlib
+import json
+import math
+from pathlib import Path
+import sys
+
+import numpy as np
+import torch
+from config import ExperimentConfig
+from data_loading import load_feature_bundle, load_folds
+from experiments.runner import _validate_fold_assignments
+from experiments.settings import SETTING_SCHEMES, select_setting_batch
+
+config = ExperimentConfig.load(sys.argv[1])
+torch.set_num_threads(config.num_threads)
+batch = load_feature_bundle(
+    sys.argv[2], feature_selection=config.feature_selection,
+    score_sources=config.score_sources, pooling=config.pooling,
+    device=config.device, enabled_branches=config.model.enabled_branches,
+)
+output = Path(sys.argv[1]).parent
+sources = {"singles": Path(sys.argv[3]), "multiples": Path(sys.argv[4])}
+settings = sys.argv[7:]
+manifest = {"assay_id": batch.assay_id, "requested_settings": settings, "sources": {}}
+if "single_to_double" in settings:
+    seed = int(sys.argv[5])
+    np.random.RandomState(seed)  # Validate the same seed range used for extrapolation.
+    sample_ratio = float(sys.argv[6])
+    if not math.isfinite(sample_ratio) or not 0 < sample_ratio <= 1:
+        raise SystemExit("error: SAMPLE_RATIO must be finite and greater than 0 and at most 1.")
+    manifest.update(sample_ratio=sample_ratio, split_seed=seed)
+for setting in settings:
+    selected = select_setting_batch(batch, setting)
+    if setting == "single_to_double":
+        counts = torch.bincount(selected.owners, minlength=selected.num_variants)
+        n_singles = int((counts == 1).sum())
+        n_train = round(sample_ratio * n_singles)
+        if n_train < 2:
+            raise SystemExit("error: Extrapolation requires at least two training singles after sampling.")
+        print(f"{setting}: {n_train}/{n_singles} training singles; {int((counts == 2).sum())} test doubles")
+        continue
+    scheme = SETTING_SCHEMES[setting]
+    kind = "multiples" if setting.startswith("mixed_") else "singles"
+    source = sources[kind]
+    if kind not in manifest["sources"]:
+        fold_bytes = source.read_bytes()
+        snapshot = output / "folds" / f"{kind}.csv"
+        snapshot.parent.mkdir(exist_ok=True)
+        snapshot.write_bytes(fold_bytes)
+        manifest["sources"][kind] = {
+            "source_file": str(source.resolve()),
+            "sha256": hashlib.sha256(fold_bytes).hexdigest(),
+            "snapshot": str(snapshot.relative_to(output)),
+            "settings": {},
+        }
+    snapshot = output / manifest["sources"][kind]["snapshot"]
+    with snapshot.open(newline="", encoding="utf-8-sig") as handle:
+        columns = csv.DictReader(handle).fieldnames or []
+    column = "fold_rand_multiples" if kind == "multiples" else f"fold_{scheme}_5"
+    if column not in columns:
+        raise SystemExit(f"error: Published fold column is missing: {column}")
+    if scheme in columns:
+        raise SystemExit(f"error: Ambiguous fold columns: keep {column}, remove the {scheme} alias.")
+    folds = load_folds(
+        snapshot, selected.variant_ids, scheme, config.evaluation.n_folds,
+        allowed_extra_ids=set(batch.variant_ids) - set(selected.variant_ids),
+    )
+    _validate_fold_assignments(selected, folds, config, scheme)
+    counts = torch.bincount(folds, minlength=config.evaluation.n_folds).tolist()
+    manifest["sources"][kind]["settings"][setting] = {
+        "num_variants": selected.num_variants, "test_counts": counts,
+    }
+    print(f"Published {setting} folds: held-out counts {counts}")
+(output / "fold_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+PY
+
+for setting in "${settings[@]}"; do
+  if [[ "$setting" == "single_to_double" ]]; then
+    printf '[3/3] Running single-to-double extrapolation on CPU\n'
+    python -u -m experiments.cli fit \
+      --features "$features" \
+      --config "$runtime_config" \
+      --assay-index "$assay_index" \
+      --full-assay \
+      --device cpu \
+      --setting "$setting" \
+      --sample-ratio "$sample_ratio" \
+      --split-seed "$split_seed" \
+      --output "$run_root/fit/$setting"
+  else
+    case "$setting" in
+      singles_*) fold_snapshot="$run_root/folds/singles.csv" ;;
+      mixed_*) fold_snapshot="$run_root/folds/multiples.csv" ;;
+    esac
+    printf '[3/3] Running five-fold NKN/GP CV on CPU: %s\n' "$setting"
+    python -u -m experiments.cli cv \
+      --features "$features" \
+      --config "$runtime_config" \
+      --assay-index "$assay_index" \
+      --full-assay \
+      --device cpu \
+      --folds "$fold_snapshot" \
+      --setting "$setting" \
+      --output "$run_root/cv/$setting"
+  fi
+done
+
+printf 'Completed. Results: %s\n' "$run_root"

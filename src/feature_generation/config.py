@@ -29,7 +29,7 @@ class ExtractionConfig:
     cache_id: str | None = None
     model_dir: Path = Path("data/models/esm2")
     output_root: Path = Path("data/features/pretrained")
-    assay_index: Path = Path("data/DMS_ProteinGym_substitutions/DMS_substitutions.csv")
+    assay_index: Path = Path("data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv")
     layer: int | None = None
     device: str = "auto"
     max_tokens_per_batch: int = 1024

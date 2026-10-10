@@ -4,7 +4,7 @@
   "cache_id": "esm2_t6_8M_UR50D-layer6-c731040fcd8d",
   "model_dir": "data/models/esm2",
   "output_root": "data/features/pretrained",
-  "assay_index": "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv",
+  "assay_index": "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv",
   "layer": 6,
   "device": "auto",
   "max_tokens_per_batch": 512,

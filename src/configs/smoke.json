@@ -1,8 +1,8 @@
 {
   "training": {
     "max_steps": 5,
-    "seeds": [0, 1, 2],
-    "lengthscale_multipliers": [0.5, 1.0, 2.0]
+    "seeds": [0],
+    "lengthscale_multipliers": [1.0]
   },
   "device": "cpu",
   "num_threads": 1

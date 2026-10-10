@@ -14,7 +14,7 @@
 #SBATCH --mail-user=jlee3541@gatech.edu
 
 # Prerequisites: the nkn_protein Conda environment, the ProteinGym assay catalog
-# and assay CSVs in data/DMS_ProteinGym_substitutions/, and outbound HTTPS access
+# and assay CSVs in data/DMS_ProteinGym_substitutions/raw_substitutions/, and outbound HTTPS access
 # from the allocated compute node. No downloaded checkpoint or structure needed.
 # This job downloads and verifies the assets before extraction and scoring.
 # Submit: sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch

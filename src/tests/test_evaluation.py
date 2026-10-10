@@ -97,6 +97,41 @@ class EvaluationTests(unittest.TestCase):
         self.assertIsNone(empty_pairs["pair_ece"])
         self.assertEqual(empty_pairs["n_valid_pair_folds"], 0)
 
+    def test_fold_spearman_summary_weights_folds_equally(self):
+        folds = [
+            {"spearman": value, "interval_ece": 0.1, "pair_ece": None,
+             "n_variants": size, "n_pairs": 0}
+            for value, size in [(-1.0, 2), (0.0, 10), (1.0, 100)]
+        ]
+        result = aggregate_folds(folds)
+        self.assertEqual(result["avg_spearman"], 0.0)
+        self.assertAlmostEqual(result["std_spearman"], math.sqrt(2 / 3))
+        self.assertEqual(result["n_valid_spearman_folds"], 3)
+
+    def test_fold_spearman_summary_handles_undefined_and_nonfinite_values(self):
+        base = {"interval_ece": 0.1, "pair_ece": None, "n_variants": 2, "n_pairs": 0}
+        missing = dict(base)
+        undefined = {**base, "spearman": None}
+        valid = {**base, "spearman": 0.5}
+        mixed = aggregate_folds([missing, undefined, valid, {**base, "spearman": -0.5}])
+        self.assertEqual(mixed["avg_spearman"], 0.0)
+        self.assertEqual(mixed["std_spearman"], 0.5)
+        self.assertEqual(mixed["n_valid_spearman_folds"], 2)
+
+        single = aggregate_folds([undefined, valid])
+        self.assertEqual(single["avg_spearman"], 0.5)
+        self.assertEqual(single["std_spearman"], 0.0)
+        self.assertEqual(single["n_valid_spearman_folds"], 1)
+
+        empty = aggregate_folds([missing, undefined])
+        self.assertIsNone(empty["avg_spearman"])
+        self.assertIsNone(empty["std_spearman"])
+        self.assertEqual(empty["n_valid_spearman_folds"], 0)
+        json.dumps(empty, allow_nan=False)
+        for value in (math.nan, math.inf, -math.inf):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "finite"):
+                aggregate_folds([{**base, "spearman": value}])
+
     def test_blocking_and_permutation_preserve_metrics(self):
         generator = torch.Generator().manual_seed(15)
         factor = torch.randn(7, 4, generator=generator, dtype=torch.float64)

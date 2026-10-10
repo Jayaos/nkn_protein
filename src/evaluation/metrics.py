@@ -176,16 +176,29 @@ def evaluate_fold(
 
 
 def aggregate_folds(folds: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    """Equally average fold metrics; omit undefined PairECE folds only."""
+    """Equally average folds; Spearman SD uses ddof=0 over defined values.
+
+    Missing/undefined Spearman and undefined PairECE values are omitted from
+    their respective summaries, with contributing-fold counts reported.
+    """
     if not folds:
         raise ValueError("at least one evaluated fold is required")
     interval_values = [float(fold["interval_ece"]) for fold in folds]
     pair_values = [float(fold["pair_ece"]) for fold in folds if fold["pair_ece"] is not None]
-    if any(not math.isfinite(value) for value in interval_values + pair_values):
-        raise ValueError("fold metric values must be finite or, for PairECE, None")
+    spearman_values = [float(fold["spearman"]) for fold in folds if fold.get("spearman") is not None]
+    if any(not math.isfinite(value) for value in interval_values + pair_values + spearman_values):
+        raise ValueError("fold metric values must be finite or, for PairECE/Spearman, None")
+    avg_spearman = sum(spearman_values) / len(spearman_values) if spearman_values else None
+    std_spearman = (
+        math.sqrt(sum((value - avg_spearman) ** 2 for value in spearman_values) / len(spearman_values))
+        if spearman_values else None
+    )
     fold_n_variants = [int(fold["n_variants"]) for fold in folds]
     fold_n_pairs = [int(fold["n_pairs"]) for fold in folds]
     return {
+        "avg_spearman": avg_spearman,
+        "std_spearman": std_spearman,
+        "n_valid_spearman_folds": len(spearman_values),
         "interval_ece": sum(interval_values) / len(interval_values),
         "pair_ece": sum(pair_values) / len(pair_values) if pair_values else None,
         "n_folds": len(folds),

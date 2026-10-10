@@ -198,7 +198,7 @@ modalities and both mean-score sources. Both configs run only five training step
 for integration testing:
 
 ```bash
-python -m experiments.cli fit --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config src/configs/esm2_mean_score_smoke.json --development-splits --scheme random --test-fold 0 --output src/runs/esm2_mean_smoke
+python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config src/configs/esm2_mean_score_smoke.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --output src/runs/esm2_mean_smoke
 ```
 
 Recipe references: [official ESM variant scoring](https://github.com/facebookresearch/esm/blob/main/examples/variant-prediction/predict.py),
@@ -280,7 +280,7 @@ and ProteinMPNN representations with these scores and five GP training steps.
 This is an integration smoke test, not a converged performance experiment:
 
 ```bash
-python -m experiments.cli fit --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config src/configs/esm2_proteinmpnn_mean_score_smoke.json --development-splits --scheme random --test-fold 0 --output src/runs/esm2_proteinmpnn_mean_smoke
+python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config src/configs/esm2_proteinmpnn_mean_score_smoke.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --output src/runs/esm2_proteinmpnn_mean_smoke
 ```
 
 The GP loader validates dedicated score caches, joins scores by variant ID and
@@ -358,15 +358,15 @@ limit. Extraction never crops structures or sequences. Increase the batching bud
 if one sequence plus its two special tokens exceeds `max_tokens_per_batch`.
 This initial ProSST recipe uses float32 inference and output only.
 
-## Notebook smoke tests
+## Notebook extraction and inspection
 
 The CLI remains the default workflow. These notebooks call the same extraction
-and validation functions for small real-model tests:
+and validation functions and share its full-assay feature caches:
 
 | Notebook | Expected pilot output | Conditioning |
 | --- | --- | --- |
-| [ESM-2](../../notebooks/esm2_smoke_test.ipynb) | `[4, 161, 320]` embeddings | Sequence |
-| [ProSST](../../notebooks/prosst_smoke_test.ipynb) | `[4, 161, 768]` embeddings | Sequence and fixed reference backbone |
+| [ESM-2](../../notebooks/esm2_smoke_test.ipynb) | `[922, 161, 320]` embeddings | Sequence |
+| [ProSST](../../notebooks/prosst_smoke_test.ipynb) | `[922, 161, 768]` embeddings | Sequence and fixed reference backbone |
 | [ProteinMPNN](../../notebooks/proteinmpnn_smoke_test.ipynb) | `[161, 20]` probabilities | Backbone only |
 | [ESM-IF1](../../notebooks/esm_if1_smoke_test.ipynb) | `[161, 20]` probabilities | Backbone and WT prefix |
 
@@ -374,11 +374,28 @@ Select a kernel with the current `env.yaml` or `requirements.txt` dependencies
 and run the cells in order. `ipykernel` is included; each notebook has setup
 instructions and configures imports from the project location automatically.
 
-Each configuration-cell run creates a new model-specific smoke output directory
-under `data/features/<model>_notebook_<timestamp>/`. The inverse-folding notebooks
-reuse verified local structures/checkpoints, inspect per-position candidates,
-validate distributions, and test cache reuse. Their four-variant limit applies to
-the assay table; each model still computes one full-reference `[L, 20]` array.
+All notebooks save under `data/features/pretrained/<ASSAY_ID>/`, using the same
+protein-assay directory as the CLI. The assay ID includes the protein identifier
+and experiment so distinct variant tables remain separate. Model outputs coexist
+inside that directory:
+
+```text
+data/features/pretrained/<ASSAY_ID>/
+  assay.json
+  variants.csv
+  sequence/esm2/<recipe>/
+  sequence/prosst/<recipe>/
+  inverse_folding/proteinmpnn/<recipe>/
+  inverse_folding/esm_if1/<recipe>/
+```
+
+The notebooks use `LIMIT = None` for the complete assay (922 variants in the
+default pilot). Rerunning configuration or extraction keeps the same destination;
+`resume=True` verifies and reuses matching results. Keep full variant coverage
+when using this shared location: an initialized assay's coverage is immutable.
+The inverse-folding notebooks reuse verified local structures/checkpoints,
+inspect per-position candidates, validate distributions, and test cache reuse.
+Each inverse-folding model computes one full-reference `[L, 20]` array.
 Restart the kernel before ESM-IF1 if it has already imported a different `esm`
 package. Notebooks contain no separate model implementation.
 
