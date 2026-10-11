@@ -13,8 +13,8 @@
 
 # NKN on A0A1I9GEU1_NEIME_Kennouche_2019 using the shared NKN runner.
 # Defaults: ESM2 650M and sequence-conditioned ProteinMPNN caches under
-# data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019, with both scores
-# feeding the GP mean via configs/esm2_proteinmpnn_nkn.json.
+# data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019, with only ESM2 650M
+# scores feeding the GP mean via configs/esm2_proteinmpnn_nkn.json.
 # Submit from the repository root or a subdirectory. Arguments and optional
 # cache/config overrides are handled by the shared launcher; ASSAY is fixed here.
 # Usage: sbatch sbatch_run/run_nkn/run_nkn_A0A1I9GEU1_NEIME_Kennouche_2019.sbatch [singles|SETTING] [--config PATH] [--parallel]

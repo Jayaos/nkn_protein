@@ -16,7 +16,7 @@ the ProteinMPNN Kermut recipe (`configs/extraction/proteinmpnn_v48_020_kermut.js
 sequence-conditioned runs with seed 37, averaging log probabilities and
 removing `X` without renormalization. The ProteinMPNN preparation job generates
 this sequence-conditioned cache and the separate variant likelihood scores.
-NKN uses both ESM2 and ProteinMPNN score tables in its GP mean.
+The NKN batch preset uses only ESM2 650M scores in its GP mean.
 
 ## Installation and first run
 
@@ -239,9 +239,8 @@ The [ESM2 + ProteinMPNN job](../sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbat
 defaults to the real shared cache for `A0A1I9GEU1_NEIME_Kennouche_2019` and
 [`configs/esm2_proteinmpnn_nkn.json`](../configs/esm2_proteinmpnn_nkn.json).
 It requests 15 CPUs and no GPU. ESM2 650M layer-33 embeddings and ProteinMPNN
-sequence-conditioned distributions provide two kernel branches. Their GP mean
-inputs are the ESM2 650M masked-marginal scores and the existing ProteinMPNN
-sequence likelihoods (one order, seed 0). The inverse-folding cache uses ten
+sequence-conditioned distributions provide two kernel branches. The GP mean
+uses only ESM2 650M masked-marginal scores. The inverse-folding cache uses ten
 orders with seed 37 and retains the stored 20 amino-acid values without
 renormalization through `inverse_folding_policy: "sequence_conditional"`.
 
@@ -278,7 +277,7 @@ sbatch sbatch_run/run_nkn/run_nkn_FKBP3_HUMAN_Tsuboyama_2023_2KFV.sbatch singles
 
 Each fixes its named assay and defaults to `data/features/pretrained/<assay>`.
 Both use the shared NKN preset's ESM2 650M and sequence-conditioned ProteinMPNN
-features, with both score sources in the GP mean. They forward settings,
+features, with only ESM2 650M scores in the GP mean. They forward settings,
 `--parallel`, and `--config PATH` to the shared launcher; `FEATURES` and
 `NKN_CONFIG` overrides remain available. Outputs use the assay-specific
 `results/<assay>/` directory described below.
@@ -383,7 +382,7 @@ supported only in serial execution.
 JSON configurations define `ExperimentConfig` fields. Unspecified fields use the
 validated defaults in `config.py`; a custom JSON is not merged with the ESM2 +
 ProteinMPNN preset. Copy that preset before editing to retain its two selected
-branches, feature caches, and score sources.
+branches, feature caches, and ESM2 score source.
 
 The [batch preset](../configs/esm2_proteinmpnn_nkn.json) explicitly lists the current
 training, enabled-kernel, and evaluation hyperparameters:

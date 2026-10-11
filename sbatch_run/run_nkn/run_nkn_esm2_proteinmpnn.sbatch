@@ -14,8 +14,8 @@
 # Requires the nkn_protein Conda environment and completed outputs from both
 # run_prepare_rep jobs. Defaults select ESM2 650M layer-33 embeddings and
 # sequence-conditioned ProteinMPNN features (10 orders, seed 37), preserved
-# without renormalization. ESM2 650M masked-marginal and ProteinMPNN sequence-
-# likelihood scores feed the learned GP mean. CPU only.
+# without renormalization. Only ESM2 650M masked-marginal scores feed the
+# learned GP mean in the default preset. CPU only.
 #
 # From the repository root (or a subdirectory):
 #   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch [singles|all|SETTING] [--config PATH] [--parallel]
