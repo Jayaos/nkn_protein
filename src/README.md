@@ -522,6 +522,13 @@ learning rate `1e-3`, betas `(0.9,0.999)`, epsilon `1e-8`, and no weight decay.
 Target and score scales use population standard deviations (`ddof=0`). Constant
 score columns become zero after centering with scale one; constant training
 targets are rejected. Training inputs are detached and copied before fitting.
+Each fit caches their fixed pairwise distances, cosine similarities, and
+Bhattacharyya products in float64, sharing distances between primitive kernels.
+Lengthscales, NKN parameters, learned covariances, and Cholesky factors still
+update at every training step. The cache uses additional quadratic memory,
+is excluded from checkpoints, and is bypassed for different or modified inputs
+and for features requiring gradients. Direct kernel calls remain uncached unless
+`prepare_training_geometry(train)` is called explicitly.
 Lengthscale medians exclude zero distances but retain repeated occurrences;
 even-sized medians average the middle two values. Training defaults to one
 initialization with seed `0` and lengthscale multiplier `1.0`. Multiple starts

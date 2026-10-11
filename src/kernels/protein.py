@@ -129,6 +129,24 @@ class ProteinKernel(nn.Module):
                     "variants" if name == "sequence_global" else "mutation occurrences"
                 ))
 
+    def prepare_training_geometry(self, train) -> None:
+        """Prepare each branch's geometry for an immutable training batch."""
+        self.clear_geometry_cache()
+        self._validate_batch(train)
+        try:
+            for name in self.enabled_branches:
+                features = self._features(train, name)
+                if features.shape[1] != self.feature_dimensions[name]:
+                    raise ValueError(f"Feature dimension for {name} differs from its training dimension")
+                self.branches[name].prepare_geometry(features)
+        except Exception:
+            self.clear_geometry_cache()
+            raise
+
+    def clear_geometry_cache(self) -> None:
+        for branch in self.branches.values():
+            branch.clear_geometry_cache()
+
     def forward(self, left, right=None) -> Tensor:
         right = left if right is None else right
         self._validate_batch(left)

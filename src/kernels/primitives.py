@@ -7,6 +7,8 @@ weights, the Bhattacharyya diagonal retains each row's probability mass.
 from __future__ import annotations
 
 import math
+import weakref
+from dataclasses import dataclass
 
 import torch
 from torch import Tensor, nn
@@ -78,6 +80,89 @@ def initial_lengthscale(
         return (ordered[middle - 1] + ordered[middle]) / 2
 
 
+@dataclass(frozen=True)
+class _TensorSnapshot:
+    source: weakref.ReferenceType[Tensor]
+    version: int
+    metadata: tuple
+
+    @staticmethod
+    def _metadata(values: Tensor) -> tuple:
+        return values.device, values.dtype, values.shape, values.stride(), values.data_ptr()
+
+    @classmethod
+    def capture(cls, values: Tensor) -> _TensorSnapshot | None:
+        if values.requires_grad:
+            return None
+        try:
+            version = values._version
+        except RuntimeError:
+            # Inference tensors have no mutation counter, so reuse is unsafe.
+            return None
+        return cls(weakref.ref(values), version, cls._metadata(values))
+
+    def matches(self, values: Tensor) -> bool:
+        if self.source() is not values or values.requires_grad:
+            return False
+        try:
+            return values._version == self.version and self._metadata(values) == self.metadata
+        except RuntimeError:
+            return False
+
+
+@dataclass
+class FixedPairwiseGeometry:
+    """Parameter-free quantities for one explicitly prepared, frozen input pair.
+
+    Source tensors must remain immutable. Normal PyTorch in-place updates are
+    detected by their version counters; writes through ``.data`` or external
+    shared storage are unsupported. No feature-gradient graph is retained.
+    """
+
+    left: _TensorSnapshot
+    right: _TensorSnapshot
+    values: dict[str, Tensor]
+
+    @classmethod
+    def prepare(
+        cls, left: Tensor, right: Tensor, names: set[str], probability_policy: str,
+    ) -> FixedPairwiseGeometry | None:
+        # Constants created in inference mode cannot later be saved for the
+        # learned lengthscales' backward pass, even with ordinary source inputs.
+        if torch.is_inference_mode_enabled():
+            return None
+        left_snapshot = _TensorSnapshot.capture(left)
+        right_snapshot = _TensorSnapshot.capture(right)
+        if left_snapshot is None or right_snapshot is None:
+            return None
+        values = {}
+        with torch.no_grad():
+            left, right = _validate_pair(left, right)
+            if names & IF_KERNELS:
+                _validate_probabilities(left, probability_policy)
+                _validate_probabilities(right, probability_policy)
+                left_root, right_root = left.sqrt(), right.sqrt()
+                if "bhattacharyya" in names:
+                    values["bhattacharyya"] = left_root @ right_root.T
+                if names & {"hellinger_exp", "hellinger_rbf"}:
+                    distance = torch.cdist(left_root, right_root, compute_mode="donot_use_mm_for_euclid_dist")
+                    values["hellinger_distance"] = distance / math.sqrt(2.0)
+            if names & {"rbf", "matern32"}:
+                values["euclidean_distance"] = torch.cdist(
+                    left, right, compute_mode="donot_use_mm_for_euclid_dist",
+                )
+            if "cosine" in names:
+                left_norm = torch.linalg.vector_norm(left, dim=1, keepdim=True)
+                right_norm = torch.linalg.vector_norm(right, dim=1, keepdim=True)
+                if (left_norm == 0).any() or (right_norm == 0).any():
+                    raise ValueError("Cosine kernel inputs must have nonzero norm")
+                values["cosine"] = (left / left_norm) @ (right / right_norm).T
+        return cls(left_snapshot, right_snapshot, values)
+
+    def matches(self, left: Tensor, right: Tensor) -> bool:
+        return self.left.matches(left) and self.right.matches(right)
+
+
 class PrimitiveKernel(nn.Module):
     """A primitive with an independent scalar lengthscale, if needed.
 
@@ -108,6 +193,23 @@ class PrimitiveKernel(nn.Module):
     @property
     def lengthscale(self) -> Tensor | None:
         return None if self.raw_lengthscale is None else F.softplus(self.raw_lengthscale)
+
+    def forward_from_geometry(self, geometry: FixedPairwiseGeometry) -> Tensor:
+        """Apply learned parameters to already validated fixed geometry."""
+        if self.name in {"cosine", "bhattacharyya"}:
+            return geometry.values[self.name]
+        distance = geometry.values[
+            "hellinger_distance" if self.name in IF_KERNELS else "euclidean_distance"
+        ]
+        if self.raw_lengthscale.device != distance.device:
+            raise ValueError("Move the kernel and its features to the same device")
+        scaled = distance / self.lengthscale
+        if self.name == "hellinger_exp":
+            return torch.exp(-scaled)
+        if self.name in {"hellinger_rbf", "rbf"}:
+            return torch.exp(-0.5 * scaled.square())
+        scaled = math.sqrt(3.0) * scaled
+        return (1 + scaled) * torch.exp(-scaled)
 
     def forward(self, left: Tensor, right: Tensor | None = None) -> Tensor:
         right = left if right is None else right

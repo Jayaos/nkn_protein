@@ -132,6 +132,9 @@ def fit_gp(batch, model_config=None, training_config=None, progress=None):
                 if device.type == "cuda":
                     torch.cuda.manual_seed_all(seed)
                 model = ExactProteinGP(train, model_config, cfg, multiplier)
+            # Features are detached, owned copies: only their pairwise geometry
+            # is fixed. Learned covariances and their factors still update.
+            model.kernel.prepare_training_geometry(train)
             optimizer = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate, betas=cfg.betas, eps=cfg.epsilon, weight_decay=0)
             model.train()
             # Evaluate the initial state and every state after an optimizer update.

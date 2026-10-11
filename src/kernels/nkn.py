@@ -8,7 +8,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from .primitives import PrimitiveKernel, inverse_softplus
+from .primitives import FixedPairwiseGeometry, PrimitiveKernel, inverse_softplus
 
 
 class NonnegativeLinear(nn.Module):
@@ -103,7 +103,33 @@ class PrimitiveNKN(nn.Module):
             for _ in range(count)
         )
         self.nkn = NeuralKernelNetwork(len(self.primitives), widths)
+        # This is deliberately neither a parameter nor a buffer: geometry is
+        # local to a prepared feature pair, not part of a saved model.
+        self._geometry_cache: FixedPairwiseGeometry | None = None
+
+    def prepare_geometry(self, left: Tensor, right: Tensor | None = None) -> None:
+        """Cache fixed geometry for one immutable pair; gradient inputs skip it."""
+        self.clear_geometry_cache()
+        right = left if right is None else right
+        self._geometry_cache = FixedPairwiseGeometry.prepare(
+            left, right, {kernel.name for kernel in self.primitives},
+            self.primitives[0].probability_policy,
+        )
+
+    def clear_geometry_cache(self) -> None:
+        self._geometry_cache = None
+
+    def _apply(self, fn, recurse=True):
+        self.clear_geometry_cache()
+        return super()._apply(fn, recurse=recurse)
 
     def forward(self, left: Tensor, right: Tensor | None = None) -> Tensor:
-        primitive_values = torch.stack([kernel(left, right) for kernel in self.primitives], dim=-1)
+        right = left if right is None else right
+        geometry = self._geometry_cache
+        if geometry is not None and geometry.matches(left, right):
+            primitive_values = torch.stack(
+                [kernel.forward_from_geometry(geometry) for kernel in self.primitives], dim=-1,
+            )
+        else:
+            primitive_values = torch.stack([kernel(left, right) for kernel in self.primitives], dim=-1)
         return self.nkn(primitive_values)
