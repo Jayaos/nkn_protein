@@ -122,7 +122,7 @@ sbatch sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch singles --parall
 sbatch sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch singles_random --config configs/kermut_esm2_proteinmpnn.json
 ```
 
-Default assay: `A0A1I9GEU1_NEIME_Kennouche_2019`. Default selection: all three
+Default assay: `FKBP3_HUMAN_Tsuboyama_2023_2KFV`. Default selection: all three
 singles protocols, for 15 fits. The launcher accepts `ASSAY`, `FEATURES`,
 `KERMUT_CONFIG` (overridden by `--config`), `SINGLES_FOLDS_CSV`, and
 `MULTIPLES_FOLDS_CSV`. It snapshots published fold files and the resolved JSON.

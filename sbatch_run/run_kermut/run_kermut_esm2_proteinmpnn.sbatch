@@ -30,6 +30,8 @@
 # Copy/edit that JSON and select it with --config PATH or KERMUT_CONFIG=PATH.
 # --config takes precedence over KERMUT_CONFIG; paths use the repository root.
 # Default: singles, the three published singles CV protocols (15 fold fits).
+# Default assay: FKBP3_HUMAN_Tsuboyama_2023_2KFV, loaded from
+# data/features/pretrained/FKBP3_HUMAN_Tsuboyama_2023_2KFV.
 # all: three singles CV runs, one shared mixed CV run, one extrapolation fit
 # (21 fits). The mixed run reports both singles and doubles evaluation settings.
 # The default ASSAY has only singles; all requires another assay with doubles.
@@ -124,7 +126,7 @@ if [[ ! -f "$config_template" ]]; then
   echo "error: Kermut JSON configuration file does not exist: $config_template" >&2
   exit 1
 fi
-assay="${ASSAY:-A0A1I9GEU1_NEIME_Kennouche_2019}"
+assay="${ASSAY:-FKBP3_HUMAN_Tsuboyama_2023_2KFV}"
 if [[ -z "$assay" || "$assay" == *[/\\]* || "$assay" == "." || "$assay" == ".." ]]; then
   echo "error: ASSAY must be a ProteinGym assay ID, not a path." >&2
   exit 1
