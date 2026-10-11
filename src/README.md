@@ -7,6 +7,11 @@ on `PYTHONPATH`. Implementation and tests are in this `src/` directory;
 JSON configuration presets are in the repository-root `configs/` directory.
 Data loading is consolidated in `data_loading/`.
 
+The independent [Kermut baseline](../baselines/kermut/README.md) shares these
+cached inputs, ProteinGym splits and metrics. Its configuration is
+`configs/kermut_esm2_proteinmpnn.json`; run it with
+`python -m baselines.kermut.cli` from the repository root.
+
 ## Installation and first run
 
 To create the Conda environment, run these commands from the repository root:
@@ -246,6 +251,12 @@ Submit from the repository root on the cluster:
 # Default assay, all three singles settings: 15 fold fits
 sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch
 
+# All 15 singles fits concurrently: 3 settings x 5 folds x 1 CPU thread
+sbatch --cpus-per-task=15 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles --parallel
+
+# One setting: 5 folds concurrently with 1 CPU thread each
+sbatch --cpus-per-task=5 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles_random --parallel
+
 # One setting
 sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles_modulo
 
@@ -293,6 +304,40 @@ recorded in the batch manifest; neither changes published CV folds. Relative pat
 root. The former positional `cv`/`fit` modes and `FOLDS_CSV` variable are rejected.
 Existing pretrained features and scores are reused without extraction.
 
+### Parallel CPU folds
+
+The optional `--parallel` batch flag runs settings concurrently and uses separate
+CPU processes for their folds. With `singles` and `--cpus-per-task=15`, one Slurm
+job runs three setting processes, each with five fold workers using one PyTorch
+and BLAS thread per worker. Omitting `--parallel` preserves serial settings and
+folds, with each fit using the full CPU allocation. Requesting more CPUs alone
+does not enable concurrent folds.
+
+Parallel worker counts and threads are derived from the allocation, with the
+total number of fitting threads kept within `SLURM_CPUS_PER_TASK`. The batch job
+prints and saves its execution plan. Each setting has its own log under
+`logs/<setting>.log`; per-fold checkpoints, histories, predictions and metrics
+keep their existing `cv/<setting>/fold_<n>/` paths. The parent process combines
+results in fold and variant order after every fold succeeds. Worker failures
+make the job fail rather than reporting an incomplete run as completed.
+
+Every fold still fits its transformations and model using only that fold's
+training variants. Fold assignments, seeds, hyperparameters and evaluation
+protocols are unchanged. `all --parallel` retains the shared mixed CV models and
+the single extrapolation fit; extrapolation is not split into folds.
+
+Memory requested with `--mem` is shared by the entire job. Concurrent folds hold
+separate models and dense covariance tensors, so memory needs increase with
+concurrency; choose a larger allocation when needed for the assay. There is no
+automatic resume of interrupted fits. Submit a new job to use parallel mode;
+an already running job continues with its original execution mode.
+
+For direct NKN CLI use, `cv --fold-workers N` enables up to `N` concurrent folds
+(at most `evaluation.n_folds`). `num_threads` in the JSON is the thread count
+**per worker**, so set it to `1` for five workers on five CPUs. Parallel folds
+require `device: "cpu"`. The default is one worker; custom baseline fit adapters
+retain serial execution.
+
 ## Configuration and numerical behavior
 
 JSON configurations define `ExperimentConfig` fields. Unspecified fields use the
@@ -326,7 +371,8 @@ linear and product layers, ending with linear width `1`; each product width must
 be half the preceding even linear width, as in `[8, 4, 4, 2, 1]`.
 
 The CPU batch job sets `device` to `"cpu"` and `num_threads` to the Slurm CPU
-allocation regardless of their JSON values. Extrapolation sampling remains
+allocation in serial mode, or the computed per-worker thread count with
+`--parallel`, regardless of their JSON values. Extrapolation sampling remains
 controlled by the `SAMPLE_RATIO` and `SPLIT_SEED` environment variables described
 above; those are separate from model initialization seeds.
 

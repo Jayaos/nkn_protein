@@ -6,6 +6,7 @@ import argparse
 from dataclasses import replace
 import json
 import math
+import os
 from pathlib import Path
 import sys
 
@@ -17,8 +18,8 @@ from .runner import prepare_output, run_cv, run_extrapolation, run_predict
 from .settings import CV_SETTINGS, SETTING_SCHEMES, select_setting_batch
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m experiments.cli", description="Exact protein GP experiments from cached representations")
+def _parser(prog="python -m experiments.cli") -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=prog, description="Exact protein GP experiments from cached representations")
     commands = parser.add_subparsers(dest="command", required=True)
     for command in ("validate", "fit", "cv", "predict"):
         sub = commands.add_parser(command)
@@ -42,6 +43,10 @@ def _parser() -> argparse.ArgumentParser:
             )
             if command == "cv":
                 sub.add_argument("--folds", required=True, type=Path, help="ID-aligned CSV containing supplied fold assignments")
+                sub.add_argument(
+                    "--fold-workers", type=int, default=1,
+                    help="Concurrent CPU fold processes (default: 1); each uses config.num_threads threads",
+                )
             else:
                 sub.add_argument(
                     "--sample-ratio", type=float, default=0.8,
@@ -56,20 +61,20 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_config(args) -> ExperimentConfig:
+def _load_config(args, config_type=ExperimentConfig):
     path = args.config
     if path is None and args.command == "predict":
         adjacent = args.checkpoint.parent / "resolved_config.json"
         if adjacent.is_file():
             path = adjacent
-    config = ExperimentConfig.load(path) if path is not None else ExperimentConfig()
+    config = config_type.load(path) if path is not None else config_type()
     return replace(config, device=args.device) if args.device is not None else config
 
 
-def _load_batch(args, config):
+def _load_batch(args, config, feature_loader=None):
     if (args.full_assay or args.allow_subset) and args.assay_index is None:
         raise ValueError("--full-assay and --allow-subset require --assay-index")
-    batch = load_feature_bundle(
+    batch = feature_loader(args.features, config) if feature_loader is not None else load_feature_bundle(
         args.features,
         feature_selection=config.feature_selection,
         score_sources=config.score_sources,
@@ -90,6 +95,8 @@ def _load_batch(args, config):
 def _progress(event):
     if event.get("event") == "fold_start":
         print(f"Fold {event['fold']}: {event['n_train']} training, {event['n_test']} held-out variants", file=sys.stderr)
+    elif event.get("event") == "fold_complete":
+        print(f"Fold {event['fold']}: completed", file=sys.stderr)
     elif "step" in event and (event["step"] == 0 or event["step"] % 100 == 0):
         fold = f"fold {event['fold']} " if "fold" in event else ""
         print(f"{fold}seed {event['seed']} step {event['step']}: NLL/variant={event['nll_per_variant']:.6g}", file=sys.stderr)
@@ -109,6 +116,7 @@ def _input_manifest(args, batch, excluded_variant_ids=()):
         "setting": getattr(args, "setting", None),
         "excluded_variant_ids": list(excluded_variant_ids),
         "fold_source": str(args.folds.resolve()) if getattr(args, "folds", None) else None,
+        "fold_workers": getattr(args, "fold_workers", None),
         "extrapolation_sample_ratio": args.sample_ratio if getattr(args, "setting", None) == "single_to_double" else None,
         "extrapolation_split_seed": args.split_seed if getattr(args, "setting", None) == "single_to_double" else None,
     }
@@ -118,6 +126,8 @@ def _validate_setting_arguments(args):
     if args.command not in ("fit", "cv"):
         return
     args.scheme = SETTING_SCHEMES[args.setting]
+    if args.command == "cv" and args.fold_workers < 1:
+        raise ValueError("--fold-workers must be a positive integer")
     if args.command == "fit":
         if not math.isfinite(args.sample_ratio) or not 0 < args.sample_ratio <= 1:
             raise ValueError("--sample-ratio must be finite and greater than 0 and at most 1")
@@ -125,14 +135,28 @@ def _validate_setting_arguments(args):
             raise ValueError("--split-seed must be between 0 and 2**32 - 1")
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = _parser()
+def main(
+    argv: list[str] | None = None, *, config_type=ExperimentConfig,
+    feature_loader=None, cv_runner=None, extrapolation_runner=None,
+    prediction_runner=None, prog="python -m experiments.cli",
+) -> int:
+    """Run shared protocols with optional baseline model and feature adapters."""
+    parser = _parser(prog)
     args = parser.parse_args(argv)
     try:
         _validate_setting_arguments(args)
-        config = _load_config(args)
+        config = _load_config(args, config_type)
+        if args.command == "cv":
+            if args.fold_workers > config.evaluation.n_folds:
+                raise ValueError("--fold-workers cannot exceed the number of folds")
+            if args.fold_workers > 1:
+                if torch.device(config.device).type != "cpu":
+                    raise ValueError("Parallel folds require device cpu")
+                allocation = os.environ.get("SLURM_CPUS_PER_TASK")
+                if allocation is not None and args.fold_workers * config.num_threads > int(allocation):
+                    raise ValueError("Fold workers times num_threads exceeds SLURM_CPUS_PER_TASK")
         torch.set_num_threads(config.num_threads)
-        batch = _load_batch(args, config)
+        batch = _load_batch(args, config, feature_loader)
         excluded_variant_ids = ()
         if args.command in ("fit", "cv"):
             selected = select_setting_batch(batch, args.setting)
@@ -158,9 +182,9 @@ def main(argv: list[str] | None = None) -> int:
             }
             (output / "validation.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         elif args.command == "predict":
-            result = run_predict(batch, args.checkpoint, config, args.output)
+            result = (prediction_runner or run_predict)(batch, args.checkpoint, config, args.output)
         elif args.command == "fit":
-            result = run_extrapolation(
+            result = (extrapolation_runner or run_extrapolation)(
                 batch, config, args.output, sample_ratio=args.sample_ratio,
                 split_seed=args.split_seed, progress=progress,
             )
@@ -169,9 +193,10 @@ def main(argv: list[str] | None = None) -> int:
                 args.folds, batch.variant_ids, args.scheme, config.evaluation.n_folds,
                 allowed_extra_ids=excluded_variant_ids,
             )
-            result = run_cv(
+            result = (cv_runner or run_cv)(
                 batch, folds, config, args.output, scheme=args.scheme, setting=args.setting,
                 split_source="provided", progress=progress,
+                **({"fold_workers": args.fold_workers} if args.fold_workers > 1 else {}),
             )
         (args.output / "input_manifest.json").write_text(
             json.dumps(_input_manifest(args, batch, excluded_variant_ids), indent=2, allow_nan=False) + "\n", encoding="utf-8"

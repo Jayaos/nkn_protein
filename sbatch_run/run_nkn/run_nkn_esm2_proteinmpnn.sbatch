@@ -3,7 +3,7 @@
 #SBATCH --account=gts-yxie77-paid
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=15
 #SBATCH --mem=16G
 #SBATCH --time=24:00:00
 #SBATCH --qos=inferno
@@ -16,7 +16,12 @@
 # two kernel branches; their scores feed the learned GP mean. CPU only.
 #
 # From the repository root (or a subdirectory):
-#   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch [singles|all|SETTING] [--config PATH]
+#   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch [singles|all|SETTING] [--config PATH] [--parallel]
+# To run all 15 singles folds concurrently, with one CPU thread per fold:
+#   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles --parallel
+# Without --parallel, settings and folds run sequentially using all allocated CPUs.
+# --parallel divides CPUs between settings, folds, and threads per fold. Memory
+# is shared by all workers: size --mem for concurrent fits, not for one fit.
 # Hyperparameters come from configs/esm2_proteinmpnn_nkn.json by default.
 # Copy/edit that JSON and select it with --config PATH or NKN_CONFIG=PATH.
 # --config takes precedence over NKN_CONFIG; paths use the repository root.
@@ -42,9 +47,13 @@ cd -- "$project_root"
 
 selection="singles"
 selection_given=false
+parallel=false
 config_template="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn.json}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --parallel)
+      parallel=true
+      shift ;;
     --config)
       if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
         echo "error: --config requires a JSON file path." >&2
@@ -60,8 +69,9 @@ while [[ $# -gt 0 ]]; do
       fi
       shift ;;
     -h|--help)
-      printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH]\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
+      printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH] [--parallel]\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
       printf 'Config precedence: --config, NKN_CONFIG, configs/esm2_proteinmpnn_nkn.json\n'
+      printf 'Parallel example: sbatch %s singles --parallel\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
       exit 0 ;;
     -*)
       echo "error: Unknown option: $1" >&2
@@ -85,6 +95,27 @@ case "$selection" in
     echo "error: Use singles, all, singles_random, singles_modulo, singles_contiguous, mixed_random_singles, mixed_random_doubles, or single_to_double." >&2
     exit 1 ;;
 esac
+cpu_count="${SLURM_CPUS_PER_TASK:-15}"
+if [[ ! "$cpu_count" =~ ^[1-9][0-9]*$ ]]; then
+  echo "error: SLURM_CPUS_PER_TASK must be a positive integer." >&2
+  exit 1
+fi
+setting_workers=1
+fold_workers=1
+if [[ "$parallel" == true ]]; then
+  setting_workers="${#settings[@]}"
+  if (( setting_workers > cpu_count )); then
+    setting_workers="$cpu_count"
+  fi
+  fold_workers=$((cpu_count / setting_workers))
+  if (( fold_workers > 5 )); then
+    fold_workers=5
+  fi
+  if [[ "$selection" == single_to_double ]]; then
+    fold_workers=1
+  fi
+fi
+threads_per_worker=$((cpu_count / (setting_workers * fold_workers)))
 if [[ ! -f "$config_template" ]]; then
   echo "error: NKN JSON configuration file does not exist: $config_template" >&2
   exit 1
@@ -126,7 +157,7 @@ conda activate nkn_protein
 set -u
 
 export PYTHONPATH="$project_root/src${PYTHONPATH:+:$PYTHONPATH}"
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
+export OMP_NUM_THREADS="$threads_per_worker"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 export OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"
 export CUDA_VISIBLE_DEVICES=""
@@ -142,8 +173,9 @@ mkdir -- "$run_root"
 printf 'Job: %s\nRepository: %s\nAssay: %s\nSettings: %s\nConfig: %s\nResults: %s\n' \
   "${SLURM_JOB_ID:-manual}" "$project_root" "$assay" "$selection" "$config_template" "$run_root"
 
-# Record the allocated CPU count so sbatch --cpus-per-task overrides also work.
-python -u - "$config_template" "$runtime_config" "$features" "$assay" <<'PY'
+# Record the worker thread budget and execution plan for sbatch CPU overrides.
+python -u - "$config_template" "$runtime_config" "$features" "$assay" \
+  "$parallel" "$cpu_count" "$setting_workers" "$fold_workers" "${settings[@]}" <<'PY'
 from dataclasses import replace
 import json
 import os
@@ -167,6 +199,25 @@ metadata = json.loads((Path(sys.argv[3]) / "assay.json").read_text(encoding="utf
 if metadata.get("assay_id") != sys.argv[4] or metadata.get("synthetic") is not False:
     raise SystemExit("error: Expected real pretrained features for the selected assay.")
 Path(sys.argv[2]).write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
+execution_plan = {
+    "parallel": sys.argv[5] == "true",
+    "allocated_cpus": int(sys.argv[6]),
+    "setting_workers": int(sys.argv[7]),
+    "fold_workers": int(sys.argv[8]),
+    "threads_per_worker": config.num_threads,
+    "settings": {
+        setting: {"fits": 1 if setting == "single_to_double" else 5,
+                  "fold_workers": 1 if setting == "single_to_double" else int(sys.argv[8])}
+        for setting in sys.argv[9:]
+    },
+}
+Path(sys.argv[2]).with_name("execution_plan.json").write_text(
+    json.dumps(execution_plan, indent=2) + "\n", encoding="utf-8",
+)
+print(f"CPU allocation: {execution_plan['allocated_cpus']}; "
+      f"concurrent settings: {execution_plan['setting_workers']}; "
+      f"fold workers per CV setting: {execution_plan['fold_workers']}; "
+      f"threads per worker: {config.num_threads}")
 print(f"Python: {sys.executable}")
 print(f"PyTorch: {torch.__version__}; device: cpu; threads: {config.num_threads}")
 print(f"Kernel branches: {', '.join(config.model.enabled_branches)}")
@@ -264,7 +315,9 @@ for setting in settings:
 (output / "fold_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 PY
 
-for setting in "${settings[@]}"; do
+run_setting() {
+  local setting="$1"
+  local fold_snapshot
   if [[ "$setting" == "single_to_double" ]]; then
     printf '[3/3] Running single-to-double extrapolation on CPU\n'
     python -u -m experiments.cli fit \
@@ -290,9 +343,66 @@ for setting in "${settings[@]}"; do
       --full-assay \
       --device cpu \
       --folds "$fold_snapshot" \
+      --fold-workers "$fold_workers" \
       --setting "$setting" \
       --output "$run_root/cv/$setting"
   fi
-done
+}
+
+if [[ "$parallel" == true ]]; then
+  mkdir -- "$run_root/logs"
+  # Separate process groups let cancellation stop each setting and its fold
+  # subprocesses together. All fit processes remain in this Slurm allocation.
+  set -m
+  active_pids=()
+  active_settings=()
+  cleanup_workers() {
+    local status=$?
+    local pid
+    trap - EXIT INT TERM
+    for pid in "${active_pids[@]}"; do
+      kill -TERM -- "-$pid" 2>/dev/null || true
+    done
+    for pid in "${active_pids[@]}"; do
+      wait "$pid" 2>/dev/null || true
+    done
+    return "$status"
+  }
+  trap cleanup_workers EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  wait_for_settings() {
+    local index status
+    local failed=0
+    for index in "${!active_pids[@]}"; do
+      if wait "${active_pids[$index]}"; then
+        printf 'Finished setting: %s\n' "${active_settings[$index]}"
+      else
+        status=$?
+        printf 'error: Setting %s failed (exit %s); see %s/logs/%s.log\n' \
+          "${active_settings[$index]}" "$status" "$run_root" "${active_settings[$index]}" >&2
+        failed=1
+      fi
+    done
+    active_pids=()
+    active_settings=()
+    return "$failed"
+  }
+  for setting in "${settings[@]}"; do
+    printf '[3/3] Launching %s; log: %s/logs/%s.log\n' "$setting" "$run_root" "$setting"
+    run_setting "$setting" >"$run_root/logs/$setting.log" 2>&1 &
+    active_pids+=("$!")
+    active_settings+=("$setting")
+    if (( ${#active_pids[@]} == setting_workers )); then
+      wait_for_settings
+    fi
+  done
+  wait_for_settings
+  trap - EXIT INT TERM
+else
+  for setting in "${settings[@]}"; do
+    run_setting "$setting"
+  done
+fi
 
 printf 'Completed. Results: %s\n' "$run_root"

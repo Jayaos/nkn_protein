@@ -5,7 +5,14 @@ from __future__ import annotations
 import csv
 import json
 import math
+import multiprocessing
+import os
+import queue
+import threading
+import traceback
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, CancelledError, ProcessPoolExecutor, wait
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +30,8 @@ from .settings import SETTING_SCHEMES
 
 
 _MIXED_DEPTHS = {"mixed_random_singles": 1, "mixed_random_doubles": 2}
+_THREAD_ENVIRONMENT = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
+_FOLD_WORKER_STATE = None
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -102,7 +111,7 @@ def _save_fit(fitted: FittedGP, output: Path, n_train: int) -> dict[str, Any]:
     fitted.save(output / "checkpoint.pt")
     _write_json(output / "history.json", fitted.history)
     _write_json(output / "restart_summaries.json", fitted.restart_summaries)
-    summary = {
+    summary = fitted.fit_summary(n_train) if hasattr(fitted, "fit_summary") else {
         "n_train": n_train,
         "selected_seed": fitted.selected_seed,
         "best_nll_per_variant": fitted.best_nll_per_variant,
@@ -111,9 +120,9 @@ def _save_fit(fitted: FittedGP, output: Path, n_train: int) -> dict[str, Any]:
     return summary
 
 
-def _fit_with_failure_artifacts(training: FeatureBatch, config: ExperimentConfig, output: Path, progress):
+def _fit_with_failure_artifacts(training: FeatureBatch, config: ExperimentConfig, output: Path, progress, fit_function=None):
     try:
-        return fit_gp(training, config.model, config.training, progress=progress)
+        return (fit_function or fit_gp)(training, config.model, config.training, progress=progress)
     except NumericalError as error:
         _write_json(output / "history.json", getattr(error, "history", []))
         _write_json(output / "restart_summaries.json", getattr(error, "restart_summaries", []))
@@ -281,6 +290,177 @@ def _write_fold_assignments(output: Path, batch: FeatureBatch, folds: Tensor) ->
     )
 
 
+def _run_fold(
+    batch, folds, config, output, setting, fold, progress=None, fit_function=None,
+    cancelled=None,
+):
+    """Fit and evaluate one fold without exporting its model or covariances."""
+    training = batch.select(torch.nonzero(folds != fold, as_tuple=False).flatten())
+    test = batch.select(torch.nonzero(folds == fold, as_tuple=False).flatten())
+    fold_output = prepare_output(output / f"fold_{fold}", config)
+    phase = "training"
+    try:
+        callback = None
+        if progress is not None:
+            callback = lambda event: progress({**event, "fold": fold})
+            callback({"event": "fold_start", "n_train": training.num_variants, "n_test": test.num_variants})
+        fitted = _fit_with_failure_artifacts(training, config, fold_output, callback, fit_function)
+        if cancelled is not None and cancelled.is_set():
+            raise CancelledError("Fold cancelled after another fold failed or the parent stopped")
+        phase = "checkpoint"
+        _save_fit(fitted, fold_output, training.num_variants)
+        phase = "prediction"
+        prediction = fitted.predict(test)
+        rows = _prediction_rows(test, prediction, fitted, fold)
+        _write_csv(fold_output / "predictions.csv", rows)
+        phase = "evaluation"
+        metrics = _evaluate_settings(test, prediction, config, rows, setting, fold)
+        _write_json(fold_output / "metrics.json", metrics)
+        return rows, metrics
+    except CancelledError as error:
+        _write_json(fold_output / "cancelled.json", {"phase": phase, "error": str(error)})
+        raise
+    except Exception as error:
+        # Numerical training failures already include their detailed history.
+        if not (fold_output / "failure.json").exists():
+            _write_json(fold_output / "failure.json", {
+                "phase": phase, "error": str(error), "traceback": traceback.format_exc(),
+            })
+        raise
+
+
+@contextmanager
+def _worker_thread_environment(num_threads):
+    """Limit native pools before spawned children import NumPy and PyTorch."""
+    previous = {name: os.environ.get(name) for name in _THREAD_ENVIRONMENT}
+    try:
+        for name in _THREAD_ENVIRONMENT:
+            os.environ[name] = str(num_threads)
+        yield
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def _initialize_fold_worker(batch, folds, config, output, setting, events, cancelled):
+    global _FOLD_WORKER_STATE
+    torch.set_num_threads(config.num_threads)
+    torch.set_num_interop_threads(1)
+    _FOLD_WORKER_STATE = (batch, folds, config, output, setting, events, cancelled)
+
+
+def _run_fold_worker(fold):
+    batch, folds, config, output, setting, events, cancelled = _FOLD_WORKER_STATE
+    if cancelled.is_set():
+        raise CancelledError("Fold cancelled before starting")
+    fold_output = output / f"fold_{fold}"
+    progress_handle = None
+
+    def progress(event):
+        nonlocal progress_handle
+        if cancelled.is_set():
+            raise CancelledError("Fold cancelled after another fold failed or the parent stopped")
+        if progress_handle is None:
+            progress_handle = (fold_output / "progress.jsonl").open("a", encoding="utf-8")
+        progress_handle.write(json.dumps(event, allow_nan=False) + "\n")
+        if "event" in event or event.get("step", 0) % 100 == 0:
+            progress_handle.flush()
+        if event.get("event") == "fold_start":
+            _write_json(fold_output / "execution.json", {
+                "pid": os.getpid(), "num_threads": torch.get_num_threads(),
+                "num_interop_threads": torch.get_num_interop_threads(),
+                "thread_environment": {name: os.environ.get(name) for name in _THREAD_ENVIRONMENT},
+            })
+        events.put(event)
+
+    try:
+        return _run_fold(batch, folds, config, output, setting, fold, progress, cancelled=cancelled)
+    finally:
+        if progress_handle is not None:
+            progress_handle.close()
+
+
+def _drain_fold_events(events, progress):
+    while True:
+        try:
+            event = events.get_nowait()
+        except queue.Empty:
+            return
+        if progress is not None:
+            progress(event)
+
+
+def _run_parallel_folds(batch, folds, config, output, setting, fold_workers, progress):
+    context = multiprocessing.get_context("spawn")
+    events, cancelled = context.Queue(), context.Event()
+    received = queue.Queue()
+    receiver_finished = threading.Event()
+
+    def receive_events():
+        # Keep the IPC pipe drained during executor shutdown as well as training.
+        # User callbacks are dispatched separately on the parent's main thread.
+        while True:
+            try:
+                event = events.get()
+            except (EOFError, OSError, ValueError):
+                return
+            if event is None:
+                receiver_finished.set()
+                return
+            received.put(event)
+
+    receiver = threading.Thread(target=receive_events, daemon=True)
+    receiver.start()
+    results = {}
+    futures = {}
+    failed_fold = None
+    try:
+        with _worker_thread_environment(config.num_threads):
+            with ProcessPoolExecutor(
+                max_workers=fold_workers, mp_context=context,
+                initializer=_initialize_fold_worker,
+                initargs=(batch, folds, config, output, setting, events, cancelled),
+            ) as executor:
+                try:
+                    futures = {executor.submit(_run_fold_worker, fold): fold for fold in range(config.evaluation.n_folds)}
+                    pending = set(futures)
+                    while pending:
+                        finished, pending = wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
+                        _drain_fold_events(received, progress)
+                        for future in finished:
+                            failed_fold = futures[future]
+                            results[failed_fold] = future.result()
+                            if progress is not None:
+                                progress({"event": "fold_complete", "fold": failed_fold})
+                            failed_fold = None
+                except BaseException:
+                    cancelled.set()
+                    for future in futures:
+                        future.cancel()
+                    raise
+    except BaseException as error:
+        _write_json(output / "failure.json", {
+            "phase": "parallel_cv", "fold": failed_fold,
+            "error": str(error) or type(error).__name__, "traceback": traceback.format_exc(),
+        })
+        raise
+    finally:
+        events.put(None)
+        # A worker killed externally can leave its queue pipe corrupt. Do not
+        # turn a BrokenProcessPool error into an unbounded receiver join.
+        receiver.join(timeout=5)
+        if not receiver_finished.is_set():
+            events.cancel_join_thread()
+        events.close()
+        if receiver_finished.is_set():
+            events.join_thread()
+    _drain_fold_events(received, progress)
+    return [results[fold] for fold in range(config.evaluation.n_folds)]
+
+
 def run_cv(
     batch: FeatureBatch,
     folds: Tensor,
@@ -291,8 +471,17 @@ def run_cv(
     setting: str | None = None,
     split_source: str = "provided",
     progress: Callable[[dict], None] | None = None,
+    fit_function: Callable | None = None,
+    fold_workers: int = 1,
 ) -> dict[str, Any]:
-    """Cross-validate one assay/scheme; average calibration errors within folds."""
+    """Cross-validate, optionally using CPU processes with num_threads per fold."""
+    if type(fold_workers) is not int or not 1 <= fold_workers <= config.evaluation.n_folds:
+        raise ValueError("fold_workers must be an integer between 1 and n_folds")
+    if fold_workers > 1:
+        if torch.device(config.device).type != "cpu":
+            raise ValueError("Parallel folds require device='cpu'")
+        if fit_function is not None:
+            raise ValueError("Parallel folds do not support a custom fit_function; use fold_workers=1")
     _require_targets(batch)
     _validate_setting(batch, setting, scheme)
     torch.set_num_threads(config.num_threads)
@@ -300,27 +489,22 @@ def run_cv(
     folds = _validate_fold_assignments(batch, folds, config, scheme)
     output = prepare_output(output_dir, config)
     _write_fold_assignments(output, batch, folds)
+    if fold_workers > 1:
+        _write_json(output / "execution.json", {
+            "fold_workers": fold_workers, "threads_per_fold": config.num_threads,
+            "start_method": "spawn",
+        })
+        fold_results = _run_parallel_folds(batch, folds, config, output, setting, fold_workers, progress)
+    else:
+        fold_results = (
+            _run_fold(batch, folds, config, output, setting, fold, progress, fit_function)
+            for fold in range(config.evaluation.n_folds)
+        )
     by_variant: dict[str, dict[str, Any]] = {}
     fold_metrics = []
-    for fold in range(config.evaluation.n_folds):
-        training = batch.select(torch.nonzero(folds != fold, as_tuple=False).flatten())
-        test = batch.select(torch.nonzero(folds == fold, as_tuple=False).flatten())
-        fold_output = prepare_output(output / f"fold_{fold}", config)
-        callback = None
-        if progress is not None:
-            callback = lambda event, fold=fold: progress({**event, "fold": fold})
-            progress({"event": "fold_start", "fold": fold, "n_train": training.num_variants, "n_test": test.num_variants})
-        fitted = _fit_with_failure_artifacts(training, config, fold_output, callback)
-        _save_fit(fitted, fold_output, training.num_variants)
-        prediction = fitted.predict(test)
-        rows = _prediction_rows(test, prediction, fitted, fold)
-        _write_csv(fold_output / "predictions.csv", rows)
-        metrics = _evaluate_settings(test, prediction, config, rows, setting, fold)
-        _write_json(fold_output / "metrics.json", metrics)
+    for rows, metrics in fold_results:
         fold_metrics.append(metrics)
         by_variant.update({row["variant_id"]: row for row in rows})
-        # Only scalar per-variant outputs survive this fold; no covariance is pooled.
-        del prediction, fitted
 
     ordered_rows = [by_variant[variant_id] for variant_id in batch.variant_ids]
     _write_csv(output / "predictions.csv", ordered_rows)
@@ -350,13 +534,15 @@ def run_predict(
     checkpoint: str | Path,
     config: ExperimentConfig,
     output_dir: str | Path,
+    *,
+    load_function: Callable | None = None,
 ) -> dict[str, Any]:
     """Predict a feature batch; experimental labels are optional and unused."""
     if batch.num_variants == 0:
         raise ValueError("Prediction requires at least one variant")
     torch.set_num_threads(config.num_threads)
     batch = batch.to(config.device)
-    fitted = FittedGP.load(checkpoint, device=config.device)
+    fitted = (load_function or FittedGP.load)(checkpoint, device=config.device)
     if config.model.enabled_branches != fitted.model_config.enabled_branches:
         raise ValueError("Prediction enabled branches differ from the fitted checkpoint")
     prediction = fitted.predict(batch)
@@ -382,6 +568,7 @@ def run_extrapolation(
     sample_ratio: float = 0.8,
     split_seed: int = 2024,
     progress: Callable[[dict], None] | None = None,
+    fit_function: Callable | None = None,
 ) -> dict[str, Any]:
     """Train on a configurable sample of singles and evaluate every double.
 
@@ -425,7 +612,7 @@ def run_extrapolation(
         output / "partition_assignments.csv",
         [{"variant_id": variant_id, "partition": partition} for variant_id, partition in zip(batch.variant_ids, partitions)],
     )
-    fitted = _fit_with_failure_artifacts(training, config, output, progress)
+    fitted = _fit_with_failure_artifacts(training, config, output, progress, fit_function)
     summary = _save_fit(fitted, output, training.num_variants)
     summary.update(
         {
