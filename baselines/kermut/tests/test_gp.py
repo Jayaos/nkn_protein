@@ -1,6 +1,7 @@
 """Independent likelihood, conditioning, optimization, and checkpoint checks."""
 
 from dataclasses import replace
+import json
 import math
 from pathlib import Path
 import tempfile
@@ -11,7 +12,7 @@ import torch
 from baselines.kermut.config import KermutTrainingConfig
 from baselines.kermut.model import ExactKermutGP
 from baselines.kermut.training import FittedKermut, fit_gp
-from fixtures import small_config, synthetic_batch
+from fixtures import CONDITIONAL_PROBABILITY_RECIPE, small_config, synthetic_batch
 
 
 class ExactGPTests(unittest.TestCase):
@@ -110,6 +111,28 @@ class ExactGPTests(unittest.TestCase):
             training.scores.fill_(100)
             training.local_features["structure"].fill_(100)
         torch.testing.assert_close(fitted.predict(self.test).mean, before, rtol=0, atol=0)
+
+    def test_checkpoint_preserves_conditional_probability_recipe_and_weights(self):
+        weights = self.batch.local_features["inverse_folding"] * 0.7
+        batch = replace(self.batch, local_features={**self.batch.local_features, "inverse_folding": weights},
+                        feature_signature={**self.batch.feature_signature,
+                            "inverse_folding.probability_recipe": json.dumps(CONDITIONAL_PROBABILITY_RECIPE)})
+        train, test = batch.select(range(8)), batch.select(range(10, 15))
+        fitted = fit_gp(train, self.config.model, self.config.training)
+        prediction = fitted.predict(test)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "conditional.pt"
+            fitted.save(path)
+            restored = FittedKermut.load(path)
+            self.assertEqual(restored.train.feature_signature, train.feature_signature)
+            torch.testing.assert_close(restored.train.local_features["inverse_folding"],
+                                       train.local_features["inverse_folding"], atol=0, rtol=0)
+            torch.testing.assert_close(restored.predict(test).mean, prediction.mean, atol=0, rtol=0)
+            changed = {**CONDITIONAL_PROBABILITY_RECIPE, "num_orders": 20}
+            test = replace(test, feature_signature={**test.feature_signature,
+                           "inverse_folding.probability_recipe": json.dumps(changed)})
+            with self.assertRaisesRegex(ValueError, "preprocessing"):
+                restored.predict(test)
 
     def test_prediction_rejects_changed_reference_inputs_despite_unchanged_signature(self):
         fitted = fit_gp(self.train, self.config.model, self.config.training)

@@ -8,11 +8,11 @@
     "raw_sequence_lengthscale": 0.0
   },
   "feature_selection": {
-    "sequence": "esm2/esm2_t6_8M_UR50D-layer6-c731040fcd8d",
-    "inverse_folding": "proteinmpnn/v_48_020-backbone_only-8907e6671bfb"
+    "sequence": "esm2/esm2_t33_650M_UR50D-layer33-08e4846e5371",
+    "inverse_folding": "proteinmpnn/v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb"
   },
   "score_sources": [
-    "scores/esm2/esm2_t6_8M_UR50D-masked_marginals-float32-c731040fcd8d"
+    "scores/esm2/esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371"
   ],
   "structure_manifest_dir": "data/structures/manifests",
   "training": {

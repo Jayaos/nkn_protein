@@ -1,0 +1,18 @@
+{
+  "feature_type": "inverse_folding",
+  "model_family": "proteinmpnn",
+  "model_id": "dauparas/ProteinMPNN/v_48_020",
+  "revision": "8907e6671bfbfc92303b5f79c4b5e6ce47cdef57",
+  "cache_id": "v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb",
+  "model_dir": "data/models/proteinmpnn",
+  "output_root": "data/features/pretrained",
+  "assay_index": "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv",
+  "structure_manifest_dir": "data/structures/manifests",
+  "conditioning_mode": "sequence_conditional",
+  "num_orders": 10,
+  "device": "auto",
+  "inference_dtype": "float32",
+  "output_dtype": "float32",
+  "max_length": 1022,
+  "seed": 37
+}

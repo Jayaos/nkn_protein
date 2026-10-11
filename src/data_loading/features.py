@@ -227,6 +227,35 @@ def _config_fingerprint(config: Mapping) -> str:
     return hashlib.sha256(json.dumps(clean(config), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+def kermut_probability_recipe(config: Mapping) -> dict | None:
+    """Recognize explicitly declared, unnormalized ProteinMPNN probabilities.
+
+    Other inverse-folding recipes retain the normalized-distribution contract.
+    A partial declaration must not turn arbitrary weights into Kermut inputs.
+    """
+    expected = {
+        "model_family": "proteinmpnn",
+        "conditioning_mode": "sequence_conditional",
+        "inference_method": "conditional_probs",
+        "normalization": "native_21_amino_acid_tokens",
+        "noncanonical_tokens": "excluded_without_renormalization",
+        "order_aggregation": "geometric_mean_of_probabilities",
+    }
+    declared = any(config.get(name) == expected[name] for name in (
+        "conditioning_mode", "normalization", "noncanonical_tokens",
+    ))
+    if not declared:
+        return None
+    if any(config.get(name) != value for name, value in expected.items()):
+        raise ValueError("Incomplete or inconsistent Kermut ProteinMPNN probability recipe")
+    num_orders, seed = config.get("num_orders"), config.get("seed")
+    if type(num_orders) is not int or num_orders < 1:
+        raise ValueError("Kermut ProteinMPNN num_orders must be a positive integer")
+    if type(seed) is not int or not 0 <= seed < 2**32:
+        raise ValueError("Kermut ProteinMPNN seed must be an integer in [0, 2**32)")
+    return {**expected, "num_orders": num_orders, "seed": seed}
+
+
 def load_feature_bundle(
     feature_dir: str | Path,
     feature_selection: Mapping[str, str] | None = None,
@@ -234,6 +263,8 @@ def load_feature_bundle(
     pooling: str = "mean",
     device: str | torch.device = "cpu",
     enabled_branches: Sequence[str] | None = None,
+    *,
+    inverse_folding_policy: str = "normalized",
 ) -> FeatureBatch:
     """Load schema-v2 caches; selection and score sources never depend on labels.
 
@@ -244,7 +275,11 @@ def load_feature_bundle(
     New score leaves use scores/family/recipe and a mean_score descriptor; legacy
     zero_shot descriptors in representation leaves remain supported.
     Omitting enabled_branches retains all four branches.
+    Only the Kermut consumer opts into ``inverse_folding_policy="kermut"`` to
+    retain declared geometric-mean ProteinMPNN probabilities without rescaling.
     """
+    if inverse_folding_policy not in ("normalized", "kermut"):
+        raise ValueError("inverse_folding_policy must be 'normalized' or 'kermut'")
     branches = BRANCH_NAMES if enabled_branches is None else validate_enabled_branches(enabled_branches)
     needed_types = {"sequence" if name.startswith("sequence_") else name for name in branches}
     root = Path(feature_dir).resolve()
@@ -308,6 +343,7 @@ def load_feature_bundle(
     positions = torch.tensor([position for values in mutations for position in values], dtype=torch.long)
     global_features = None
     local_features = {}
+    probability_recipe = None
     if "sequence" in stores:
         sequence_store = stores["sequence"]
         embedding = _float_tensor(sequence_store.get("embeddings"), "Sequence embeddings", 3, convert=False)
@@ -339,7 +375,13 @@ def load_feature_bundle(
             raise ValueError("Probability features must cover the reference residues")
         if inverse_store.get("alphabet") != ALPHABET:
             raise ValueError("Inverse-folding amino-acid alphabet mismatch")
-        if (inverse < 0).any() or not torch.allclose(inverse.sum(-1), torch.ones(len(reference), dtype=torch.float64), atol=1e-5, rtol=1e-5):
+        probability_recipe = kermut_probability_recipe(configs["inverse_folding"])
+        if probability_recipe is not None:
+            if inverse_folding_policy != "kermut":
+                raise ValueError("Unnormalized ProteinMPNN probabilities require the explicit Kermut loader policy")
+            if (inverse <= 0).any() or (inverse.sum(-1) > 1 + 2e-5).any():
+                raise ValueError("Kermut ProteinMPNN probabilities must be positive with row mass at most one")
+        elif (inverse < 0).any() or not torch.allclose(inverse.sum(-1), torch.ones(len(reference), dtype=torch.float64), atol=1e-5, rtol=1e-5):
             raise ValueError("Inverse-folding distributions must be nonnegative and sum to one")
         if "log_probs" in inverse_store:
             log_probs = inverse_store["log_probs"]
@@ -351,6 +393,8 @@ def load_feature_bundle(
         raise ValueError("Select at least one unique mean score source")
     columns = []
     signature = {"schema_version": "2", "layout_version": "1", "pooling": pooling, **sources}
+    if probability_recipe is not None:
+        signature["inverse_folding.probability_recipe"] = json.dumps(probability_recipe, sort_keys=True, separators=(",", ":"))
     if branches != BRANCH_NAMES:
         signature["enabled_branches"] = json.dumps(branches, separators=(",", ":"))
     for name, config in configs.items():

@@ -1,6 +1,7 @@
 """Kernel equations checked independently of the implementation and reference clone."""
 
 from dataclasses import replace
+import json
 import unittest
 
 import torch
@@ -8,7 +9,7 @@ import torch
 from baselines.kermut.data import validate_batch
 from baselines.kermut.kernel import KermutKernel
 from data_loading.features import ALPHABET
-from fixtures import scalar_kernel, small_config, synthetic_batch
+from fixtures import CONDITIONAL_PROBABILITY_RECIPE, scalar_kernel, small_config, synthetic_batch
 
 
 class KernelTests(unittest.TestCase):
@@ -35,6 +36,17 @@ class KernelTests(unittest.TestCase):
         kernel = KermutKernel(train, self.config.model).double()
         torch.testing.assert_close(kernel(test, train), scalar_kernel(test, train, self.config.model), rtol=1e-10, atol=1e-10)
         self.assertEqual(kernel(test, train).shape, (3, 4))
+
+    def test_conditional_subprobabilities_follow_original_unscaled_kernel_formula(self):
+        weights = self.batch.local_features["inverse_folding"] * (0.4 + 0.1 * self.batch.mutation_positions[:, None])
+        batch = replace(self.batch, local_features={**self.batch.local_features, "inverse_folding": weights},
+                        feature_signature={**self.batch.feature_signature,
+                            "inverse_folding.probability_recipe": json.dumps(CONDITIONAL_PROBABILITY_RECIPE)})
+        kernel = KermutKernel(batch, self.config.model).double()
+        torch.testing.assert_close(kernel(batch), scalar_kernel(batch, batch, self.config.model), rtol=1e-10, atol=1e-10)
+        torch.testing.assert_close(batch.local_features["inverse_folding"], weights, rtol=0, atol=0)
+        with self.assertRaisesRegex(ValueError, "sum to one"):
+            validate_batch(replace(batch, feature_signature=self.batch.feature_signature))
 
     def test_invalid_zero_probabilities_and_inconsistent_mutations_fail(self):
         probabilities = self.batch.local_features["inverse_folding"].clone()

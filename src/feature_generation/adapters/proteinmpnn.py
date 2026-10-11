@@ -3,6 +3,7 @@
 import importlib.util
 import sys
 
+import numpy as np
 import torch
 
 from .inverse_base import InverseFoldingAdapter
@@ -14,12 +15,33 @@ class ProteinMPNNAdapter(InverseFoldingAdapter):
         if config.model_family != "proteinmpnn":
             raise ValueError("ProteinMPNNAdapter requires model_family=proteinmpnn")
         super().__init__(config)
+        self._initialization_rng_state = None
 
-    def metadata(self):
+    def _backbone_metadata(self):
         return dict(super().metadata(), model_class="ProteinMPNN",
                     inference_method="unconditional_probs", decoding_order="none",
                     residue_idx_policy="zero_based_contiguous_reference_order",
                     num_edges=48, hidden_size=128)
+
+    def metadata(self):
+        metadata = dict(self._backbone_metadata())
+        if self.config.conditioning_mode == "sequence_conditional":
+            metadata.update(
+                inference_method="conditional_probs",
+                decoding_order="target_last_random_context_orders",
+                decoding_order_scope="reset_per_structure",
+                decoding_order_rng="torch_device_generator",
+                decoding_order_seed=self.config.seed,
+                decoding_order_rng_initialization="upstream_seed_then_cpu_model_initialization",
+                extraction_batch_size=1,
+                num_orders=self.config.num_orders,
+                order_aggregation="geometric_mean_of_probabilities",
+                normalization="native_21_amino_acid_tokens",
+                noncanonical_tokens="excluded_without_renormalization",
+                precision_policy="float32_native_log_probabilities_numpy_mean_exp",
+                conditional_recipe_version=1,
+            )
+        return metadata
 
     def load(self):
         if self._model is not None:
@@ -47,6 +69,10 @@ class ProteinMPNNAdapter(InverseFoldingAdapter):
                 num_encoder_layers=3, num_decoder_layers=3, k_neighbors=48,
                 augment_eps=0.0, dropout=0.0, ca_only=False,
             )
+            # Upstream seeds before constructing the CPU model. Its CPU
+            # decoding RNG therefore starts after parameter initialization,
+            # while its CUDA decoding RNG starts directly from the seed.
+            self._initialization_rng_state = torch.get_rng_state().clone()
         model.load_state_dict(checkpoint["model_state_dict"], strict=True)
         model.requires_grad_(False).eval().to(self._device)
         self._model = model
@@ -59,6 +85,8 @@ class ProteinMPNNAdapter(InverseFoldingAdapter):
         mask = torch.ones((1, length), dtype=torch.float32, device=self._device)
         residue_idx = torch.arange(length, dtype=torch.long, device=self._device).unsqueeze(0)
         chain_encoding = torch.ones((1, length), dtype=torch.long, device=self._device)
+        if self.config.conditioning_mode == "sequence_conditional":
+            return self._conditional_probabilities(structure.reference_sequence, coords, mask, residue_idx, chain_encoding)
         with torch.inference_mode():
             values = self._model.unconditional_probs(coords, mask, residue_idx, chain_encoding)
         if tuple(values.shape) != (1, length, 21):
@@ -67,11 +95,49 @@ class ProteinMPNNAdapter(InverseFoldingAdapter):
         indices = [native_alphabet.index(aa) for aa in ALPHABET]
         return self._probabilities(values[0], indices, length)
 
+    def _conditional_probabilities(self, sequence, coords, mask, residue_idx, chain_encoding):
+        """Match Kermut's native conditional runs and NumPy postprocessing.
+
+        Reset the private RNG for each reference structure, as Kermut invokes
+        ProteinMPNN separately for each protein. Full WT tokens are supplied;
+        native conditional_probs masks the target identity via decoding order.
+        """
+        native_alphabet = "ACDEFGHIKLMNPQRSTVWYX"
+        sequence_tokens = torch.tensor([[native_alphabet.index(aa) for aa in sequence]],
+                                       dtype=torch.long, device=self._device)
+        generator = torch.Generator(device=self._device).manual_seed(self.config.seed)
+        if self._device.type == "cpu" and self._initialization_rng_state is not None:
+            generator.set_state(self._initialization_rng_state)
+        all_log_probs = []
+        with torch.inference_mode():
+            for _ in range(self.config.num_orders):
+                # Separate [1, L] draws match the upstream batch-size-one loop.
+                randn = torch.randn(mask.shape, device=self._device, generator=generator)
+                values = self._model.conditional_probs(
+                    coords, sequence_tokens, mask, mask, residue_idx, chain_encoding,
+                    randn, backbone_only=False,
+                )
+                if tuple(values.shape) != (1, len(sequence), 21) or not torch.isfinite(values).all():
+                    raise ValueError("ProteinMPNN conditional inference requires finite native log-probabilities with shape [1, length, 21]")
+                if values.dtype != torch.float32 or (values > 0).any():
+                    raise ValueError("ProteinMPNN conditional inference requires float32 nonpositive native log-probabilities")
+                all_log_probs.append(values.detach().cpu().numpy())
+        # The released preprocessing uses NumPy float32 mean, then exp, then
+        # drops X. Do not softmax or renormalize the remaining twenty values.
+        mean_log_probs = np.concatenate(all_log_probs, axis=0).mean(axis=0)
+        probabilities = np.exp(mean_log_probs)
+        indices = [native_alphabet.index(aa) for aa in ALPHABET]
+        selected_probs = torch.from_numpy(probabilities[:, indices].copy()).contiguous()
+        selected_logs = torch.from_numpy(mean_log_probs[:, indices].copy()).contiguous()
+        if not torch.isfinite(selected_probs).all() or (selected_probs <= 0).any():
+            raise ValueError("Canonical amino-acid probabilities underflowed float32; no probability floor is applied")
+        return {"alphabet": ALPHABET, "probabilities": selected_probs, "log_probs": selected_logs}
+
     def score_metadata(self, *, num_orders: int = 1) -> dict:
-        """Describe full-sequence scoring, separately from backbone-only features."""
+        """Describe full-sequence scoring independently of distribution features."""
         self._validate_num_orders(num_orders)
         return dict(
-            self.metadata(),
+            self._backbone_metadata(),
             feature_type="scores",
             conditioning_mode="sequence_autoregressive",
             inference_method="forward",

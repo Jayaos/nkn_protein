@@ -111,7 +111,9 @@ def extract(
             if not isinstance(prediction, dict):
                 raise ValueError("Inverse-folding adapter must return probabilities and log_probs")
             probabilities, log_probs = prediction.get("probabilities"), prediction.get("log_probs")
-            validate_distributions(probabilities, log_probs, inputs.length)
+            validate_distributions(
+                probabilities, log_probs, inputs.length, normalization=leaf_config["normalization"],
+            )
             provenance = {
                 "created_at_utc": datetime.now(timezone.utc).isoformat(),
                 "elapsed_seconds": time.monotonic() - started,

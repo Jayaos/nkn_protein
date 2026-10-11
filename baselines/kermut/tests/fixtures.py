@@ -13,6 +13,14 @@ from data_loading import FeatureBatch
 from data_loading.features import ALPHABET
 
 
+CONDITIONAL_PROBABILITY_RECIPE = {
+    "model_family": "proteinmpnn", "conditioning_mode": "sequence_conditional",
+    "inference_method": "conditional_probs", "normalization": "native_21_amino_acid_tokens",
+    "noncanonical_tokens": "excluded_without_renormalization",
+    "order_aggregation": "geometric_mean_of_probabilities", "num_orders": 10, "seed": 37,
+}
+
+
 def synthetic_batch():
     generator = torch.Generator().manual_seed(302)
     reference = "ACDEF"

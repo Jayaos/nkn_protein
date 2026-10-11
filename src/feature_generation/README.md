@@ -25,18 +25,25 @@ This implementation was tested with Python 3.10 and PyTorch 2.5.1.
 
 The CLI is the main workflow. Both models write one `[L, 20]` distribution for
 the reference structure, shared by all assay variants; DMS labels are not model
-inputs. The supported initial recipes have different conditioning:
+inputs. The supported recipes have different conditioning:
 
 | Config | Checkpoint | Conditioning |
 | --- | --- | --- |
-| `proteinmpnn_v48_020.json` | vanilla `v_48_020` | `backbone_only`: structure without sequence context |
+| `proteinmpnn_v48_020_kermut.json` | vanilla `v_48_020` | `sequence_conditional`: structure and all other wild-type residues, ten orders, seed 37 |
+| `proteinmpnn_v48_020.json` | vanilla `v_48_020` | Optional legacy `backbone_only`: structure without sequence context |
 | `esm_if1_142m.json` | `esm_if1_gvp4_t16_142M_UR50` | `reference_prefix`: structure and preceding wild-type residues |
 
 ESM-IF1 output is an autoregressive reference-context distribution, not an exact
 backbone-only marginal or a conditional on the complete remaining WT sequence.
-The extraction recipe does not implement Kermut's averaged WT-prefix distributions
-or sequence generation. ProteinMPNN variant sequence likelihoods are prepared
-separately with the `score` command below.
+ProteinMPNN's Kermut recipe uses the native `conditional_probs` routine: the
+target position is decoded after all other wild-type residues. It averages the
+log probabilities from ten randomized orders, exponentiates, and removes `X`
+without renormalizing, matching the authors'
+[released preprocessing](https://github.com/petergroth/kermut/blob/reproduce/src/data/extract_ProteinMPNN_probs.py).
+These are geometric-mean probabilities and their rows can sum to less than one.
+The checkpoint is shared with the backbone-only recipe; its output cache is
+separate. Sequence generation is not implemented. ProteinMPNN variant sequence
+likelihoods are prepared separately with the `score` command below.
 
 Install/update from `env.yaml`, or use `python -m pip install -r requirements.txt`
 in a Python 3.10 venv. Added inference dependencies are Biopython, Biotite, SciPy,
@@ -74,20 +81,36 @@ multi-model structures. No sequence offset or cropping is inferred from `pdb_ran
 Download both checkpoints explicitly, then extract offline:
 
 ```powershell
-python -m feature_generation.cli download --config configs/extraction/proteinmpnn_v48_020.json
+python -m feature_generation.cli download --config configs/extraction/proteinmpnn_v48_020_kermut.json
 python -m feature_generation.cli download --config configs/extraction/esm_if1_142m.json
-python -m feature_generation.cli extract --config configs/extraction/proteinmpnn_v48_020.json --assay $assay --resume
+python -m feature_generation.cli extract --config configs/extraction/proteinmpnn_v48_020_kermut.json --assay $assay --resume
 python -m feature_generation.cli extract --config configs/extraction/esm_if1_142m.json --assay $assay --resume
-python -m feature_generation.cli validate --features "data/features/pretrained/$assay" --feature-type inverse_folding --model-family proteinmpnn
+python -m feature_generation.cli validate --features "data/features/pretrained/$assay" --feature-type inverse_folding --model-family proteinmpnn --cache-id v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb
 python -m feature_generation.cli validate --features "data/features/pretrained/$assay" --feature-type inverse_folding --model-family esm_if1
 ```
+
+The optional legacy backbone-only recipe uses the same downloaded checkpoint.
+To prepare it for experiments that still select that cache, run it separately:
+
+```powershell
+python -m feature_generation.cli extract --config configs/extraction/proteinmpnn_v48_020.json --assay $assay --resume
+python -m feature_generation.cli validate --features "data/features/pretrained/$assay" --feature-type inverse_folding --model-family proteinmpnn --cache-id v_48_020-backbone_only-8907e6671bfb
+```
+
+Conditional inference performs one decoder pass per reference position per
+order, so it costs substantially more than backbone-only extraction. This
+matches the extraction recipe for supported single-chain inputs of up to 1,022
+residues; exact published outputs additionally depend on the same structure and
+runtime. Seed 37 and the order count are recorded in cache provenance.
+`--resume` rejects a changed
+recipe under an existing cache ID.
 
 The original ESM-IF1 checkpoint download is approximately 1.7 GB. Model/source files
 are verified against the pinned artifact manifest before loading. Their provenance
 includes exact source URLs, upstream commits, and file SHA-256 checksums.
 
-Use `--output-root data/features/inverse_smoke --limit 4` on **both** extraction
-commands for an isolated smoke test. `--limit` changes only the shared variant
+Use `--output-root data/features/inverse_smoke --limit 4` on every extraction
+command in an isolated smoke test. `--limit` changes only the shared variant
 table; inverse-folding inference still covers the complete reference. A full-assay
 cache and a subset cannot occupy the same assay directory. `--resume` checks the
 checkpoint, structure, mapping, extraction settings, and all saved artifact hashes.
@@ -104,12 +127,15 @@ data/features/pretrained/<assay>/inverse_folding/<family>/<recipe>/
 
 `features.pt` stores `probabilities[L,20]`, `log_probs[L,20]`, one-based `positions`,
 reference identity, and alphabet `ACDEFGHIKLMNPQRSTVWY`. Vocabulary entries are
-selected by amino-acid identity and normalized over these 20 candidates at T=1.
-Both tensors are finite float32, probability rows sum to one, and log probabilities
-agree with their probabilities. Special tokens and ProteinMPNN's X are excluded.
+selected by amino-acid identity. The backbone-only ProteinMPNN and ESM-IF1 recipes
+normalize over these 20 candidates at T=1; their probability rows sum to one.
+Kermut's sequence-conditioned ProteinMPNN recipe preserves the values after
+log averaging and removing `X`, without a second normalization. Both tensors
+are finite float32, and log probabilities agree with their probabilities.
+Special tokens and ProteinMPNN's `X` are excluded from the saved tensors.
 
-Both model leaves can coexist; the first completed leaf becomes the inverse-folding
-default. Select either using `feature_selection["inverse_folding"] = "<family>/<recipe>"`
+All recipe leaves can coexist; the first completed leaf becomes the inverse-folding
+default. Select one using `feature_selection["inverse_folding"] = "<family>/<recipe>"`
 in the experiment config. GP experiments load only the feature types required by
 `model.enabled_branches`; structure embeddings are needed only when `structure` is
 enabled. At least one mean score source is still required for the GP mean;
@@ -158,10 +184,10 @@ including BOS/EOS. Scoring never truncates. `--num-orders` and structure-manifes
 options apply to ProteinMPNN and are rejected for ESM2. New dependencies are not
 needed: the verified safetensors checkpoint already contains the MLM head.
 
-`prepare_esm2.sbatch` downloads/verifies the checkpoint and then runs both embedding
-extraction and scoring for the pilot assay. The Conda environment and ProteinGym
-assay CSVs must already exist. First-time downloads need outbound HTTPS from the
-compute node; verified completed caches are reused on resubmission.
+`prepare_esm2.sbatch` downloads/verifies ESM2 650M and then runs both layer-33
+embedding extraction and scoring for the pilot assay. The Conda environment and
+ProteinGym assay CSVs must already exist. First-time downloads need outbound
+HTTPS from the compute node; verified completed caches are reused on resubmission.
 
 ```text
 data/features/pretrained/<assay>/
@@ -223,7 +249,12 @@ Use `--device cpu` when no GPU is available. This reuses the existing ProteinMPN
 checkpoint and structure manifest; no new dependencies or model downloads are
 needed if extraction already ran. Scoring can also run before extraction.
 `prepare_proteinmpnn.sbatch` downloads and verifies the pinned checkpoint/source
-and chain-A ProteinGym reference structure, then runs extraction and scoring.
+and chain-A ProteinGym reference structure, then extracts the Kermut
+sequence-conditioned features and prepares variant scores. These are four
+stages: model assets, structure, features, and scores. The job retains seed 0
+and one order for variant scoring, independently of the Kermut feature recipe.
+It uses `proteinmpnn_v48_020.json` only for that separate scoring stage; the
+job's feature extraction uses `proteinmpnn_v48_020_kermut.json`.
 No checkpoint or structure needs to be downloaded before submission. The Conda
 environment and ProteinGym assay CSVs must already exist, and the allocated
 compute node needs outbound HTTPS access. Valid assets and completed caches are

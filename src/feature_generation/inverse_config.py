@@ -28,6 +28,7 @@ class InverseFoldingConfig:
     output_dtype: str = "float32"
     max_length: int = 1022
     seed: int = 0
+    num_orders: int = 10
 
     def __post_init__(self):
         if self.feature_type != "inverse_folding":
@@ -35,14 +36,24 @@ class InverseFoldingConfig:
         if not isinstance(self.model_family, str) or self.model_family not in PRESETS:
             raise ValueError(f"Supported inverse folding model_family values: {', '.join(PRESETS)}")
         preset = PRESETS[self.model_family]
-        for name in ("model_id", "revision", "conditioning_mode"):
+        for name in ("model_id", "revision"):
             value = getattr(self, name)
             if value is None:
                 setattr(self, name, preset[name])
             elif value != preset[name]:
                 raise ValueError(f"{name} must be {preset[name]!r} for the pinned {self.model_family} recipe")
+        if self.conditioning_mode is None:
+            self.conditioning_mode = preset["conditioning_mode"]
+        allowed_modes = ("backbone_only", "sequence_conditional") if self.model_family == "proteinmpnn" else (preset["conditioning_mode"],)
+        if self.conditioning_mode not in allowed_modes:
+            raise ValueError(f"conditioning_mode must be one of {allowed_modes} for {self.model_family}")
+        if type(self.num_orders) is not int or self.num_orders < 1:
+            raise ValueError("num_orders must be a positive integer")
         if self.cache_id is None:
-            self.cache_id = f"{self.model_id.split('/')[-1]}-{self.conditioning_mode}-{self.revision[:12]}"
+            self.cache_id = f"{self.model_id.split('/')[-1]}-{self.conditioning_mode}"
+            if self.conditioning_mode == "sequence_conditional":
+                self.cache_id += f"-orders{self.num_orders}-seed{self.seed}"
+            self.cache_id += f"-{self.revision[:12]}"
         if not isinstance(self.cache_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", self.cache_id):
             raise ValueError("cache_id must be a safe single directory name")
         reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}

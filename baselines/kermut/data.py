@@ -9,7 +9,7 @@ import torch
 
 from data_loading import FeatureBatch
 from data_loading import load_feature_bundle as _load_feature_bundle
-from data_loading.features import ALPHABET
+from data_loading.features import ALPHABET, kermut_probability_recipe
 from feature_generation.structure_inputs import load_structure, validate_structure_metadata
 
 from .config import KermutConfig
@@ -35,7 +35,13 @@ def validate_batch(batch: FeatureBatch) -> None:
         raise ValueError("Kermut requires packed 20-amino-acid inverse-folding probabilities")
     if coordinates is None or coordinates.shape != (batch.owners.numel(), 3):
         raise ValueError("Kermut requires packed three-dimensional CA coordinates")
-    if (probabilities < 0).any() or not torch.allclose(
+    recipe = json.loads(batch.feature_signature.get("inverse_folding.probability_recipe", "{}"))
+    if not isinstance(recipe, dict):
+        raise ValueError("Invalid inverse-folding probability recipe signature")
+    if kermut_probability_recipe(recipe) is not None:
+        if (probabilities <= 0).any() or (probabilities.sum(-1) > 1 + 2e-5).any():
+            raise ValueError("Kermut ProteinMPNN probabilities must be positive with row mass at most one")
+    elif (probabilities < 0).any() or not torch.allclose(
         probabilities.sum(-1), torch.ones_like(probabilities[:, 0]), atol=1e-5, rtol=1e-5
     ):
         raise ValueError("Inverse-folding probabilities must be nonnegative and sum to one")
@@ -101,6 +107,7 @@ def load_feature_bundle(feature_dir: str | Path, config: KermutConfig) -> Featur
     batch = _load_feature_bundle(
         root, feature_selection=config.feature_selection, score_sources=config.score_sources,
         pooling=config.pooling, device=config.device, enabled_branches=config.model.enabled_branches,
+        inverse_folding_policy="kermut",
     )
     manifest_root = config.resolved_structure_manifest_dir
     manifest = (manifest_root / f"{batch.assay_id}.json").resolve()

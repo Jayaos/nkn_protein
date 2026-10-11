@@ -44,7 +44,7 @@ def make_leaf_config(cache_id: str, model_family: str, model_metadata: dict, str
         "output_dtype": "float32",
         "alphabet": ALPHABET,
         "temperature": 1.0,
-        "normalization": "canonical_amino_acids_only",
+        "normalization": model_metadata.get("normalization", "canonical_amino_acids_only"),
         "structure": structure_metadata,
     }
     stable_json(config)
@@ -60,13 +60,28 @@ def _validate_config(config: dict, model_family: str, cache_id: str) -> None:
         "schema_version": 2, "layout_version": 1, "feature_type": "inverse_folding",
         "model_family": model_family, "checkpoint": cache_id, "synthetic": False,
         "output_dtype": "float32", "alphabet": ALPHABET, "temperature": 1.0,
-        "normalization": "canonical_amino_acids_only",
     }
     if any(config.get(key) != value for key, value in expected.items()):
         raise ValueError("Feature configuration does not match its inverse-folding directory or format")
     expected_mode = "backbone_only" if model_family == "proteinmpnn" else "reference_prefix"
-    if config.get("conditioning_mode") != expected_mode:
-        raise ValueError(f"Unsupported conditioning mode for {model_family}; expected {expected_mode}")
+    if model_family == "proteinmpnn" and config.get("conditioning_mode") == "sequence_conditional":
+        recipe = {
+            "normalization": "native_21_amino_acid_tokens",
+            "noncanonical_tokens": "excluded_without_renormalization",
+            "order_aggregation": "geometric_mean_of_probabilities",
+            "inference_method": "conditional_probs",
+        }
+        if any(config.get(key) != value for key, value in recipe.items()):
+            raise ValueError("Sequence-conditional ProteinMPNN requires the declared Kermut probability recipe")
+        if type(config.get("num_orders")) is not int or config["num_orders"] < 1:
+            raise ValueError("Sequence-conditional ProteinMPNN requires positive integer num_orders")
+        if type(config.get("seed")) is not int or not 0 <= config["seed"] < 2**32:
+            raise ValueError("Sequence-conditional ProteinMPNN requires a valid integer seed")
+    else:
+        if config.get("conditioning_mode") != expected_mode:
+            raise ValueError(f"Unsupported conditioning mode for {model_family}; expected {expected_mode}")
+        if config.get("normalization") != "canonical_amino_acids_only":
+            raise ValueError("This inverse-folding conditioning mode requires canonical normalization")
     structure = config.get("structure")
     if not isinstance(structure, dict):
         raise ValueError("Missing structure metadata")
@@ -75,8 +90,11 @@ def _validate_config(config: dict, model_family: str, cache_id: str) -> None:
         raise ValueError("ProteinMPNN structure metadata requires oxygen at every residue")
 
 
-def validate_distributions(probabilities: object, log_probs: object, length: int) -> None:
-    """Require finite canonical distributions, without silently fixing adapter output."""
+def validate_distributions(
+    probabilities: object, log_probs: object, length: int,
+    *, normalization: str = "canonical_amino_acids_only",
+) -> None:
+    """Validate normalized distributions or explicitly declared Kermut weights unchanged."""
     for name, value in (("probabilities", probabilities), ("log_probs", log_probs)):
         if (
             not isinstance(value, Tensor)
@@ -88,8 +106,16 @@ def validate_distributions(probabilities: object, log_probs: object, length: int
             raise ValueError(f"{name} must be a finite CPU float32 tensor of shape [reference residues, 20]")
     if (probabilities <= 0).any():
         raise ValueError("Inverse-folding probabilities must be positive for finite log probabilities")
-    if not torch.allclose(probabilities.sum(-1), torch.ones(length), atol=1e-5, rtol=1e-5):
-        raise ValueError("Inverse-folding probability rows must sum to one")
+    mass = probabilities.sum(-1)
+    if normalization == "canonical_amino_acids_only":
+        if not torch.allclose(mass, torch.ones(length), atol=1e-5, rtol=1e-5):
+            raise ValueError("Inverse-folding probability rows must sum to one")
+    elif normalization == "native_21_amino_acid_tokens":
+        # Geometric averaging and removing X can only reduce total mass.
+        if (mass > 1 + 2e-5).any():
+            raise ValueError("Kermut inverse-folding probability rows must have mass at most one")
+    else:
+        raise ValueError("Unsupported inverse-folding normalization")
     if not torch.allclose(log_probs, probabilities.log(), atol=1e-5, rtol=1e-5):
         raise ValueError("Inverse-folding log probabilities are inconsistent")
 
@@ -117,7 +143,10 @@ def _validate_payload(store: object, metadata: dict, config: dict) -> None:
         or not torch.equal(positions, torch.arange(1, length + 1))
     ):
         raise ValueError("Expected complete one-based reference positions")
-    validate_distributions(store.get("probabilities"), store.get("log_probs"), length)
+    validate_distributions(
+        store.get("probabilities"), store.get("log_probs"), length,
+        normalization=config["normalization"],
+    )
 
 
 def _register_default(root: Path, model_family: str, cache_id: str) -> None:
@@ -172,7 +201,7 @@ def write_inverse_cache(
     root = Path(root).resolve()
     _validate_config(config, model_family, cache_id)
     validate_structure_metadata(config["structure"], inputs.reference_sequence)
-    validate_distributions(probabilities, log_probs, inputs.length)
+    validate_distributions(probabilities, log_probs, inputs.length, normalization=config["normalization"])
     payload = {
         "schema_version": 2,
         "synthetic": False,

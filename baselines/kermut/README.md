@@ -28,13 +28,21 @@ and [paper](https://proceedings.neurips.cc/paper_files/paper/2024/file/34547650b
   dense optimization are deterministic. Numerical jitter is added only if
   Cholesky factorization needs it and is recorded in training history.
 
-The requested inputs differ from the publication: the default selects our
-existing ESM2 **8M** embeddings/scores and ProteinMPNN **backbone-only** normalized
-probabilities. The paper used ESM2 650M and sequence-conditioned ProteinMPNN
-probabilities. This is a Kermut baseline with our cached inputs, not an exact
-reproduction of the paper's reported results. Select other prepared caches in
-JSON to change inputs. The data adapter verifies reference structure mapping
-and its consistency with inverse-folding cache provenance.
+The default selects ESM2 **650M** layer-33 embeddings and masked-marginal scores,
+plus ProteinMPNN `v_48_020` distributions prepared with Kermut's extraction recipe.
+For each reference position, ProteinMPNN conditions on the backbone and the
+other wild-type residues, using ten randomized decoding orders with seed 37.
+Extraction averages log probabilities, exponentiates, and removes the unknown
+amino-acid category `X` without renormalizing. The resulting 20 values can sum
+to less than one; the loader and kernel preserve those values.
+
+This matches the ProteinMPNN extraction recipe for the pipeline's supported
+single-chain structures of up to 1,022 residues. It does not establish numerical
+reproduction of the publication: matching structure inputs, model/runtime versions, assay folds,
+and benchmark aggregation still matters. The baseline implementation also
+needs comparison against the authors' released predictions before claiming
+the same reported results. The data adapter verifies reference structure
+mapping and its consistency with inverse-folding cache provenance.
 
 ## Configuration
 
@@ -48,7 +56,7 @@ only the ESM2 masked-marginal score. For a learned combination, use:
 
 ```json
 "score_sources": [
-  "scores/esm2/esm2_t6_8M_UR50D-masked_marginals-float32-c731040fcd8d",
+  "scores/esm2/esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371",
   "scores/proteinmpnn/v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb"
 ]
 ```
@@ -68,6 +76,23 @@ uses quadratic memory and cubic Cholesky work in the number of variants.
 as NKN. The complete accepted schema is in [`config.py`](config.py).
 
 ## Run on CPU
+
+Prepare the selected caches first. On the cluster, submit both preparation
+jobs and wait for them to finish successfully before submitting Kermut:
+
+```bash
+sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch
+sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
+```
+
+The ProteinMPNN job writes the sequence-conditioned cache selected by Kermut
+and retains the existing separate variant-score recipe. Existing backbone-only
+outputs cannot satisfy Kermut's cache selection. To extract only the Kermut
+distributions from prepared model and structure assets, run:
+
+```bash
+PYTHONPATH=src python -m feature_generation.cli extract --config configs/extraction/proteinmpnn_v48_020_kermut.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --resume
+```
 
 From the repository root in PowerShell, activate the existing environment and
 make the shared source packages available:

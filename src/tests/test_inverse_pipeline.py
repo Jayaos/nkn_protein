@@ -91,6 +91,23 @@ class FakeAdapter:
         return {"probabilities": log_probs.exp(), "log_probs": log_probs}
 
 
+class FakeConditionalAdapter(FakeAdapter):
+    def metadata(self):
+        return dict(
+            super().metadata(), normalization="native_21_amino_acid_tokens",
+            noncanonical_tokens="excluded_without_renormalization",
+            order_aggregation="geometric_mean_of_probabilities",
+            inference_method="conditional_probs", num_orders=self.config.num_orders,
+        )
+
+    def predict(self, structure):
+        prediction = super().predict(structure)
+        # Model geometric means with missing X mass; storage must keep it.
+        prediction["log_probs"] -= 0.25
+        prediction["probabilities"] = prediction["log_probs"].exp()
+        return prediction
+
+
 class InversePipelineTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -136,7 +153,8 @@ class InversePipelineTests(unittest.TestCase):
         )
 
     def factory(self, config):
-        adapter = FakeAdapter(config)
+        adapter_type = FakeConditionalAdapter if config.conditioning_mode == "sequence_conditional" else FakeAdapter
+        adapter = adapter_type(config)
         self.adapters.append(adapter)
         return adapter
 
@@ -194,6 +212,64 @@ class InversePipelineTests(unittest.TestCase):
         self.assertEqual(validate_inverse_cache(self.assay_root)["model_family"], "proteinmpnn")
         self.assertEqual(validate_inverse_cache(self.assay_root, "esm_if1")["conditioning_mode"], "reference_prefix")
         self.assertFalse(self.mock_structure.call_args.kwargs["require_oxygen"])
+
+    def use_conditional_recipe(self):
+        self.config.conditioning_mode = "sequence_conditional"
+        self.config.cache_id = "conditional-orders10-seed37"
+        self.config.num_orders = 10
+        self.config.seed = 37
+
+    def test_conditional_cache_preserves_subprobabilities_and_backbone_cache(self):
+        self.run_extraction()
+        backbone_leaf = self.leaf
+        backbone_bytes = (backbone_leaf / "features.pt").read_bytes()
+        variants_bytes = (self.assay_root / "variants.csv").read_bytes()
+        self.use_conditional_recipe()
+        self.run_extraction()
+        payload = torch.load(self.leaf / "features.pt", weights_only=True)
+        expected_logs = (torch.arange(60, dtype=torch.float32).reshape(3, 20) / 20).log_softmax(-1) - 0.25
+        torch.testing.assert_close(payload["probabilities"], expected_logs.exp(), atol=0, rtol=0)
+        torch.testing.assert_close(payload["log_probs"], expected_logs, atol=0, rtol=0)
+        self.assertTrue((payload["probabilities"].sum(-1) < 1).all())
+        self.assertEqual((backbone_leaf / "features.pt").read_bytes(), backbone_bytes)
+        self.assertEqual((self.assay_root / "variants.csv").read_bytes(), variants_bytes)
+        self.assertEqual(validate_inverse_cache(self.assay_root)["conditioning_mode"], "backbone_only")
+        report = validate_inverse_cache(self.assay_root, "proteinmpnn", self.config.cache_id)
+        self.assertEqual(report["conditioning_mode"], "sequence_conditional")
+        self.assertEqual(self.run_extraction(resume=True)[0]["status"], "skipped")
+        self.config.num_orders = 11
+        with self.assertRaisesRegex(ValueError, "structure differs"):
+            self.run_extraction(resume=True)
+
+    def test_conditional_cache_requires_declared_recipe(self):
+        self.use_conditional_recipe()
+        original = FakeConditionalAdapter.metadata
+        for field, value in (("normalization", "canonical_amino_acids_only"),
+                             ("order_aggregation", "arithmetic_mean"),
+                             ("num_orders", 0)):
+            with self.subTest(field=field):
+                def malformed(adapter):
+                    return dict(original(adapter), **{field: value})
+                with patch.object(FakeConditionalAdapter, "metadata", malformed), self.assertRaises(ValueError):
+                    self.run_extraction()
+                self.assertFalse(self.leaf.exists())
+
+    def test_conditional_cache_rejects_excess_mass_and_inconsistent_logs(self):
+        self.use_conditional_recipe()
+        original = FakeConditionalAdapter.predict
+        for kind in ("mass", "logs"):
+            with self.subTest(kind=kind):
+                def invalid(adapter, structure):
+                    output = original(adapter, structure)
+                    if kind == "mass":
+                        output["probabilities"] *= 2
+                        output["log_probs"] = output["probabilities"].log()
+                    else:
+                        output["log_probs"] += 0.1
+                    return output
+                with patch.object(FakeConditionalAdapter, "predict", invalid), self.assertRaises(ValueError):
+                    self.run_extraction()
+                self.assertFalse(self.leaf.exists())
 
     def test_structure_content_mapping_and_source_changes_block_resume(self):
         self.run_extraction()

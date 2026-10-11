@@ -160,7 +160,7 @@ class ProteinMPNNScoringTests(unittest.TestCase):
             "noncanonical_tokens": "excluded_then_renormalized",
             "precision_policy": "float32_log_softmax_reject_probability_underflow", "seed": 5,
         }
-        with patch.object(value, "metadata", return_value=backbone_metadata):
+        with patch.object(value, "_backbone_metadata", return_value=backbone_metadata):
             metadata = value.score_metadata(num_orders=3)
         self.assertEqual(metadata["feature_type"], "scores")
         self.assertEqual(metadata["conditioning_mode"], "sequence_autoregressive")

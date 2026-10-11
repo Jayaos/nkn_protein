@@ -11,6 +11,11 @@ The independent [Kermut baseline](../baselines/kermut/README.md) shares these
 cached inputs, ProteinGym splits and metrics. Its configuration is
 `configs/kermut_esm2_proteinmpnn.json`; run it with
 `python -m baselines.kermut.cli` from the repository root.
+Its default selects ESM2 650M embeddings/scores and the separate ProteinMPNN
+Kermut recipe (`configs/extraction/proteinmpnn_v48_020_kermut.json`): ten
+sequence-conditioned runs with seed 37, averaging log probabilities and
+removing `X` without renormalization. The ProteinMPNN preparation job generates
+this sequence-conditioned cache and the separate variant likelihood scores.
 
 ## Installation and first run
 
