@@ -16,7 +16,8 @@
 # structure manifest, and completed outputs from both run_prepare_rep jobs.
 # Defaults: ESM2 650M layer-33 embeddings and ProteinMPNN sequence-conditioned
 # distributions (10 orders, seed 37), with reference CA coordinates. The mean
-# uses ESM2 650M masked-marginal scores. Cache selections come from the JSON.
+# learns a combination of ESM2 650M masked-marginal and ProteinMPNN sequence
+# log-likelihood scores. Cache selections come from the JSON.
 # Runs our baselines.kermut.cli in the existing nkn_protein environment, on CPU.
 #
 # From the repository root (or a subdirectory):

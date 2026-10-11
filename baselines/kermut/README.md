@@ -16,7 +16,7 @@ and [paper](https://proceedings.neurips.cc/paper_files/paper/2024/file/34547650b
   sites, combining Hellinger distances between amino-acid distributions,
   distances between reference CA atoms, and differences in the substituted
   amino acids' log probabilities. Coordinates retain their Angstrom units.
-- A learned constant plus a learned coefficient multiplying the raw ESM2 score.
+- A learned constant plus a learned coefficient for each raw mean-score source.
   Scores and embeddings are not standardized. Each training split standardizes
   its targets using its own mean and sample standard deviation.
 - One initialization, 150 AdamW updates, learning rate 0.1, weight decay 0.01,
@@ -30,6 +30,8 @@ and [paper](https://proceedings.neurips.cc/paper_files/paper/2024/file/34547650b
 
 The default selects ESM2 **650M** layer-33 embeddings and masked-marginal scores,
 plus ProteinMPNN `v_48_020` distributions prepared with Kermut's extraction recipe.
+The GP mean combines ESM2 and ProteinMPNN variant scores; the publication's
+mean uses ESM2 alone. ProteinMPNN variant scoring uses one order and seed 0.
 For each reference position, ProteinMPNN conditions on the backbone and the
 other wild-type residues, using ten randomized decoding orders with seed 37.
 Extraction averages log probabilities, exponentiates, and removes the unknown
@@ -51,8 +53,8 @@ Start from [`configs/kermut_esm2_proteinmpnn.json`](../../configs/kermut_esm2_pr
 chooses amino-acid distributions. `structure_manifest_dir` locates per-assay
 `<assay_id>.json` manifests and resolves relative to the repository root.
 
-`score_sources` independently selects the GP mean inputs. Its default contains
-only the ESM2 masked-marginal score. For a learned combination, use:
+`score_sources` independently selects the GP mean inputs. The shared JSON
+default combines both sources:
 
 ```json
 "score_sources": [
@@ -61,11 +63,11 @@ only the ESM2 masked-marginal score. For a learned combination, use:
 ]
 ```
 
-Keeping only the second entry uses a ProteinMPNN-only mean. Multiple entries
+Keeping only the first entry uses the publication's ESM2-only mean; keeping
+only the second uses a ProteinMPNN-only mean. Multiple entries
 give `mean(x) = intercept + sum(coefficient[j] * score[j](x))`; all coefficients
-start at one and are trained jointly with the kernel. These alternative means
-are extensions beyond the publication's ESM2-only default. Duplicate sources
-and unknown configuration fields are rejected.
+start at one and are trained jointly with the kernel. Scores remain in their
+raw units. Duplicate sources and unknown configuration fields are rejected.
 
 `model.raw_*` values are initial unconstrained kernel parameters. Positive
 parameters use softplus and `raw_alpha` uses sigmoid. `training` controls the
@@ -114,7 +116,24 @@ posterior, supports unlabeled cached variants and defaults to the adjacent
 resolved configuration. Prediction verifies assay, reference, feature sources,
 structure identity and ordered score sources against the checkpoint.
 
-The CPU Slurm launcher follows the existing NKN job conventions:
+Use either assay-specific CPU launcher:
+
+```bash
+sbatch sbatch_run/run_kermut/run_kermut_A0A1I9GEU1_NEIME_Kennouche_2019.sbatch
+sbatch sbatch_run/run_kermut/run_kermut_FKBP3_HUMAN_Tsuboyama_2023_2KFV.sbatch
+```
+
+Each fixes its named assay and defaults to `data/features/pretrained/<assay>`.
+Both use ESM2 650M layer-33 embeddings, sequence-conditioned ProteinMPNN
+distributions (ten orders, seed 37), and a GP mean combining ESM2 650M
+masked-marginal scores with ProteinMPNN sequence likelihoods (one order, seed 0).
+They forward setting arguments, `--parallel`, and `--config PATH` to the shared
+launcher; `FEATURES` and configuration overrides remain available. Results
+are separated by assay under
+`src/runs/<assay>/kermut_esm2_proteinmpnn_<selection>_<job_id>/`.
+
+The generic CPU Slurm launcher remains available and follows the existing NKN
+job conventions:
 
 ```bash
 sbatch sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch
