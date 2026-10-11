@@ -11,11 +11,12 @@ The independent [Kermut baseline](../baselines/kermut/README.md) shares these
 cached inputs, ProteinGym splits and metrics. Its configuration is
 `configs/kermut_esm2_proteinmpnn.json`; run it with
 `python -m baselines.kermut.cli` from the repository root.
-Its default selects ESM2 650M embeddings/scores and the separate ProteinMPNN
-Kermut recipe (`configs/extraction/proteinmpnn_v48_020_kermut.json`): ten
+The NKN batch preset and Kermut both select ESM2 650M embeddings/scores and
+the ProteinMPNN Kermut recipe (`configs/extraction/proteinmpnn_v48_020_kermut.json`): ten
 sequence-conditioned runs with seed 37, averaging log probabilities and
 removing `X` without renormalization. The ProteinMPNN preparation job generates
 this sequence-conditioned cache and the separate variant likelihood scores.
+NKN uses both ESM2 and ProteinMPNN score tables in its GP mean.
 
 ## Installation and first run
 
@@ -237,8 +238,22 @@ adjacent `resolved_config.json` unless an explicit configuration is supplied.
 The [ESM2 + ProteinMPNN job](../sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch)
 defaults to the real shared cache for `A0A1I9GEU1_NEIME_Kennouche_2019` and
 [`configs/esm2_proteinmpnn_nkn.json`](../configs/esm2_proteinmpnn_nkn.json).
-It requests 15 CPUs and no GPU. ESM2 embeddings and ProteinMPNN distributions
-provide two kernel branches; their two score tables provide the GP mean inputs.
+It requests 15 CPUs and no GPU. ESM2 650M layer-33 embeddings and ProteinMPNN
+sequence-conditioned distributions provide two kernel branches. Their GP mean
+inputs are the ESM2 650M masked-marginal scores and the existing ProteinMPNN
+sequence likelihoods (one order, seed 0). The inverse-folding cache uses ten
+orders with seed 37 and retains the stored 20 amino-acid values without
+renormalization through `inverse_folding_policy: "sequence_conditional"`.
+
+Prepare these inputs before running NKN, and wait for both preparation jobs to
+finish successfully:
+
+```bash
+sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch
+sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
+```
+
+The NKN launcher uses the cluster's existing `nkn_protein` Conda environment.
 
 By default, the job runs `singles`: the three singles settings, five folds each.
 This matches the default assay, whose 922 variants are all single mutants.
@@ -357,6 +372,7 @@ training, enabled-kernel, and evaluation hyperparameters:
 
 | JSON field | Controls |
 | --- | --- |
+| `inverse_folding_policy` | Require normalized distributions, or preserve declared sequence-conditioned ProteinMPNN values |
 | `training.learning_rate`, `training.betas`, `training.epsilon` | Adam optimizer settings |
 | `training.max_steps` | Maximum optimizer updates per initialization |
 | `training.min_steps`, `training.patience`, `training.tolerance` | Earliest stopping step, improvement window, and minimum improvement in NLL per variant |
@@ -412,10 +428,26 @@ still requires its actual features. Empty, duplicate and unknown branch selectio
 are rejected. Omit the setting to retain the original four-branch model.
 
 `feature_selection` independently chooses the family/checkpoint for each feature
-type. For example, select `esm2/esm2_t6_8M_UR50D-layer6-c731040fcd8d` for
-`sequence` and `proteinmpnn/v_48_020-backbone_only-8907e6671bfb` for
+type. The NKN batch preset selects
+`esm2/esm2_t33_650M_UR50D-layer33-08e4846e5371` for `sequence` and
+`proteinmpnn/v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb` for
 `inverse_folding`. Enabling an NKN branch does not select a different pretrained
 model or regenerate its representations.
+
+The preset sets top-level `inverse_folding_policy` to `"sequence_conditional"`.
+The loader verifies the declared ProteinMPNN recipe and retains its raw
+probabilities and log probabilities. Each row's mass can be below one because
+the recipe averages native log probabilities and removes `X` without
+renormalization. NKN's Hellinger kernels retain their formulas; the
+Bhattacharyya kernel's self-similarity equals the row's retained mass rather
+than being forced to one. Omitting the policy keeps the default `"normalized"`
+behavior for existing backbone-only and ESM-IF1 configurations.
+
+For a direct CLI run using the same inputs as the batch job, supply its preset:
+
+```powershell
+python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/esm2_proteinmpnn_nkn.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --assay-index data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv --full-assay --output src/runs/A0A1I9GEU1_NEIME_Kennouche_2019/nkn_650m_random
+```
 
 The GP mean requires at least one mean score source. `score_sources` remains
 independent of kernel branches: when omitted, it uses the distinct feature caches

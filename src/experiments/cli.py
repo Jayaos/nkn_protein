@@ -81,6 +81,7 @@ def _load_batch(args, config, feature_loader=None):
         pooling=config.pooling,
         device=config.device,
         enabled_branches=config.model.enabled_branches,
+        inverse_folding_policy=config.inverse_folding_policy,
     )
     if args.singles_only:
         counts = torch.bincount(batch.owners, minlength=batch.num_variants)

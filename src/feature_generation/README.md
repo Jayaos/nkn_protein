@@ -141,6 +141,15 @@ in the experiment config. GP experiments load only the feature types required by
 enabled. At least one mean score source is still required for the GP mean;
 standalone inverse cache validation does not require scores.
 
+The NKN preset `configs/esm2_proteinmpnn_nkn.json` selects the same
+sequence-conditioned ProteinMPNN cache as Kermut, together with ESM2 650M.
+It declares `inverse_folding_policy: "sequence_conditional"` so the NKN loader
+and kernels preserve the saved values without renormalization. Configurations
+using normalized backbone-only or ESM-IF1 distributions retain the default
+`"normalized"` policy. NKN's separate ProteinMPNN mean-score input still uses
+one autoregressive order with seed 0; feature conditioning does not change
+that scoring recipe.
+
 Upstream implementations: [ProteinMPNN](https://github.com/dauparas/ProteinMPNN),
 [ESM-IF1](https://github.com/facebookresearch/esm/tree/main/examples/inverse_folding).
 
@@ -166,16 +175,16 @@ supply these scores, so a separate inference stage uses the checkpoint's MLM hea
 
 Both existing ESM2 checkpoint configs work (8M and 650M). Scoring always uses the
 final pretrained MLM head; embedding `layer` and representation `cache_id` do not
-select its scoring layer or output directory. The 8M preset is appropriate for
-smoke tests; Kermut's published main ESM2 scores use the 650M checkpoint.
+select its scoring layer or output directory. The main NKN and Kermut presets
+select the 650M checkpoint. The 8M preset remains available for smoke tests.
 
 ```bash
 # Required only if weights/tokenizer are not downloaded yet; valid assets are reused.
-python -m feature_generation.cli download --config configs/extraction/esm2_8m.json
+python -m feature_generation.cli download --config configs/extraction/esm2_650m.json
 
-python -m feature_generation.cli score --config configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --batch-size 8 --max-tokens-per-batch 2048 --resume
+python -m feature_generation.cli score --config configs/extraction/esm2_650m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --batch-size 8 --resume
 
-python -m feature_generation.cli validate --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --feature-type scores --model-family esm2 --cache-id esm2_t6_8M_UR50D-masked_marginals-float32-c731040fcd8d
+python -m feature_generation.cli validate --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --feature-type scores --model-family esm2 --cache-id esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371
 ```
 
 Use `--device cpu` without a GPU. `--batch-size` caps the number of masked WT
@@ -191,7 +200,7 @@ HTTPS from the compute node; verified completed caches are reused on resubmissio
 
 ```text
 data/features/pretrained/<assay>/
-  scores/esm2/esm2_t6_8M_UR50D-masked_marginals-float32-c731040fcd8d/
+  scores/esm2/esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371/
     mean_score.csv
     config.json
     provenance.json
@@ -209,13 +218,14 @@ Select just ESM2 scores for the mean function:
 ```json
 {
   "score_sources": [
-    "scores/esm2/esm2_t6_8M_UR50D-masked_marginals-float32-c731040fcd8d"
+    "scores/esm2/esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371"
   ]
 }
 ```
 
-To use ESM2 and ProteinMPNN together, list both sources. They become separate
-score columns, each standardized using training variants only; the GP learns a
+The NKN batch preset uses ESM2 650M and ProteinMPNN together by listing both
+sources. They become separate score columns, each standardized using training
+variants only; the GP learns a
 coefficient for each. This choice is independent of `model.enabled_branches`.
 
 `configs/esm2_mean_score_smoke.json` selects ESM2 representations and ESM2

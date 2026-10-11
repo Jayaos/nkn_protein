@@ -1,4 +1,8 @@
-"""Unit-amplitude covariance functions for fixed protein representations."""
+"""Covariance functions for fixed vectors and declared amino-acid probabilities.
+
+Normalized probabilities give unit-amplitude primitives. For raw conditional
+weights, the Bhattacharyya diagonal retains each row's probability mass.
+"""
 
 from __future__ import annotations
 
@@ -33,20 +37,32 @@ def _validate_pair(left: Tensor, right: Tensor) -> tuple[Tensor, Tensor]:
     return left.to(dtype=torch.float64), right.to(dtype=torch.float64)
 
 
-def _validate_probabilities(values: Tensor) -> None:
+def _validate_probability_policy(policy: str) -> None:
+    if policy not in ("normalized", "sequence_conditional"):
+        raise ValueError("probability_policy must be 'normalized' or 'sequence_conditional'")
+
+
+def _validate_probabilities(values: Tensor, probability_policy: str = "normalized") -> None:
     if values.shape[1] != 20:
         raise ValueError("Inverse-folding probabilities must have 20 amino-acid columns")
+    if probability_policy == "sequence_conditional":
+        if (values <= 0).any() or (values.sum(dim=1) > 1 + 2e-5).any():
+            raise ValueError("Conditional inverse-folding probabilities must be positive with row mass at most one")
+        return
     if (values < 0).any() or not torch.allclose(
         values.sum(dim=1), values.new_ones(values.shape[0]), atol=1e-6, rtol=1e-6
     ):
         raise ValueError("Inverse-folding probabilities must be nonnegative and sum to one")
 
 
-def initial_lengthscale(inputs: Tensor, *, hellinger: bool = False) -> Tensor:
+def initial_lengthscale(
+    inputs: Tensor, *, hellinger: bool = False, probability_policy: str = "normalized",
+) -> Tensor:
     """Median positive distance, keeping repeated mutation occurrences in the sample."""
+    _validate_probability_policy(probability_policy)
     inputs, _ = _validate_pair(inputs, inputs)
     if hellinger:
-        _validate_probabilities(inputs)
+        _validate_probabilities(inputs, probability_policy)
         inputs = inputs.sqrt() / math.sqrt(2.0)
     with torch.no_grad():
         distances = torch.pdist(inputs, p=2)
@@ -63,13 +79,24 @@ def initial_lengthscale(inputs: Tensor, *, hellinger: bool = False) -> Tensor:
 
 
 class PrimitiveKernel(nn.Module):
-    """A fixed-amplitude primitive with an independent scalar lengthscale, if needed."""
+    """A primitive with an independent scalar lengthscale, if needed.
 
-    def __init__(self, name: str, initial_lengthscale: float | Tensor = 1.0):
+    Conditional probabilities are used without renormalization. Hellinger
+    distances are Euclidean distances between square-root weight vectors;
+    Bhattacharyya values are their dot products, with self-covariance equal to
+    row mass. Both constructions remain positive semidefinite.
+    """
+
+    def __init__(
+        self, name: str, initial_lengthscale: float | Tensor = 1.0,
+        *, probability_policy: str = "normalized",
+    ):
         super().__init__()
         if name not in IF_KERNELS | VECTOR_KERNELS:
             raise ValueError(f"Unknown primitive kernel: {name}")
+        _validate_probability_policy(probability_policy)
         self.name = name
+        self.probability_policy = probability_policy
         if name in DISTANCE_KERNELS:
             value = torch.as_tensor(initial_lengthscale, dtype=torch.float64).detach().clone()
             if value.numel() != 1:
@@ -88,8 +115,8 @@ class PrimitiveKernel(nn.Module):
         if self.raw_lengthscale is not None and self.raw_lengthscale.device != left.device:
             raise ValueError("Move the kernel and its features to the same device")
         if self.name in IF_KERNELS:
-            _validate_probabilities(left)
-            _validate_probabilities(right)
+            _validate_probabilities(left, self.probability_policy)
+            _validate_probabilities(right, self.probability_policy)
             left, right = left.sqrt(), right.sqrt()
             if self.name == "bhattacharyya":
                 return left @ right.T

@@ -45,7 +45,7 @@ class DataConfigTests(unittest.TestCase):
         self.assertTrue((actual.local_features["inverse_folding"].sum(-1) < 0.9).all())
         recipe = json.loads(actual.feature_signature["inverse_folding.probability_recipe"])
         self.assertEqual(recipe, CONDITIONAL_PROBABILITY_RECIPE)
-        with self.assertRaisesRegex(ValueError, "explicit Kermut loader policy"):
+        with self.assertRaisesRegex(ValueError, "explicit sequence_conditional or Kermut loader policy"):
             load_normalized_features(
                 self.features, feature_selection=config.feature_selection,
                 score_sources=config.score_sources, enabled_branches=config.model.enabled_branches,

@@ -275,11 +275,12 @@ def load_feature_bundle(
     New score leaves use scores/family/recipe and a mean_score descriptor; legacy
     zero_shot descriptors in representation leaves remain supported.
     Omitting enabled_branches retains all four branches.
-    Only the Kermut consumer opts into ``inverse_folding_policy="kermut"`` to
-    retain declared geometric-mean ProteinMPNN probabilities without rescaling.
+    Opt into ``inverse_folding_policy="sequence_conditional"`` to preserve
+    declared geometric-mean ProteinMPNN probabilities without rescaling.
+    The ``"kermut"`` policy remains an alias for the Kermut consumer.
     """
-    if inverse_folding_policy not in ("normalized", "kermut"):
-        raise ValueError("inverse_folding_policy must be 'normalized' or 'kermut'")
+    if inverse_folding_policy not in ("normalized", "sequence_conditional", "kermut"):
+        raise ValueError("inverse_folding_policy must be 'normalized', 'sequence_conditional', or 'kermut'")
     branches = BRANCH_NAMES if enabled_branches is None else validate_enabled_branches(enabled_branches)
     needed_types = {"sequence" if name.startswith("sequence_") else name for name in branches}
     root = Path(feature_dir).resolve()
@@ -377,8 +378,8 @@ def load_feature_bundle(
             raise ValueError("Inverse-folding amino-acid alphabet mismatch")
         probability_recipe = kermut_probability_recipe(configs["inverse_folding"])
         if probability_recipe is not None:
-            if inverse_folding_policy != "kermut":
-                raise ValueError("Unnormalized ProteinMPNN probabilities require the explicit Kermut loader policy")
+            if inverse_folding_policy not in ("sequence_conditional", "kermut"):
+                raise ValueError("Sequence-conditioned ProteinMPNN probabilities require an explicit sequence_conditional or Kermut loader policy")
             if (inverse <= 0).any() or (inverse.sum(-1) > 1 + 2e-5).any():
                 raise ValueError("Kermut ProteinMPNN probabilities must be positive with row mass at most one")
         elif (inverse < 0).any() or not torch.allclose(inverse.sum(-1), torch.ones(len(reference), dtype=torch.float64), atol=1e-5, rtol=1e-5):

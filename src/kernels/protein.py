@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import math
+import json
 
 import torch
 from torch import Tensor, nn
 
 from config import BRANCH_NAMES, validate_enabled_branches
+from data_loading.features import kermut_probability_recipe
 from .nkn import NeuralKernelNetwork, PrimitiveNKN
 from .primitives import IF_KERNELS, VECTOR_KERNELS, initial_lengthscale
 
@@ -48,6 +50,10 @@ class ProteinKernel(nn.Module):
         missing = set(self.enabled_branches) - set(config.branches)
         if missing:
             raise ValueError(f"Missing enabled branch configurations: {sorted(missing)}")
+        self.inverse_folding_recipe = (
+            self._probability_recipe(train) if "inverse_folding" in self.enabled_branches else None
+        )
+        self.inverse_folding_policy = "sequence_conditional" if self.inverse_folding_recipe is not None else "normalized"
         self._validate_batch(train)
         self.feature_dimensions = {
             name: self._features(train, name).shape[1] for name in self.enabled_branches
@@ -59,13 +65,30 @@ class ProteinKernel(nn.Module):
             if set(branch_config.copies) - allowed:
                 raise ValueError(f"Invalid primitive kernels for {name}: {set(branch_config.copies) - allowed}")
             features = self._features(train, name)
-            scale = initial_lengthscale(features, hellinger=name == "inverse_folding")
+            policy = self.inverse_folding_policy if name == "inverse_folding" else "normalized"
+            scale = initial_lengthscale(features, hellinger=name == "inverse_folding", probability_policy=policy)
             branches[name] = PrimitiveNKN(
-                branch_config.copies, branch_config.widths, scale * lengthscale_multiplier
+                branch_config.copies, branch_config.widths, scale * lengthscale_multiplier,
+                probability_policy=policy,
             )
         self.branches = nn.ModuleDict(branches)
         self.final_nkn = NeuralKernelNetwork(len(self.enabled_branches), config.final_widths)
         self.to(device=train.owners.device, dtype=torch.float64)
+
+    @staticmethod
+    def _probability_recipe(batch):
+        encoded = getattr(batch, "feature_signature", {}).get("inverse_folding.probability_recipe")
+        if encoded is None:
+            return None
+        if not isinstance(encoded, str):
+            raise ValueError("Invalid inverse-folding probability recipe signature")
+        metadata = json.loads(encoded)
+        if not isinstance(metadata, dict):
+            raise ValueError("Invalid inverse-folding probability recipe signature")
+        recipe = kermut_probability_recipe(metadata)
+        if recipe is None:
+            raise ValueError("Unrecognized inverse-folding probability recipe signature")
+        return recipe
 
     @staticmethod
     def _features(batch, name):
@@ -78,6 +101,8 @@ class ProteinKernel(nn.Module):
         return features
 
     def _validate_batch(self, batch) -> None:
+        if "inverse_folding" in self.enabled_branches and self._probability_recipe(batch) != self.inverse_folding_recipe:
+            raise ValueError("Inverse-folding probability recipe differs from its training recipe")
         if isinstance(batch.num_variants, bool) or not isinstance(batch.num_variants, int) or batch.num_variants < 0:
             raise ValueError("FeatureBatch.num_variants must be a nonnegative integer")
         if batch.owners.ndim != 1 or batch.owners.dtype != torch.long:

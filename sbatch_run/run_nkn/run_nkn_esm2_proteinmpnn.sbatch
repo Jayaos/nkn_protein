@@ -12,8 +12,10 @@
 #SBATCH --mail-user=jlee3541@gatech.edu
 
 # Requires the nkn_protein Conda environment and completed outputs from both
-# run_prepare_rep jobs. ESM2 embeddings and ProteinMPNN distributions feed the
-# two kernel branches; their scores feed the learned GP mean. CPU only.
+# run_prepare_rep jobs. Defaults select ESM2 650M layer-33 embeddings and
+# sequence-conditioned ProteinMPNN features (10 orders, seed 37), preserved
+# without renormalization. ESM2 650M masked-marginal and ProteinMPNN sequence-
+# likelihood scores feed the learned GP mean. CPU only.
 #
 # From the repository root (or a subdirectory):
 #   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch [singles|all|SETTING] [--config PATH] [--parallel]
@@ -221,6 +223,10 @@ print(f"CPU allocation: {execution_plan['allocated_cpus']}; "
 print(f"Python: {sys.executable}")
 print(f"PyTorch: {torch.__version__}; device: cpu; threads: {config.num_threads}")
 print(f"Kernel branches: {', '.join(config.model.enabled_branches)}")
+print(f"Sequence cache: {config.feature_selection.get('sequence')}")
+print(f"ProteinMPNN cache: {config.feature_selection.get('inverse_folding')}")
+print(f"ProteinMPNN input policy: {config.inverse_folding_policy}")
+print(f"Mean score caches: {config.score_sources}")
 print(f"GP mean score sources: {len(config.score_sources) if config.score_sources is not None else 'cache defaults'}")
 print(f"Training: up to {config.training.max_steps} steps per initialization; seeds {config.training.seeds}")
 PY
@@ -257,6 +263,7 @@ torch.set_num_threads(config.num_threads)
 batch = load_feature_bundle(
     sys.argv[2], feature_selection=config.feature_selection,
     score_sources=config.score_sources, pooling=config.pooling,
+    inverse_folding_policy=config.inverse_folding_policy,
     device=config.device, enabled_branches=config.model.enabled_branches,
 )
 output = Path(sys.argv[1]).parent

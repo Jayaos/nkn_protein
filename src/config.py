@@ -152,6 +152,7 @@ class ExperimentConfig:
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     feature_selection: dict = field(default_factory=dict)
     score_sources: list | None = None
+    inverse_folding_policy: str = "normalized"
     pooling: str = "mean"
     device: str = "cpu"
     num_threads: int = 1
@@ -164,6 +165,8 @@ class ExperimentConfig:
             raise ValueError("num_threads must be a positive integer")
         if self.pooling != "mean":
             raise ValueError("The current cache adapter supports mean pooling; supply custom pooled features through FeatureBatch")
+        if self.inverse_folding_policy not in ("normalized", "sequence_conditional"):
+            raise ValueError("inverse_folding_policy must be 'normalized' or 'sequence_conditional'")
 
     def to_dict(self):
         return asdict(self)

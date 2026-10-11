@@ -1,6 +1,7 @@
 """Numerical and aggregation checks independent of any pretrained model."""
 
 import math
+import json
 import unittest
 from types import SimpleNamespace
 
@@ -19,6 +20,12 @@ from kernels import (
 
 
 DTYPE = torch.float64
+CONDITIONAL_RECIPE = {
+    "model_family": "proteinmpnn", "conditioning_mode": "sequence_conditional",
+    "inference_method": "conditional_probs", "normalization": "native_21_amino_acid_tokens",
+    "noncanonical_tokens": "excluded_without_renormalization",
+    "order_aggregation": "geometric_mean_of_probabilities", "num_orders": 10, "seed": 37,
+}
 
 
 def batch(global_features, vectors, owners, positions=None):
@@ -110,6 +117,58 @@ class PrimitiveTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             PrimitiveKernel("bhattacharyya")(torch.ones(1, 20, dtype=DTYPE))
 
+    def test_conditional_closed_forms_preserve_mass_without_renormalization(self):
+        weights = torch.tensor([[0.01] * 20, [0.04] * 20], dtype=DTYPE)
+        untouched = weights.clone()
+        distance = math.sqrt(0.1)
+        policy = {"probability_policy": "sequence_conditional"}
+        self.assertAlmostEqual(initial_lengthscale(weights, hellinger=True, **policy).item(), distance)
+        self.assertAlmostEqual(PrimitiveKernel("hellinger_exp", 2, **policy)(weights)[0, 1].item(), math.exp(-distance / 2))
+        self.assertAlmostEqual(PrimitiveKernel("hellinger_rbf", 2, **policy)(weights)[0, 1].item(), math.exp(-0.1 / 8))
+        torch.testing.assert_close(PrimitiveKernel("bhattacharyya", **policy)(weights),
+                                   torch.tensor([[0.2, 0.4], [0.4, 0.8]], dtype=DTYPE))
+        torch.testing.assert_close(weights, untouched, rtol=0, atol=0)
+        # Identical normalized rows would have zero Hellinger distance; these
+        # distinct raw masses intentionally retain a nonzero distance.
+        with self.assertRaisesRegex(ValueError, "sum to one"):
+            initial_lengthscale(weights, hellinger=True)
+        for name in ("hellinger_exp", "hellinger_rbf", "bhattacharyya"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "sum to one"):
+                PrimitiveKernel(name)(weights)
+
+    def test_conditional_primitives_are_psd_with_finite_gradients_at_duplicates(self):
+        generator = torch.Generator().manual_seed(36)
+        weights = torch.softmax(torch.randn(4, 20, dtype=DTYPE, generator=generator), dim=-1)
+        weights *= torch.tensor([0.2, 0.5, 0.8, 0.6], dtype=DTYPE)[:, None]
+        weights = torch.cat([weights, weights[:1]])
+        for name in ("hellinger_exp", "hellinger_rbf", "bhattacharyya"):
+            with self.subTest(name=name):
+                inputs = weights.clone().requires_grad_()
+                kernel = PrimitiveKernel(name, 1.3, probability_policy="sequence_conditional")
+                covariance = kernel(inputs)
+                torch.testing.assert_close(covariance, covariance.T)
+                self.assertGreaterEqual(torch.linalg.eigvalsh(covariance).min().item(), -1e-10)
+                covariance.square().sum().backward()
+                self.assertTrue(torch.isfinite(inputs.grad).all())
+                if kernel.raw_lengthscale is not None:
+                    self.assertTrue(torch.isfinite(kernel.raw_lengthscale.grad))
+
+    def test_conditional_policy_rejects_invalid_weights_and_unknown_policy(self):
+        invalid_weights = [torch.full((2, 19), 0.01, dtype=DTYPE),
+                           torch.full((2, 20), 0.1, dtype=DTYPE)]
+        for invalid_value in (0.0, -0.1, float("nan"), float("inf")):
+            weights = torch.full((2, 20), 0.01, dtype=DTYPE)
+            weights[0, 0] = invalid_value
+            invalid_weights.append(weights)
+        kernel = PrimitiveKernel("bhattacharyya", probability_policy="sequence_conditional")
+        for weights in invalid_weights:
+            with self.subTest(weights=weights), self.assertRaises(ValueError):
+                kernel(weights)
+            with self.assertRaises(ValueError):
+                initial_lengthscale(weights, hellinger=True, probability_policy="sequence_conditional")
+        with self.assertRaisesRegex(ValueError, "probability_policy"):
+            PrimitiveKernel("bhattacharyya", probability_policy="anything")
+
 
 class NKNTests(unittest.TestCase):
     def test_affine_bias_and_adjacent_products(self):
@@ -132,6 +191,16 @@ class NKNTests(unittest.TestCase):
         features = torch.tensor([[1., 0.], [-1., 0.], [0., 1.], [1., 1.]], dtype=DTYPE)
         kernel = PrimitiveNKN({"cosine": 1, "rbf": 2}, (4, 2, 1))
         covariance = kernel(features)
+        self.assertGreaterEqual(torch.linalg.eigvalsh(covariance).min().item(), -1e-10)
+        covariance.square().sum().backward()
+        self.assertTrue(all(parameter.grad is not None and torch.isfinite(parameter.grad).all() for parameter in kernel.parameters()))
+
+    def test_nkn_preserves_conditional_covariance_and_finite_parameter_gradients(self):
+        weights = torch.tensor([[0.01] * 20, [0.04] * 20, [0.01] * 20], dtype=DTYPE)
+        copies = {"hellinger_exp": 1, "hellinger_rbf": 1, "bhattacharyya": 1}
+        kernel = PrimitiveNKN(copies, (4, 2, 1), probability_policy="sequence_conditional")
+        self.assertTrue(all(primitive.probability_policy == "sequence_conditional" for primitive in kernel.primitives))
+        covariance = kernel(weights)
         self.assertGreaterEqual(torch.linalg.eigvalsh(covariance).min().item(), -1e-10)
         covariance.square().sum().backward()
         self.assertTrue(all(parameter.grad is not None and torch.isfinite(parameter.grad).all() for parameter in kernel.parameters()))
@@ -213,6 +282,41 @@ class ProteinKernelTests(unittest.TestCase):
             for first, second in zip(self.kernel.branches[name].primitives, restarted.branches[name].primitives):
                 if first.lengthscale is not None:
                     torch.testing.assert_close(second.lengthscale, first.lengthscale / 2)
+
+    def test_conditional_recipe_routes_policy_and_rejects_unmarked_or_changed_inputs(self):
+        weights = torch.tensor([[0.01] * 20, [0.04] * 20, [0.02] * 20], dtype=DTYPE)
+        self.features.local_features["inverse_folding"] = weights
+        with self.assertRaisesRegex(ValueError, "sum to one"):
+            ProteinKernel(model_config(), self.features)
+        self.features.feature_signature = {
+            "inverse_folding.probability_recipe": json.dumps(CONDITIONAL_RECIPE),
+        }
+        kernel = ProteinKernel(model_config(), self.features)
+        self.assertEqual(kernel.inverse_folding_policy, "sequence_conditional")
+        for name, branch in kernel.branches.items():
+            expected = "sequence_conditional" if name == "inverse_folding" else "normalized"
+            self.assertEqual({primitive.probability_policy for primitive in branch.primitives}, {expected})
+        covariance = kernel(self.features)
+        self.assertGreaterEqual(torch.linalg.eigvalsh(covariance).min().item(), -1e-10)
+        covariance.square().sum().backward()
+        self.assertTrue(all(parameter.grad is not None and torch.isfinite(parameter.grad).all() for parameter in kernel.parameters()))
+        for signature in ({}, {"inverse_folding.probability_recipe": json.dumps({**CONDITIONAL_RECIPE, "seed": 38})}):
+            changed = SimpleNamespace(**{**vars(self.features), "feature_signature": signature})
+            with self.assertRaisesRegex(ValueError, "recipe differs"):
+                kernel(self.features, changed)
+            with self.assertRaisesRegex(ValueError, "recipe differs"):
+                kernel(changed, self.features)
+        # A model initialized from legacy normalized distributions likewise
+        # cannot silently change its input contract during prediction.
+        with self.assertRaisesRegex(ValueError, "recipe differs"):
+            self.kernel(self.features)
+
+    def test_conditional_recipe_must_be_complete_before_kernel_initialization(self):
+        for encoded in ('{}', '[]', json.dumps({**CONDITIONAL_RECIPE, "num_orders": 0})):
+            with self.subTest(encoded=encoded):
+                self.features.feature_signature = {"inverse_folding.probability_recipe": encoded}
+                with self.assertRaises(ValueError):
+                    ProteinKernel(model_config(), self.features)
 
 
 if __name__ == "__main__":

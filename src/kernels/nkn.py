@@ -86,6 +86,8 @@ class PrimitiveNKN(nn.Module):
         copies: Mapping[str, int],
         widths: Sequence[int] = (8, 4, 4, 2, 1),
         initial_lengthscale: float | Tensor = 1.0,
+        *,
+        probability_policy: str = "normalized",
     ):
         super().__init__()
         if not copies or any(
@@ -94,7 +96,7 @@ class PrimitiveNKN(nn.Module):
         ):
             raise ValueError("Primitive copy counts must be nonnegative integers")
         self.primitives = nn.ModuleList(
-            PrimitiveKernel(name, initial_lengthscale)
+            PrimitiveKernel(name, initial_lengthscale, probability_policy=probability_policy)
             # Configuration serialization may reorder mapping keys. Keep channel
             # ordering stable so reloaded weights still address the same kernels.
             for name, count in sorted(copies.items())
