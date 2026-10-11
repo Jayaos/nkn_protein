@@ -14,9 +14,10 @@
 # Independent baseline under baselines/kermut; no imports from top-level kermut.
 # Requires the nkn_protein Conda environment, cached scalar scores, a registered
 # structure manifest, and completed outputs from both run_prepare_rep jobs.
-# ESM2 embeddings and ProteinMPNN distributions feed the
-# local/global covariance with reference CA coordinates. The default mean uses
-# the ESM2 score; select other scores or combinations in JSON. CPU only.
+# Defaults: ESM2 650M layer-33 embeddings and ProteinMPNN sequence-conditioned
+# distributions (10 orders, seed 37), with reference CA coordinates. The mean
+# uses ESM2 650M masked-marginal scores. Cache selections come from the JSON.
+# Runs our baselines.kermut.cli in the existing nkn_protein environment, on CPU.
 #
 # From the repository root (or a subdirectory):
 #   sbatch sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch [singles|all|SETTING] [--config PATH] [--parallel]
@@ -224,6 +225,9 @@ print(f"CPU allocation: {execution_plan['allocated_cpus']}; "
 print(f"Python: {sys.executable}")
 print(f"PyTorch: {torch.__version__}; device: cpu; threads: {config.num_threads}")
 print(f"Kernel branches: {', '.join(config.model.enabled_branches)}")
+print(f"Sequence cache: {config.feature_selection.get('sequence')}")
+print(f"ProteinMPNN cache: {config.feature_selection.get('inverse_folding')}")
+print(f"Mean score caches: {config.score_sources}")
 print(f"GP mean score sources: {len(config.score_sources) if config.score_sources is not None else 'cache defaults'}")
 print(f"Training: {config.training.n_steps} AdamW updates; one initialization; seed {config.training.seed}; final iterate")
 PY
