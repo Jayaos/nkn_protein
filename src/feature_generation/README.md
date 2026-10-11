@@ -234,7 +234,7 @@ modalities and both mean-score sources. Both configs run only five training step
 for integration testing:
 
 ```bash
-python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/esm2_mean_score_smoke.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --output src/runs/esm2_mean_smoke
+python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/esm2_mean_score_smoke.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --output results/esm2_mean_smoke
 ```
 
 Recipe references: [official ESM variant scoring](https://github.com/facebookresearch/esm/blob/main/examples/variant-prediction/predict.py),
@@ -321,7 +321,7 @@ and ProteinMPNN representations with these scores and five GP training steps.
 This is an integration smoke test, not a converged performance experiment:
 
 ```bash
-python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/esm2_proteinmpnn_mean_score_smoke.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --output src/runs/esm2_proteinmpnn_mean_smoke
+python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/esm2_proteinmpnn_mean_score_smoke.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --output results/esm2_proteinmpnn_mean_smoke
 ```
 
 The GP loader validates dedicated score caches, joins scores by variant ID and

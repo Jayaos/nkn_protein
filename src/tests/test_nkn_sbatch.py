@@ -130,7 +130,7 @@ class NknSbatchTests(unittest.TestCase):
         result = subprocess.run([BASH, str(self.script), *arguments], cwd=self.root, env=environment,
                                 capture_output=True, text=True, timeout=30)
         records = [json.loads(path.read_text()) for path in (self.root / "records").glob("*.json")]
-        plans = list((self.root / "src/runs").rglob("execution_plan.json"))
+        plans = list((self.root / "results").rglob("execution_plan.json"))
         plan = json.loads(plans[0].read_text()) if plans else None
         return result, records, plan
 
@@ -179,7 +179,7 @@ class NknSbatchTests(unittest.TestCase):
             config_environment='missing-environment-config.json',
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        runtime = next((self.root / 'src/runs').rglob('config.json'))
+        runtime = next((self.root / 'results').rglob('config.json'))
         saved = json.loads(runtime.read_text())
         config.update(device='cpu', num_threads=1)
         # Configuration classes fill in defaults and normalize branch order.

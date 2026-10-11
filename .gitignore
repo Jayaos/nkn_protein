@@ -11,7 +11,7 @@ dist/
 /notebooks/
 /script/
 /scripts/
-src/runs/
+/results/
 /kermut/
 /Neural-Kernel-Network/
 requirements.txt

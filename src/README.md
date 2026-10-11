@@ -46,7 +46,7 @@ PowerShell session. If you already have the named Conda environment, update its
 dependencies with `conda env update -f env.yaml`. Then run the fixture checks:
 
 ```powershell
-python -m experiments.cli validate --features data/features/A0A1I9GEU1_NEIME_Kennouche_2019 --assay-index data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv --allow-subset --output src/runs/fixture_validation
+python -m experiments.cli validate --features data/features/A0A1I9GEU1_NEIME_Kennouche_2019 --assay-index data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv --allow-subset --output results/fixture_validation
 python -m unittest discover -s src/tests -p test_pipeline.py -v
 ```
 
@@ -194,13 +194,13 @@ mutation positions across folds. Published ProteinGym protocols have five folds;
 test configurations with explicit assignments can use fewer folds.
 
 ```powershell
-python -m experiments.cli cv --features PATH_TO_CACHE --folds PATH_TO_SINGLES_FOLDS.csv --setting singles_random --output src/runs/assay_random
-python -m experiments.cli cv --features PATH_TO_CACHE --folds PATH_TO_SINGLES_FOLDS.csv --setting singles_modulo --output src/runs/assay_modulo
-python -m experiments.cli cv --features PATH_TO_MIXED_CACHE --folds PATH_TO_MULTIPLES_FOLDS.csv --setting mixed_random_singles --output src/runs/assay_mixed
-python -m experiments.cli fit --features PATH_TO_MIXED_CACHE --setting single_to_double --sample-ratio 0.8 --split-seed 2024 --output src/runs/single_to_double
+python -m experiments.cli cv --features PATH_TO_CACHE --folds PATH_TO_SINGLES_FOLDS.csv --setting singles_random --output results/assay_random
+python -m experiments.cli cv --features PATH_TO_CACHE --folds PATH_TO_SINGLES_FOLDS.csv --setting singles_modulo --output results/assay_modulo
+python -m experiments.cli cv --features PATH_TO_MIXED_CACHE --folds PATH_TO_MULTIPLES_FOLDS.csv --setting mixed_random_singles --output results/assay_mixed
+python -m experiments.cli fit --features PATH_TO_MIXED_CACHE --setting single_to_double --sample-ratio 0.8 --split-seed 2024 --output results/single_to_double
 # Train on all singles and test on all doubles:
-python -m experiments.cli fit --features PATH_TO_MIXED_CACHE --setting single_to_double --sample-ratio 1.0 --output src/runs/single_to_double_all_singles
-python -m experiments.cli predict --features PATH_TO_NEW_VARIANTS --checkpoint src/runs/assay_modulo/fold_0/checkpoint.pt --output src/runs/prediction
+python -m experiments.cli fit --features PATH_TO_MIXED_CACHE --setting single_to_double --sample-ratio 1.0 --output results/single_to_double_all_singles
+python -m experiments.cli predict --features PATH_TO_NEW_VARIANTS --checkpoint results/assay_modulo/fold_0/checkpoint.pt --output results/prediction
 ```
 
 The extrapolation setting accepts two `fit` options: `--sample-ratio` (default
@@ -265,7 +265,25 @@ An assay without doubles fails when a mixed or extrapolation setting is requeste
 settings are never silently skipped. The job requires published column names and
 five folds, and never generates replacement assignments.
 
-Submit from the repository root on the cluster:
+Use either assay-specific launcher from the repository root on the cluster:
+
+```bash
+sbatch sbatch_run/run_nkn/run_nkn_A0A1I9GEU1_NEIME_Kennouche_2019.sbatch
+sbatch sbatch_run/run_nkn/run_nkn_FKBP3_HUMAN_Tsuboyama_2023_2KFV.sbatch
+
+# Run all 15 singles fits concurrently for either assay:
+sbatch sbatch_run/run_nkn/run_nkn_A0A1I9GEU1_NEIME_Kennouche_2019.sbatch singles --parallel
+sbatch sbatch_run/run_nkn/run_nkn_FKBP3_HUMAN_Tsuboyama_2023_2KFV.sbatch singles --parallel
+```
+
+Each fixes its named assay and defaults to `data/features/pretrained/<assay>`.
+Both use the shared NKN preset's ESM2 650M and sequence-conditioned ProteinMPNN
+features, with both score sources in the GP mean. They forward settings,
+`--parallel`, and `--config PATH` to the shared launcher; `FEATURES` and
+`NKN_CONFIG` overrides remain available. Outputs use the assay-specific
+`results/<assay>/` directory described below.
+
+The generic launcher also remains available:
 
 ```bash
 # Default assay, all three singles settings: 15 fold fits
@@ -303,7 +321,7 @@ precedence over the default preset. Config paths may be absolute or relative to
 the repository root. See the hyperparameter fields below.
 
 Each submission creates
-`src/runs/<assay>/nkn_esm2_proteinmpnn_<selection>_<job-id>/`.
+`results/<assay>/nkn_esm2_proteinmpnn_<selection>_<job-id>/`.
 CV results are saved under `cv/<setting>/`; extrapolation is under
 `fit/single_to_double/`. For `all`, both mixed-domain results are in
 `cv/mixed_random_singles/metrics.json` under `setting_metrics`.
@@ -314,7 +332,7 @@ records `sample_ratio` and `split_seed`.
 The top-level `config.json` records the expanded configuration actually used,
 including defaults and the job's CPU and thread settings.
 
-`ASSAY` chooses the assay; `FEATURES` overrides its default
+For the generic launcher, `ASSAY` chooses the assay. `FEATURES` overrides the default
 `data/features/pretrained/<assay>` cache. `SINGLES_FOLDS_CSV` and
 `MULTIPLES_FOLDS_CSV` override the corresponding published files. `SAMPLE_RATIO`
 (default `0.8`) controls the fraction of singles used for extrapolation training;
@@ -446,7 +464,7 @@ behavior for existing backbone-only and ESM-IF1 configurations.
 For a direct CLI run using the same inputs as the batch job, supply its preset:
 
 ```powershell
-python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/esm2_proteinmpnn_nkn.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --assay-index data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv --full-assay --output src/runs/A0A1I9GEU1_NEIME_Kennouche_2019/nkn_650m_random
+python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/esm2_proteinmpnn_nkn.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --assay-index data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv --full-assay --output results/A0A1I9GEU1_NEIME_Kennouche_2019/nkn_650m_random
 ```
 
 The GP mean requires at least one mean score source. `score_sources` remains

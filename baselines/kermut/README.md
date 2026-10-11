@@ -107,7 +107,7 @@ python -m baselines.kermut.cli --help
 For the current assay's five-fold random single-mutant evaluation:
 
 ```powershell
-python -m baselines.kermut.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/kermut_esm2_proteinmpnn.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --assay-index data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv --full-assay --output src/runs/A0A1I9GEU1_NEIME_Kennouche_2019/kermut_random
+python -m baselines.kermut.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/kermut_esm2_proteinmpnn.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --assay-index data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv --full-assay --output results/A0A1I9GEU1_NEIME_Kennouche_2019/kermut_random
 ```
 
 Output directories must be new or empty. `validate` checks inputs without
@@ -130,7 +130,7 @@ masked-marginal scores with ProteinMPNN sequence likelihoods (one order, seed 0)
 They forward setting arguments, `--parallel`, and `--config PATH` to the shared
 launcher; `FEATURES` and configuration overrides remain available. Results
 are separated by assay under
-`src/runs/<assay>/kermut_esm2_proteinmpnn_<selection>_<job_id>/`.
+`results/<assay>/kermut_esm2_proteinmpnn_<selection>_<job_id>/`.
 
 The generic CPU Slurm launcher remains available and follows the existing NKN
 job conventions:
@@ -145,7 +145,7 @@ Default assay: `FKBP3_HUMAN_Tsuboyama_2023_2KFV`. Default selection: all three
 singles protocols, for 15 fits. The launcher accepts `ASSAY`, `FEATURES`,
 `KERMUT_CONFIG` (overridden by `--config`), `SINGLES_FOLDS_CSV`, and
 `MULTIPLES_FOLDS_CSV`. It snapshots published fold files and the resolved JSON.
-Results go under `src/runs/<assay>/kermut_esm2_proteinmpnn_<selection>_<job_id>/`.
+Results go under `results/<assay>/kermut_esm2_proteinmpnn_<selection>_<job_id>/`.
 Like the NKN launcher, it activates the cluster's `nkn_protein` Conda environment.
 
 The launcher requests **15 CPUs by default**. Add `--parallel` to run all 15

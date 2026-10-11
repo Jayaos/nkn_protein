@@ -166,7 +166,7 @@ export CUDA_VISIBLE_DEVICES=""
 
 assay_index="data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv"
 run_id="${SLURM_JOB_ID:-manual_$(date -u +%Y%m%dT%H%M%SZ)}"
-run_root="src/runs/$assay/nkn_esm2_proteinmpnn_${selection}_${run_id}"
+run_root="results/$assay/nkn_esm2_proteinmpnn_${selection}_${run_id}"
 runtime_config="$run_root/config.json"
 
 # Refuse to reuse a previous run's directory or overwrite its results.
