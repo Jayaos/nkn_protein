@@ -49,7 +49,7 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 
 config="configs/extraction/esm2_650m.json"
-assay="A0A1I9GEU1_NEIME_Kennouche_2019"
+assay="FKBP3_HUMAN_Tsuboyama_2023_2KFV"
 printf 'Job: %s\nRepository: %s\nAssay: %s\n' "${SLURM_JOB_ID:-manual}" "$project_root" "$assay"
 python -u - "$config" "$assay" <<'PY'
 import sys

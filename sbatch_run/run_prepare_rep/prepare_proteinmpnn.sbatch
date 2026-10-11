@@ -54,7 +54,7 @@ export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 feature_config="configs/extraction/proteinmpnn_v48_020_kermut.json"
 # Scoring uses its own seed-0 recipe, independently of feature conditioning.
 score_config="configs/extraction/proteinmpnn_v48_020.json"
-assay="A0A1I9GEU1_NEIME_Kennouche_2019"
+assay="FKBP3_HUMAN_Tsuboyama_2023_2KFV"
 printf 'Job: %s\nRepository: %s\nAssay: %s\n' "${SLURM_JOB_ID:-manual}" "$project_root" "$assay"
 # Check the environment and raw assay inputs before starting any downloads.
 python -u - "$feature_config" "$assay" "$score_config" <<'PY'
