@@ -93,6 +93,7 @@ The CPU Slurm launcher follows the existing NKN job conventions:
 
 ```bash
 sbatch sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch
+sbatch sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch singles --parallel
 sbatch sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch singles_random --config configs/kermut_esm2_proteinmpnn.json
 ```
 
@@ -102,6 +103,36 @@ singles protocols, for 15 fits. The launcher accepts `ASSAY`, `FEATURES`,
 `MULTIPLES_FOLDS_CSV`. It snapshots published fold files and the resolved JSON.
 Results go under `src/runs/<assay>/kermut_esm2_proteinmpnn_<selection>_<job_id>/`.
 Like the NKN launcher, it activates the cluster's `nkn_protein` Conda environment.
+
+The launcher requests **15 CPUs by default**. Add `--parallel` to run all 15
+singles fits concurrently: three setting processes, each with five fold workers
+and one CPU thread per worker. Without `--parallel`, settings and folds remain
+sequential and each fit uses the full CPU allocation. To run only one setting
+with five simultaneous single-threaded folds:
+
+```bash
+sbatch --cpus-per-task=5 sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch singles_random --parallel
+```
+
+The launcher derives worker and thread counts from `SLURM_CPUS_PER_TASK`, keeping
+the total fitting threads within the allocation. It saves `execution_plan.json`
+and writes parallel setting logs to `logs/<setting>.log`. Fold checkpoints and
+metrics retain their existing paths. Each worker runs the Kermut model with the
+same configured precision, fixed AdamW update count, raw mean scores and
+training-only target transform; the final iterate is still saved. Both mixed
+domains still share five fits when using `all --parallel`.
+
+For direct CLI use, add `cv --fold-workers N` (at most the configured number of
+folds), use `device: "cpu"`, and set JSON `num_threads` to the thread count **per
+worker**. For example, five workers on five CPUs need `num_threads: 1`. The
+default remains one fold worker. Parallel workers preserve progress and failure
+artifacts; a failed fold prevents aggregate results from being reported as
+complete.
+
+The default `--mem=16G` is shared by the entire job. Concurrent fits hold separate
+models and covariance tensors, so increase `--mem` if the assay needs more
+memory. Parallel mode applies to a new submission, and does not resume or change
+an already running job.
 
 ## Six experiment settings
 

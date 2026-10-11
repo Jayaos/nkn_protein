@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import importlib
 import json
 import math
 import multiprocessing
@@ -345,15 +346,43 @@ def _worker_thread_environment(num_threads):
                 os.environ[name] = value
 
 
-def _initialize_fold_worker(batch, folds, config, output, setting, events, cancelled):
+def _validate_parallel_fit_function(fit_function):
+    """Fail before writing artifacts when a callback cannot survive spawn."""
+    if fit_function is None:
+        return
+    message = (
+        "A custom fit_function for parallel folds must be an importable module-level callable; "
+        "use fold_workers=1 for local callbacks"
+    )
+    module_name = getattr(fit_function, "__module__", None)
+    name = getattr(fit_function, "__name__", None)
+    if (
+        not callable(fit_function)
+        or not isinstance(module_name, str)
+        or module_name in ("__main__", "__mp_main__")
+        or not isinstance(name, str)
+        or not name.isidentifier()
+        or getattr(fit_function, "__qualname__", None) != name
+    ):
+        raise ValueError(message)
+    try:
+        module = importlib.import_module(module_name)
+        if getattr(module, name, None) is not fit_function:
+            raise ValueError("Callback differs from the module-level object")
+        multiprocessing.reduction.ForkingPickler.dumps(fit_function)
+    except Exception as error:
+        raise ValueError(message) from error
+
+
+def _initialize_fold_worker(batch, folds, config, output, setting, events, cancelled, fit_function):
     global _FOLD_WORKER_STATE
     torch.set_num_threads(config.num_threads)
     torch.set_num_interop_threads(1)
-    _FOLD_WORKER_STATE = (batch, folds, config, output, setting, events, cancelled)
+    _FOLD_WORKER_STATE = (batch, folds, config, output, setting, events, cancelled, fit_function)
 
 
 def _run_fold_worker(fold):
-    batch, folds, config, output, setting, events, cancelled = _FOLD_WORKER_STATE
+    batch, folds, config, output, setting, events, cancelled, fit_function = _FOLD_WORKER_STATE
     if cancelled.is_set():
         raise CancelledError("Fold cancelled before starting")
     fold_output = output / f"fold_{fold}"
@@ -377,7 +406,10 @@ def _run_fold_worker(fold):
         events.put(event)
 
     try:
-        return _run_fold(batch, folds, config, output, setting, fold, progress, cancelled=cancelled)
+        return _run_fold(
+            batch, folds, config, output, setting, fold, progress,
+            fit_function=fit_function, cancelled=cancelled,
+        )
     finally:
         if progress_handle is not None:
             progress_handle.close()
@@ -393,7 +425,7 @@ def _drain_fold_events(events, progress):
             progress(event)
 
 
-def _run_parallel_folds(batch, folds, config, output, setting, fold_workers, progress):
+def _run_parallel_folds(batch, folds, config, output, setting, fold_workers, progress, fit_function=None):
     context = multiprocessing.get_context("spawn")
     events, cancelled = context.Queue(), context.Event()
     received = queue.Queue()
@@ -422,7 +454,7 @@ def _run_parallel_folds(batch, folds, config, output, setting, fold_workers, pro
             with ProcessPoolExecutor(
                 max_workers=fold_workers, mp_context=context,
                 initializer=_initialize_fold_worker,
-                initargs=(batch, folds, config, output, setting, events, cancelled),
+                initargs=(batch, folds, config, output, setting, events, cancelled, fit_function),
             ) as executor:
                 try:
                     futures = {executor.submit(_run_fold_worker, fold): fold for fold in range(config.evaluation.n_folds)}
@@ -474,14 +506,17 @@ def run_cv(
     fit_function: Callable | None = None,
     fold_workers: int = 1,
 ) -> dict[str, Any]:
-    """Cross-validate, optionally using CPU processes with num_threads per fold."""
+    """Cross-validate, optionally using CPU processes with num_threads per fold.
+
+    Parallel custom fit functions must be importable module-level callables.
+    Progress callbacks run in the parent and may remain local closures.
+    """
     if type(fold_workers) is not int or not 1 <= fold_workers <= config.evaluation.n_folds:
         raise ValueError("fold_workers must be an integer between 1 and n_folds")
     if fold_workers > 1:
         if torch.device(config.device).type != "cpu":
             raise ValueError("Parallel folds require device='cpu'")
-        if fit_function is not None:
-            raise ValueError("Parallel folds do not support a custom fit_function; use fold_workers=1")
+        _validate_parallel_fit_function(fit_function)
     _require_targets(batch)
     _validate_setting(batch, setting, scheme)
     torch.set_num_threads(config.num_threads)
@@ -494,7 +529,9 @@ def run_cv(
             "fold_workers": fold_workers, "threads_per_fold": config.num_threads,
             "start_method": "spawn",
         })
-        fold_results = _run_parallel_folds(batch, folds, config, output, setting, fold_workers, progress)
+        fold_results = _run_parallel_folds(
+            batch, folds, config, output, setting, fold_workers, progress, fit_function,
+        )
     else:
         fold_results = (
             _run_fold(batch, folds, config, output, setting, fold, progress, fit_function)

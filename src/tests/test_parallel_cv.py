@@ -6,13 +6,22 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+from types import FunctionType
 import unittest
+from unittest.mock import patch
 
 import torch
 
 from experiments import run_cv
-from gp.training import FittedGP
+from gp.training import FittedGP, fit_gp
 from test_pipeline import read_predictions, small_config, synthetic_batch
+
+
+def importable_fit(training, model_config, training_config, *, progress=None):
+    """Expose whether the selected callback executes inside each child."""
+    if progress is not None:
+        progress({"event": "custom_fit", "pid": os.getpid()})
+    return fit_gp(training, model_config, training_config, progress=progress)
 
 
 class ParallelCVTests(unittest.TestCase):
@@ -67,6 +76,31 @@ class ParallelCVTests(unittest.TestCase):
         self.assertLessEqual(len(pids), 2)
         self.assertEqual(json.loads((parallel / "execution.json").read_text())["start_method"], "spawn")
 
+    def test_importable_fit_runs_in_workers_and_matches_serial_local_callback(self):
+        calls = []
+
+        def local_fit(*args, **kwargs):
+            calls.append(os.getpid())
+            return importable_fit(*args, **kwargs)
+
+        serial = self.root / "custom_serial"
+        expected = run_cv(self.batch, self.folds, self.config, serial, fit_function=local_fit)
+        self.assertEqual(calls, [os.getpid()] * self.config.evaluation.n_folds)
+        parallel = self.root / "custom_parallel"
+        events = []
+        actual = run_cv(
+            self.batch, self.folds, self.config, parallel,
+            fit_function=importable_fit, fold_workers=2, progress=events.append,
+        )
+        self.assertEqual(expected, actual)
+        self.assertEqual(read_predictions(serial / "predictions.csv"), read_predictions(parallel / "predictions.csv"))
+        custom_events = [event for event in events if event.get("event") == "custom_fit"]
+        self.assertEqual(sorted(event["fold"] for event in custom_events), list(range(self.config.evaluation.n_folds)))
+        for event in custom_events:
+            self.assertNotEqual(event["pid"], os.getpid())
+            execution = json.loads((parallel / f"fold_{event['fold']}" / "execution.json").read_text())
+            self.assertEqual(event["pid"], execution["pid"])
+
     def test_invalid_parallel_options_fail_before_output(self):
         for index, workers in enumerate((0, -1, 4, 1.5, True, "2")):
             output = self.root / f"invalid_{index}"
@@ -80,6 +114,27 @@ class ParallelCVTests(unittest.TestCase):
         output = self.root / "custom_fit"
         with self.assertRaisesRegex(ValueError, "custom fit_function"):
             run_cv(self.batch, self.folds, self.config, output, fold_workers=2, fit_function=lambda *args: None)
+        self.assertFalse(output.exists())
+
+    def test_nonimportable_custom_fit_fails_before_output(self):
+        def local_fit(*args, **kwargs):
+            return importable_fit(*args, **kwargs)
+
+        duplicate = FunctionType(importable_fit.__code__, importable_fit.__globals__, importable_fit.__name__)
+        missing_module = FunctionType(importable_fit.__code__, importable_fit.__globals__, importable_fit.__name__)
+        missing_module.__module__ = "_nonexistent_parallel_fit_module"
+        for index, callback in enumerate((local_fit, duplicate, missing_module, object())):
+            output = self.root / f"custom_invalid_{index}"
+            with self.subTest(callback=callback), self.assertRaisesRegex(ValueError, "custom fit_function"):
+                run_cv(self.batch, self.folds, self.config, output, fold_workers=2, fit_function=callback)
+            self.assertFalse(output.exists())
+
+    def test_custom_fit_serialization_failure_precedes_output(self):
+        output = self.root / "custom_unserializable"
+        with patch("experiments.runner.multiprocessing.reduction.ForkingPickler.dumps", side_effect=TypeError("cannot pickle callback")):
+            with self.assertRaisesRegex(ValueError, "custom fit_function") as raised:
+                run_cv(self.batch, self.folds, self.config, output, fold_workers=2, fit_function=importable_fit)
+        self.assertIsInstance(raised.exception.__cause__, TypeError)
         self.assertFalse(output.exists())
 
     def test_worker_failure_propagates_and_retains_evidence(self):

@@ -232,7 +232,7 @@ adjacent `resolved_config.json` unless an explicit configuration is supplied.
 The [ESM2 + ProteinMPNN job](../sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch)
 defaults to the real shared cache for `A0A1I9GEU1_NEIME_Kennouche_2019` and
 [`configs/esm2_proteinmpnn_nkn.json`](../configs/esm2_proteinmpnn_nkn.json).
-It requests four CPUs and no GPU. ESM2 embeddings and ProteinMPNN distributions
+It requests 15 CPUs and no GPU. ESM2 embeddings and ProteinMPNN distributions
 provide two kernel branches; their two score tables provide the GP mean inputs.
 
 By default, the job runs `singles`: the three singles settings, five folds each.
@@ -252,7 +252,7 @@ Submit from the repository root on the cluster:
 sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch
 
 # All 15 singles fits concurrently: 3 settings x 5 folds x 1 CPU thread
-sbatch --cpus-per-task=15 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles --parallel
+sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles --parallel
 
 # One setting: 5 folds concurrently with 1 CPU thread each
 sbatch --cpus-per-task=5 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles_random --parallel
@@ -335,8 +335,10 @@ an already running job continues with its original execution mode.
 For direct NKN CLI use, `cv --fold-workers N` enables up to `N` concurrent folds
 (at most `evaluation.n_folds`). `num_threads` in the JSON is the thread count
 **per worker**, so set it to `1` for five workers on five CPUs. Parallel folds
-require `device: "cpu"`. The default is one worker; custom baseline fit adapters
-retain serial execution.
+require `device: "cpu"`. The default is one worker. The shared runner also
+supports importable module-level fit adapters, including the
+[Kermut baseline](../baselines/kermut/README.md); local closures and lambdas are
+supported only in serial execution.
 
 ## Configuration and numerical behavior
 

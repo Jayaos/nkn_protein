@@ -1,28 +1,28 @@
 #!/bin/bash
-#SBATCH --job-name=esm2_8m_rep
+#SBATCH --job-name=esm2_650m_rep
 #SBATCH --account=gts-yxie77-paid
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=V100
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
-#SBATCH --time=00:20:00
+#SBATCH --mem=32G
+#SBATCH --time=02:00:00
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%j.out
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
 # Requires the nkn_protein Conda environment and ProteinGym assay CSVs.
-# This job downloads/verifies the checkpoint, extracts embeddings, and prepares
-# mean_score.csv. The allocated node needs outbound HTTPS for the first download.
+# This job downloads/verifies ESM2-650M, extracts layer-33 embeddings, and prepares
+# mean_score.csv with the same model. The node needs HTTPS for the first download.
 # From the repository root: sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch
 # Submission from a repository subdirectory is also supported; logs go to the
 # submission directory. Slurm spools this script, so its own path is not used.
 set -eo pipefail
 
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
-while [[ ! -f "$project_root/src/feature_generation/cli.py" || ! -f "$project_root/configs/extraction/esm2_8m.json" ]]; do
+while [[ ! -f "$project_root/src/feature_generation/cli.py" || ! -f "$project_root/configs/extraction/esm2_650m.json" ]]; do
   if [[ "$project_root" == "/" ]]; then
     echo "error: Submit this job from the nkn_protein repository or a subdirectory." >&2
     exit 1
@@ -48,7 +48,7 @@ export PYTHONPATH="$project_root/src${PYTHONPATH:+:$PYTHONPATH}"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 
-config="configs/extraction/esm2_8m.json"
+config="configs/extraction/esm2_650m.json"
 assay="A0A1I9GEU1_NEIME_Kennouche_2019"
 printf 'Job: %s\nRepository: %s\nAssay: %s\n' "${SLURM_JOB_ID:-manual}" "$project_root" "$assay"
 python -u - "$config" "$assay" <<'PY'
@@ -58,6 +58,7 @@ from feature_generation.config import ExtractionConfig
 from feature_generation.inputs import prepare_assay
 
 config = ExtractionConfig.load(sys.argv[1])
+print(f"Model: {config.model_id}; representation layer: {config.layer}")
 inputs = prepare_assay(config.assay_index, sys.argv[2])
 print(f"Assay CSV: {inputs.source_assay_path}; variants: {len(inputs.variant_ids)}")
 
@@ -75,12 +76,12 @@ python -u -m feature_generation.cli download \
 
 # Extract all variants; --resume skips only a matching, completed cache.
 # The pipeline verifies the local checkpoint and validates the output cache.
+# Extraction and scoring use the 650M config's 1024-token batch budget.
 printf '[2/3] Extracting ESM2 representations\n'
 python -u -m feature_generation.cli extract \
   --config "$config" \
   --assay "$assay" \
   --device cuda \
-  --max-tokens-per-batch 2048 \
   --resume
 
 # Mask each relevant WT position once, then sum mutation log-odds per variant.
@@ -91,5 +92,4 @@ python -u -m feature_generation.cli score \
   --assay "$assay" \
   --device cuda \
   --batch-size 8 \
-  --max-tokens-per-batch 2048 \
   --resume

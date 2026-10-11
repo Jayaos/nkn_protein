@@ -1,6 +1,7 @@
 """Execute the Slurm script with cheap workers to check its CPU scheduling."""
 
 import json
+from importlib import import_module
 import os
 from pathlib import Path
 import shutil
@@ -30,16 +31,26 @@ BASH = available_bash()
 
 @unittest.skipUnless(BASH, "Bash is required for Slurm orchestration tests")
 class NknSbatchTests(unittest.TestCase):
+    script = SCRIPT
+    config_file = "configs/esm2_proteinmpnn_nkn.json"
+    config_variable = "NKN_CONFIG"
+    cli_module = "experiments.cli"
+    cli_file = "src/experiments/cli.py"
+    config_sources = ("src/config.py",)
+    config_type = ("src.config", "ExperimentConfig")
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        for directory in ("src/experiments", "configs", "features", "etc/profile.d", "records"):
+        for directory in ("src", "configs", "features", "etc/profile.d", "records"):
             (self.root / directory).mkdir(parents=True)
-        (self.root / "src/experiments/cli.py").touch()
-        shutil.copyfile(REPOSITORY / "src/config.py", self.root / "src/config.py")
-        shutil.copyfile(REPOSITORY / "configs/esm2_proteinmpnn_nkn.json",
-                        self.root / "configs/esm2_proteinmpnn_nkn.json")
+        (self.root / self.cli_file).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / self.cli_file).touch()
+        for relative_path in (*self.config_sources, self.config_file):
+            target = self.root / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(REPOSITORY / relative_path, target)
         (self.root / "src/torch.py").write_text('__version__ = "test stub"\n', encoding="utf-8")
         (self.root / "features/assay.json").write_text(
             json.dumps({"assay_id": "test", "synthetic": False}), encoding="utf-8",
@@ -79,7 +90,7 @@ class NknSbatchTests(unittest.TestCase):
                     for name in ('singles', 'multiples'):
                         (output / f'{name}.csv').write_text('snapshot')
                 raise SystemExit(0)
-            assert args[:2] == ['-m', 'experiments.cli']
+            assert args[:2] == ['-m', os.environ['TEST_CLI_MODULE']]
             if args[2] == 'validate':
                 raise SystemExit(0)
             options = {}
@@ -99,19 +110,24 @@ class NknSbatchTests(unittest.TestCase):
             raise SystemExit(9 if setting == os.environ.get('TEST_FAIL_SETTING') else 0)
             """), encoding="utf-8")
 
-    def invoke(self, cpus, *arguments, fail_setting=None):
+    def invoke(self, cpus, *arguments, fail_setting=None, config_environment=None):
         environment = os.environ.copy()
-        for name in ("FOLDS_CSV", "NKN_CONFIG"):
+        for name in ("FOLDS_CSV", self.config_variable, "TEST_FAIL_SETTING", "SLURM_CPUS_PER_TASK"):
             environment.pop(name, None)
         environment.update(
             BASH_ENV=self.bootstrap.as_posix(), TEST_ROOT=self.root.as_posix(),
             TEST_PYTHON=Path(sys.executable).as_posix(), ASSAY="test",
             FEATURES="features", SINGLES_FOLDS_CSV="folds.csv", MULTIPLES_FOLDS_CSV="folds.csv",
-            SLURM_CPUS_PER_TASK=str(cpus), SLURM_SUBMIT_DIR=self.root.as_posix(), SLURM_JOB_ID="1234",
+            SLURM_SUBMIT_DIR=self.root.as_posix(), SLURM_JOB_ID="1234",
+            TEST_CLI_MODULE=self.cli_module,
         )
+        if cpus is not None:
+            environment['SLURM_CPUS_PER_TASK'] = str(cpus)
         if fail_setting:
             environment["TEST_FAIL_SETTING"] = fail_setting
-        result = subprocess.run([BASH, str(SCRIPT), *arguments], cwd=self.root, env=environment,
+        if config_environment is not None:
+            environment[self.config_variable] = config_environment
+        result = subprocess.run([BASH, str(self.script), *arguments], cwd=self.root, env=environment,
                                 capture_output=True, text=True, timeout=30)
         records = [json.loads(path.read_text()) for path in (self.root / "records").glob("*.json")]
         plans = list((self.root / "src/runs").rglob("execution_plan.json"))
@@ -144,6 +160,34 @@ class NknSbatchTests(unittest.TestCase):
         self.assertEqual(self.peak_concurrency(records), 1)
         self.assertEqual({(r['fold_workers'], r['threads']) for r in records}, {(1, 4)})
         self.assertFalse(plan['parallel'])
+
+    def test_default_cpu_request_and_manual_fallback_are_fifteen(self):
+        self.assertIn('#SBATCH --cpus-per-task=15', self.script.read_text())
+        result, records, plan = self.invoke(None, 'singles', '--parallel')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(plan['allocated_cpus'], 15)
+        self.assertEqual({(r['fold_workers'], r['threads']) for r in records}, {(5, 1)})
+
+    def test_config_flag_overrides_environment_and_preserves_settings(self):
+        config = json.loads((self.root / self.config_file).read_text())
+        config['evaluation']['coverage_levels'] = [0.8]
+        config['num_threads'] = 9
+        selected = self.root / 'selected config.json'
+        selected.write_text(json.dumps(config), encoding='utf-8')
+        result, records, _ = self.invoke(
+            15, 'singles', '--parallel', '--config', str(selected),
+            config_environment='missing-environment-config.json',
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        runtime = next((self.root / 'src/runs').rglob('config.json'))
+        saved = json.loads(runtime.read_text())
+        config.update(device='cpu', num_threads=1)
+        # Configuration classes fill in defaults and normalize branch order.
+        module, name = self.config_type
+        config_class = getattr(import_module(module), name)
+        expected = json.loads(json.dumps(config_class.from_dict(config).to_dict()))
+        self.assertEqual(saved, expected)
+        self.assertEqual({r['threads'] for r in records}, {1})
 
     def test_five_cpus_on_one_setting_provide_five_fold_workers(self):
         result, records, _ = self.invoke(5, "singles_random", "--parallel")
