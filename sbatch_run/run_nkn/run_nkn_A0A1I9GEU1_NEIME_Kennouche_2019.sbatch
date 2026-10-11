@@ -19,6 +19,7 @@
 # cache/config overrides are handled by the shared launcher; ASSAY is fixed here.
 # Usage: sbatch sbatch_run/run_nkn/run_nkn_A0A1I9GEU1_NEIME_Kennouche_2019.sbatch [singles|SETTING] [--config PATH] [--parallel]
 # Default: the three published singles CV protocols (15 fold fits).
+# Default training: up to 10,000 steps per initialization, with early stopping.
 set -eo pipefail
 
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"

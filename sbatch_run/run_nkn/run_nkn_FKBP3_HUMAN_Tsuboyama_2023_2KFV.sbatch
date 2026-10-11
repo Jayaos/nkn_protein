@@ -19,6 +19,7 @@
 # cache/config overrides are handled by the shared launcher; ASSAY is fixed here.
 # Usage: sbatch sbatch_run/run_nkn/run_nkn_FKBP3_HUMAN_Tsuboyama_2023_2KFV.sbatch [singles|SETTING] [--config PATH] [--parallel]
 # Default: the three published singles CV protocols (15 fold fits).
+# Default training: up to 10,000 steps per initialization, with early stopping.
 # This assay has only singles; settings requiring doubles are unavailable.
 set -eo pipefail
 

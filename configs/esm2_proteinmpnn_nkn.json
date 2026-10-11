@@ -23,7 +23,7 @@
     "scores/proteinmpnn/v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb"
   ],
   "training": {
-    "max_steps": 5000,
+    "max_steps": 10000,
     "min_steps": 1000,
     "patience": 500,
     "tolerance": 0.0001,
