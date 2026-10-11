@@ -524,11 +524,20 @@ score columns become zero after centering with scale one; constant training
 targets are rejected. Training inputs are detached and copied before fitting.
 Each fit caches their fixed pairwise distances, cosine similarities, and
 Bhattacharyya products in float64, sharing distances between primitive kernels.
+For this prepared training batch, branch and final NKNs evaluate only the upper
+triangle and mirror the result, including each diagonal once. Local NKN values
+are still aggregated over mutations before the final NKN. This reduces repeated
+pair arithmetic without changing the model or approximating the dense GP;
+floating-point reduction order can produce small rounding differences.
 Lengthscales, NKN parameters, learned covariances, and Cholesky factors still
-update at every training step. The cache uses additional quadratic memory,
-is excluded from checkpoints, and is bypassed for different or modified inputs
+update at every training step. Full geometry is retained for fallback, alongside
+packed triangular geometry and index maps. These caches use quadratic memory,
+are excluded from checkpoints, and are bypassed for different or modified inputs
 and for features requiring gradients. Direct kernel calls remain uncached unless
 `prepare_training_geometry(train)` is called explicitly.
+For numerical comparisons, `prepare_training_geometry(train, use_triangle=False)`
+keeps geometry caching but evaluates every NKN pair. Clearing caches or moving
+the kernel to a different device/dtype discards both dense and triangular caches.
 Lengthscale medians exclude zero distances but retain repeated occurrences;
 even-sized medians average the middle two values. Training defaults to one
 initialization with seed `0` and lengthscale multiplier `1.0`. Multiple starts

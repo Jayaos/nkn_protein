@@ -12,6 +12,7 @@ from config import BRANCH_NAMES, validate_enabled_branches
 from data_loading.features import kermut_probability_recipe
 from .nkn import NeuralKernelNetwork, PrimitiveNKN
 from .primitives import IF_KERNELS, VECTOR_KERNELS, initial_lengthscale
+from .triangle import TrainingTriangle
 
 
 LOCAL_BRANCHES = ("inverse_folding", "structure", "sequence_site")
@@ -73,6 +74,8 @@ class ProteinKernel(nn.Module):
             )
         self.branches = nn.ModuleDict(branches)
         self.final_nkn = NeuralKernelNetwork(len(self.enabled_branches), config.final_widths)
+        # Runtime geometry only: excluded from parameters, buffers and checkpoints.
+        self._training_triangle: TrainingTriangle | None = None
         self.to(device=train.owners.device, dtype=torch.float64)
 
     @staticmethod
@@ -129,8 +132,12 @@ class ProteinKernel(nn.Module):
                     "variants" if name == "sequence_global" else "mutation occurrences"
                 ))
 
-    def prepare_training_geometry(self, train) -> None:
-        """Prepare each branch's geometry for an immutable training batch."""
+    def prepare_training_geometry(self, train, *, use_triangle: bool = True) -> None:
+        """Cache fixed geometry and symmetric NKN pairs for immutable training inputs.
+
+        ``use_triangle=False`` retains dense NKN evaluation for numerical checks.
+        Different or modified inputs continue through the ordinary dense path.
+        """
         self.clear_geometry_cache()
         self._validate_batch(train)
         try:
@@ -139,13 +146,45 @@ class ProteinKernel(nn.Module):
                 if features.shape[1] != self.feature_dimensions[name]:
                     raise ValueError(f"Feature dimension for {name} differs from its training dimension")
                 self.branches[name].prepare_geometry(features)
+            if use_triangle:
+                self._training_triangle = TrainingTriangle.prepare(self, train)
         except Exception:
             self.clear_geometry_cache()
             raise
 
     def clear_geometry_cache(self) -> None:
+        self._training_triangle = None
         for branch in self.branches.values():
             branch.clear_geometry_cache()
+
+    def _apply(self, fn, recurse=True):
+        # Packed constants are deliberately not buffers and must not survive a
+        # device/dtype conversion, even when it happens to be a no-op.
+        self.clear_geometry_cache()
+        return super()._apply(fn, recurse=recurse)
+
+    def _forward_triangle(self, left, right) -> Tensor:
+        geometry = self._training_triangle
+        layout = geometry.layout
+        covariance_parts = []
+        for name in self.enabled_branches:
+            branch = self.branches[name]
+            prepared = geometry.branches[name]
+            primitives = torch.stack(
+                [primitive.forward_from_geometry(prepared.packed_geometry)
+                 for primitive in branch.primitives], dim=-1,
+            )
+            packed = branch.nkn(primitives)
+            if name != "sequence_global":
+                # The local NKN must precede mutation aggregation. Expand here
+                # to preserve its summation order for multi-mutation variants.
+                covariance = aggregate_mutations(
+                    prepared.layout.expand(packed), left.owners, right.owners,
+                    left.num_variants, right.num_variants,
+                )
+                packed = covariance[layout.rows, layout.columns]
+            covariance_parts.append(packed)
+        return layout.expand(self.final_nkn(torch.stack(covariance_parts, dim=-1)))
 
     def forward(self, left, right=None) -> Tensor:
         right = left if right is None else right
@@ -153,6 +192,8 @@ class ProteinKernel(nn.Module):
         self._validate_batch(right)
         if left.owners.device != right.owners.device:
             raise ValueError("Both feature batches must use the same device")
+        if self._training_triangle is not None and self._training_triangle.matches(self, left, right):
+            return self._forward_triangle(left, right)
         covariance_parts = []
         for name in self.enabled_branches:
             left_features = self._features(left, name)

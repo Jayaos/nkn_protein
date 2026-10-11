@@ -103,9 +103,14 @@ class ExactGPTests(unittest.TestCase):
             path = Path(directory) / "checkpoint.pt"
             fitted.save(path)
             restored = FittedGP.load(path)
+            for name, value in fitted.model.state_dict().items():
+                torch.testing.assert_close(restored.model.state_dict()[name], value, rtol=0, atol=0)
             actual = restored.predict(replace(test, targets=None))
-            torch.testing.assert_close(actual.mean, prediction.mean, rtol=0, atol=0)
-            torch.testing.assert_close(actual.observation_covariance, prediction.observation_covariance, rtol=0, atol=0)
+            # Runtime triangle caches are not serialized; dense reloads can
+            # differ by float64 rounding while retaining identical parameters.
+            torch.testing.assert_close(actual.mean, prediction.mean, rtol=1e-12, atol=1e-12)
+            torch.testing.assert_close(actual.observation_covariance, prediction.observation_covariance,
+                                       rtol=1e-12, atol=1e-12)
 
     def test_heldout_labels_do_not_change_training_or_predictions(self):
         train_ids, test_ids = list(range(10)), list(range(10, 16))

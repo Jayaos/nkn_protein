@@ -245,7 +245,7 @@ class ProteinGeometryCacheTests(GeometryAssertions):
                 torch.manual_seed(11)
                 reference = ProteinKernel(model_config(), inputs)
                 cached = deepcopy(reference)
-                cached.prepare_training_geometry(inputs)
+                cached.prepare_training_geometry(inputs, use_triangle=False)
                 self.assert_kernel_and_gradients_equal(cached, reference, inputs)
                 # Owners are not geometric features: changing grouping must still
                 # change aggregation even while the local geometry cache is hit.
@@ -259,13 +259,26 @@ class ProteinGeometryCacheTests(GeometryAssertions):
                 inputs.global_features = inputs.global_features.reshape(-1, 2)
                 reference = ProteinKernel(model_config(), inputs)
                 cached = deepcopy(reference)
-                cached.prepare_training_geometry(inputs)
+                cached.prepare_training_geometry(inputs, use_triangle=False)
                 torch.testing.assert_close(cached(inputs), reference(inputs), rtol=0, atol=0)
                 cached.clear_geometry_cache()
                 torch.testing.assert_close(cached(inputs), reference(inputs), rtol=0, atol=0)
 
 
 class FittedGeometryCacheTests(GeometryAssertions):
+    def setUp(self):
+        super().setUp()
+        original_prepare = ProteinKernel.prepare_training_geometry
+
+        def prepare_dense_geometry(kernel, train):
+            original_prepare(kernel, train, use_triangle=False)
+
+        # These are bit-exact geometry-cache checks. Triangle evaluation has
+        # separate tests allowing roundoff from different summation orders.
+        preparation = patch.object(ProteinKernel, "prepare_training_geometry", prepare_dense_geometry)
+        preparation.start()
+        self.addCleanup(preparation.stop)
+
     def assert_fits_equal(self, actual, expected, heldout):
         self.assertEqual(actual.selected_seed, expected.selected_seed)
         self.assertEqual(actual.restart_summaries, expected.restart_summaries)
