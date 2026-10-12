@@ -12,8 +12,10 @@
 #SBATCH --mail-user=jlee3541@gatech.edu
 
 # Requires the nkn_protein Conda environment and completed outputs from both
-# run_prepare_rep jobs. Defaults select ESM2 650M layer-33 embeddings and
-# sequence-conditioned ProteinMPNN features (10 orders, seed 37), preserved
+# run_prepare_rep jobs. Defaults select ESM2 650M layer-33 centered-window vectors
+# for sequence_site (mutation positions) and fixed non-overlapping windows for
+# sequence_global (a residue-weighted full-sequence mean),
+# plus sequence-conditioned ProteinMPNN features (10 orders, seed 37), preserved
 # without renormalization. Only ESM2 650M masked-marginal scores feed the
 # learned GP mean in the default preset. CPU only.
 #

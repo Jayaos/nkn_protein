@@ -13,6 +13,6 @@
   "device": "auto",
   "inference_dtype": "float32",
   "output_dtype": "float32",
-  "max_length": 1022,
+  "max_length": null,
   "seed": 37
 }

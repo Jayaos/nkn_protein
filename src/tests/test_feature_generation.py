@@ -357,6 +357,35 @@ class CheckpointTests(unittest.TestCase):
         self.hub.assert_not_called()
         self.assertFalse((self.path / MANIFEST_NAME).exists())
 
+    def test_overlapping_downloads_publish_independent_manifests(self):
+        self.stage()
+        replace_path = Path.replace
+        temporary_paths = []
+
+        def publish_after_other_download(temporary, destination):
+            temporary_paths.append(temporary)
+            if len(temporary_paths) == 1:
+                # A second array task finishes while the first is ready to publish.
+                self.assertEqual(download(self.config), self.path)
+            return replace_path(temporary, destination)
+
+        with patch.dict(self.preset, weights_sha256=self.weights_hash):
+            with patch.object(Path, "replace", publish_after_other_download):
+                self.assertEqual(download(self.config), self.path)
+            checkpoint_manifest(self.config)
+        self.hub.assert_not_called()
+        self.assertEqual(len(set(temporary_paths)), 2)
+        self.assertEqual(list(self.path.glob("*.tmp")), [])
+
+    def test_failed_manifest_publication_cleans_up_temporary_file(self):
+        self.stage()
+        with patch.dict(self.preset, weights_sha256=self.weights_hash):
+            with patch.object(Path, "replace", side_effect=OSError("simulated publication failure")):
+                with self.assertRaisesRegex(OSError, "simulated publication failure"):
+                    download(self.config)
+        self.assertFalse((self.path / MANIFEST_NAME).exists())
+        self.assertEqual(list(self.path.glob("*.tmp")), [])
+
     def test_incomplete_hub_response_is_reported_without_marking_complete(self):
         (self.path / "config.json").write_bytes(self.contents["config.json"])
         with self.assertRaisesRegex(RuntimeError, "incomplete.*network/TLS"):

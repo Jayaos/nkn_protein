@@ -67,7 +67,7 @@ class InverseFoldingAdapter:
         sequence = structure.reference_sequence
         if not isinstance(sequence, str) or not sequence or set(sequence) - set(ALPHABET):
             raise ValueError("Inverse folding requires a nonempty canonical reference sequence")
-        if len(sequence) > self.config.max_length:
+        if self.config.max_length is not None and len(sequence) > self.config.max_length:
             raise ValueError(f"Structure length exceeds max_length={self.config.max_length}; truncation is disabled")
         coords = torch.as_tensor(structure.coords, dtype=torch.float32)
         if tuple(coords.shape) != (len(sequence), 4, 3):

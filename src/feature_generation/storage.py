@@ -14,7 +14,11 @@ from typing import Iterator
 import torch
 from torch import Tensor
 
-from data_loading.features import ALPHABET, parse_substitutions, read_csv
+from data_loading.features import ALPHABET, parse_substitutions, pooled_sequence_recipe, read_csv
+from data_loading.sequence_windows import (
+    COMPACT_SITE_FIELDS, compact_sequence_recipe, tensor_isfinite,
+    validate_compact_sequence_payload, validate_global_window_payload,
+)
 
 from .inputs import AssayInput, safe_component, sha256_file, stable_json
 
@@ -201,6 +205,8 @@ def _validate_config(config: dict, cache_id: str, model_family: str | None = Non
     size = config.get("hidden_size")
     if isinstance(size, bool) or not isinstance(size, int) or size < 1:
         raise ValueError("Feature configuration requires a positive integer hidden_size")
+    compact_sequence_recipe(config)
+    pooled_sequence_recipe(config)
     if model_family == "prosst":
         from .structure_inputs import validate_structure_metadata
         from .prosst_structure import validate_structure_token_metadata
@@ -278,16 +284,40 @@ def _validate_payload(store: object, metadata: dict, rows: list[dict], config: d
     positions = store.get("positions")
     if not isinstance(positions, Tensor) or positions.dtype != torch.long or not torch.equal(positions, torch.arange(1, length + 1)):
         raise ValueError("Expected complete one-based reference positions")
+    compact_recipe = compact_sequence_recipe(config, length)
     ids = [row["variant_id"] for row in rows]
-    if store.get("variant_ids") != ids:
-        raise ValueError("Sequence cache IDs must match variants.csv exactly and in order")
-    hashes = [hashlib.sha256(row["mutated_sequence"].encode("utf-8")).hexdigest() for row in rows]
+    cached_ids = store.get("variant_ids")
+    if compact_recipe is not None:
+        if not isinstance(cached_ids, list) or any(not isinstance(value, str) for value in cached_ids) or len(cached_ids) != len(ids) or set(cached_ids) != set(ids):
+            raise ValueError("Compact sequence cache must cover exactly the variant table with unique IDs")
+        rows_by_id = {row["variant_id"]: row for row in rows}
+        ordered_rows = [rows_by_id[variant_id] for variant_id in cached_ids]
+    else:
+        if cached_ids != ids:
+            raise ValueError("Sequence cache IDs must match variants.csv exactly and in order")
+        ordered_rows = rows
+        if any(key in store for key in COMPACT_SITE_FIELDS) or "cache_layout" in store:
+            raise ValueError("Compact site tensors require an explicit centered-site recipe")
+    hashes = [hashlib.sha256(row["mutated_sequence"].encode("utf-8")).hexdigest() for row in ordered_rows]
     if store.get("sequence_hashes") != hashes:
         raise ValueError("Sequence hash mismatch")
+    if compact_recipe is not None:
+        mutations = [parse_substitutions(row["mutant"], row["mutated_sequence"], metadata["reference_sequence"]) for row in ordered_rows]
+        return validate_compact_sequence_payload(store, config, length, mutations)[0]
     embeddings = store.get("embeddings")
-    if not isinstance(embeddings, Tensor) or embeddings.dtype != torch.float32 or embeddings.shape != (len(rows), length, config["hidden_size"]):
-        raise ValueError("Sequence embeddings must have float32 shape [variants, reference residues, hidden_size]")
-    if not torch.isfinite(embeddings).all():
+    pooled_recipe = pooled_sequence_recipe(config, length)
+    validate_global_window_payload(store, pooled_recipe)
+    if pooled_recipe is not None:
+        if any(type(store.get(key)) is not type(value) or store.get(key) != value
+               for key, value in pooled_recipe.items()):
+            raise ValueError("Pooled sequence payload does not match its pooling/truncation recipe or represented length")
+        expected_shape = (len(rows), config["hidden_size"])
+    else:
+        expected_shape = (len(rows), length, config["hidden_size"])
+    if not isinstance(embeddings, Tensor) or embeddings.dtype != torch.float32 or tuple(embeddings.shape) != expected_shape:
+        layout = "variants, hidden_size" if pooled_recipe else "variants, reference residues, hidden_size"
+        raise ValueError(f"Sequence embeddings must have float32 shape [{layout}]")
+    if not tensor_isfinite(embeddings):
         raise ValueError("Sequence embeddings must contain only finite values")
     return embeddings
 
@@ -301,6 +331,7 @@ def write_sequence_cache(
     provenance: dict,
     *,
     model_family: str | None = None,
+    site_data: dict | None = None,
 ) -> Path:
     """Commit one complete leaf; failed staging never replaces existing outputs."""
     root = Path(root).resolve()
@@ -318,6 +349,21 @@ def write_sequence_cache(
         "sequence_hashes": list(inputs.sequence_hashes),
         "embeddings": embeddings.detach().to(device="cpu", dtype=torch.float32).contiguous(),
     }
+    compact_recipe = compact_sequence_recipe(config, inputs.length)
+    if compact_recipe is not None:
+        if not isinstance(site_data, dict) or set(site_data) != set(COMPACT_SITE_FIELDS):
+            raise ValueError("Compact sequence caches require exactly the declared site_data tensors")
+        payload.update(compact_recipe)
+        for key in COMPACT_SITE_FIELDS:
+            value = site_data[key]
+            if not isinstance(value, Tensor):
+                raise ValueError(f"Compact {key} must be a tensor")
+            payload[key] = value.detach().to(device="cpu").contiguous()
+    elif site_data is not None:
+        raise ValueError("site_data requires an explicit compact centered-site recipe")
+    pooled_recipe = pooled_sequence_recipe(config, inputs.length)
+    if pooled_recipe is not None:
+        payload.update(pooled_recipe)
     if model_family == "prosst":
         payload.update(_prosst_identity(config))
         _validate_prosst_provenance(provenance, config)
@@ -459,7 +505,10 @@ def validate_sequence_cache(root: str | Path, cache_id: str | None = None, model
         if any(completion.get(key) != value for key, value in _prosst_identity(config).items()):
             raise ValueError("ProSST completion structure, token, or configuration identity mismatch")
         _validate_prosst_provenance(_read_json(_inside(leaf, "provenance.json")), config)
-    store = torch.load(_inside(leaf, "features.pt"), map_location="cpu", weights_only=True)
+    store = torch.load(
+        _inside(leaf, "features.pt"), map_location="cpu", weights_only=True,
+        **({"mmap": True} if compact_sequence_recipe(config) is not None else {}),
+    )
     embeddings = _validate_payload(store, metadata, rows, config)
     return {
         "assay_id": metadata["assay_id"],
@@ -467,7 +516,7 @@ def validate_sequence_cache(root: str | Path, cache_id: str | None = None, model
         "cache_id": cache_id,
         "num_variants": len(rows),
         "reference_length": len(reference),
-        "embedding_dim": embeddings.shape[2],
+        "embedding_dim": embeddings.shape[-1],
         "path": str(leaf),
         "input_signature": metadata["input_signature"],
     }

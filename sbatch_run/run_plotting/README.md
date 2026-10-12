@@ -21,10 +21,10 @@ python -m pip install "matplotlib>=3.8,<3.11"
 
 ## Output locations
 
-By default each run writes to its own directory:
+By default the batch job writes under the repository's top-level `plots/`:
 
 ```text
-results/<protein>/<model-run>/plots/
+plots/<protein>/<model-run>/
     interval_ece.png
     interval_ece.pdf
     pair_ece.png

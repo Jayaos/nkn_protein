@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+from uuid import uuid4
 
 from .config import ExtractionConfig, MODEL_PRESETS
 
@@ -120,7 +121,10 @@ def download(config: ExtractionConfig) -> Path:
             "Replace this incomplete or incorrect file with model.safetensors from the exact "
             "configured Hugging Face revision, then rerun download; no completion manifest was written."
         )
-    temporary = path / f"{MANIFEST_NAME}.tmp"
-    temporary.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path / MANIFEST_NAME)
+    temporary = path / f".{MANIFEST_NAME}.{uuid4().hex}.tmp"
+    try:
+        temporary.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path / MANIFEST_NAME)
+    finally:
+        temporary.unlink(missing_ok=True)
     return path

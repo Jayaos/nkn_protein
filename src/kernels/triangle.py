@@ -45,6 +45,7 @@ class _TriangleBranch:
     original_geometry: FixedPairwiseGeometry
     packed_geometry: FixedPairwiseGeometry
     layout: TriangleLayout
+    occurrence_to_unique_pairs: Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -60,12 +61,14 @@ class TrainingTriangle:
     branches: dict[str, _TriangleBranch]
 
     @classmethod
-    def prepare(cls, kernel, train) -> TrainingTriangle | None:
+    def prepare(cls, kernel, train, *, use_unique_features: bool = True) -> TrainingTriangle | None:
         """Pack existing self-geometry, or skip inputs that cannot be cached.
 
         The caller validates the batch and prepares the ordinary branch caches
         first. Matching those caches also rejects differentiable features and
         inference tensors. Layouts are shared when branches have equal sizes.
+        Repeated inverse-folding vectors can share learned pair evaluations;
+        the other branches keep their original occurrence-pair geometry.
         """
         if torch.is_inference_mode_enabled():
             return None
@@ -89,13 +92,42 @@ class TrainingTriangle:
             }
             branches = {}
             for name, geometry in geometries.items():
-                layout = layouts[kernel._features(train, name).shape[0]]
+                features = kernel._features(train, name)
+                layout = layouts[features.shape[0]]
+                rows, columns = layout.rows, layout.columns
+                occurrence_to_unique_pairs = None
+                if use_unique_features and name == "inverse_folding" and features.shape[0]:
+                    unique, inverse = torch.unique(features, dim=0, sorted=True, return_inverse=True)
+                    count, unique_count = features.shape[0], unique.shape[0]
+                    if unique_count < count:
+                        # Initialization has already used every occurrence.
+                        # Deduplicate exact vectors here, never residue positions.
+                        representatives = torch.full(
+                            (unique_count,), count, dtype=torch.long, device=features.device,
+                        )
+                        representatives.scatter_reduce_(
+                            0, inverse, torch.arange(count, device=features.device),
+                            reduce="amin", include_self=True,
+                        )
+                        unique_rows, unique_columns = torch.triu_indices(
+                            unique_count, unique_count, device=features.device,
+                        )
+                        original_rows = representatives[unique_rows]
+                        original_columns = representatives[unique_columns]
+                        # Gather existing upper geometry instead of recomputing
+                        # fixed distances/dot products with a different shape.
+                        rows = torch.minimum(original_rows, original_columns)
+                        columns = torch.maximum(original_rows, original_columns)
+                        first, second = inverse[layout.rows], inverse[layout.columns]
+                        low, high = torch.minimum(first, second), torch.maximum(first, second)
+                        row_offset = low * unique_count - low * (low - 1) // 2
+                        occurrence_to_unique_pairs = row_offset + high - low
                 packed = FixedPairwiseGeometry(
                     geometry.left, geometry.right,
-                    {key: value[layout.rows, layout.columns].contiguous()
+                    {key: value[rows, columns].contiguous()
                      for key, value in geometry.values.items()},
                 )
-                branches[name] = _TriangleBranch(geometry, packed, layout)
+                branches[name] = _TriangleBranch(geometry, packed, layout, occurrence_to_unique_pairs)
 
         try:
             train_ref = weakref.ref(train)

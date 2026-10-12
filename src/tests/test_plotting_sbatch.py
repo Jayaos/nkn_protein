@@ -97,7 +97,7 @@ class PlottingSbatchTests(unittest.TestCase):
     def test_defaults_use_saved_results_and_headless_job_cache(self):
         result, record = self.invoke()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(record["args"], ["--results-dir", "results"])
+        self.assertEqual(record["args"], ["--results-dir", "results", "--output-dir", "plots"])
         self.assertEqual(Path(record["cwd"]), self.root)
         env = record["environment"]
         self.assertEqual(env["MPLBACKEND"], "Agg")

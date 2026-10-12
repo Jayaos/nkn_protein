@@ -17,7 +17,7 @@ from config import EvaluationConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_FEATURE_SELECTION = {
-    "sequence": "esm2/esm2_t6_8M_UR50D-layer6-c731040fcd8d",
+    "sequence": "esm2/esm2_t6_8M_UR50D-layer6-c731040fcd8d-mean-first1022",
     "inverse_folding": "proteinmpnn/v_48_020-backbone_only-8907e6671bfb",
 }
 DEFAULT_SCORE_SOURCES = (

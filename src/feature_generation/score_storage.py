@@ -13,7 +13,7 @@ from torch import Tensor
 
 from data_loading.features import read_csv
 from .inputs import AssayInput, safe_component, sha256_file, stable_json
-from .inverse_storage import _validate_assay
+from .inverse_storage import _resume_configs_match, _validate_assay
 from .storage import _assay_lock, _ensure_assay, _inside, _read_json, _write_json
 from .structure_inputs import validate_structure_metadata
 
@@ -70,7 +70,6 @@ def _validate_config(config: dict, model_family: str, cache_id: str) -> None:
         raise ValueError("Score configuration does not match its cache directory or format")
     if model_family == "esm2":
         recipe = {
-            "scoring_recipe_version": 1,
             "score_definition": "sum_masked_marginal_log_odds",
             "conditioning_mode": "masked_wild_type",
             "inference_method": "masked_marginals",
@@ -79,6 +78,34 @@ def _validate_config(config: dict, model_family: str, cache_id: str) -> None:
         }
         if any(config.get(key) != value for key, value in recipe.items()):
             raise ValueError("Unsupported ESM2 mean-score recipe")
+        recipe_version = config.get("scoring_recipe_version")
+        if type(recipe_version) is not int or recipe_version not in (1, 2):
+            raise ValueError("Unsupported ESM2 mean-score recipe version")
+        if recipe_version == 1:
+            # Original artifacts may omit these optional metadata fields, but
+            # a v1 artifact must never silently claim windowed WT context.
+            if (
+                config.get("scoring_window", "full") != "full"
+                or config.get("truncation", "reject") != "reject"
+                or "window_policy" in config or "window_indexing" in config
+            ):
+                raise ValueError("Legacy ESM2 mean scores require full-reference context without centered windows")
+        else:
+            centered_recipe = {
+                "scoring_window": "centered", "truncation": "centered",
+                "window_policy": "centered_clamped", "window_indexing": "zero_based_half_open",
+                "residue_aggregation": "sum_over_mutations",
+                "masking": "one_wild_type_residue_at_a_time",
+                "wild_type_subtraction": True,
+                "noncanonical_tokens": "retained_in_normalization",
+                "alphabet": "ACDEFGHIKLMNPQRSTVWY",
+                "precision_policy": "float32_log_softmax",
+            }
+            if any(type(config.get(key)) is not type(value) or config.get(key) != value for key, value in centered_recipe.items()):
+                raise ValueError("Incomplete or inconsistent centered-window ESM2 mean-score recipe")
+            max_length = config.get("max_length")
+            if type(max_length) is not int or not 1 <= max_length <= 1022:
+                raise ValueError("Centered ESM2 score max_length must be an integer between 1 and 1022")
         if "structure" in config:
             raise ValueError("ESM2 mean scores do not use structure metadata")
         return
@@ -147,7 +174,7 @@ def check_existing(
         if not resume:
             raise FileExistsError(f"Mean-score cache already exists: {leaf}; use --resume to validate and reuse it")
         validate_score_cache(root, model_family, cache_id)
-        if _read_json(_inside(leaf, "config.json")) != config:
+        if not _resume_configs_match(_read_json(_inside(leaf, "config.json")), config, model_family):
             raise ValueError("Existing checkpoint, scoring recipe, or structure differs; use a new cache ID")
         return True
 

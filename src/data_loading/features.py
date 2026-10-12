@@ -15,6 +15,10 @@ import torch
 from torch import Tensor
 
 from config import BRANCH_NAMES, validate_enabled_branches
+from .sequence_windows import (
+    COMPACT_SITE_FIELDS, compact_sequence_recipe, mean_sequence_recipe, tensor_isfinite,
+    validate_compact_sequence_payload, validate_global_window_payload,
+)
 
 
 ALPHABET = "ACDEFGHIKLMNPQRSTVWY"
@@ -114,7 +118,7 @@ class FeatureBatch:
             tensors.append(self.global_features)
         if self.targets is not None:
             tensors.append(self.targets)
-        if any(not x.is_floating_point() or not torch.isfinite(x).all() for x in tensors):
+        if any(not x.is_floating_point() or not tensor_isfinite(x) for x in tensors):
             raise ValueError("Features, scores, and targets must be finite floating-point tensors")
         devices = {x.device for x in [*tensors, self.owners, self.mutation_positions]}
         if len(devices) != 1:
@@ -197,7 +201,11 @@ def _load_leaf(root: Path, source: str, assay_id: str, schema: int) -> tuple[dic
     config = json.loads(_inside(root, f"{source}/config.json").read_text(encoding="utf-8"))
     if any(config.get(k) != v for k, v in (("feature_type", name), ("model_family", family), ("checkpoint", checkpoint))):
         raise ValueError(f"Feature configuration does not match its directory: {source}")
-    store = torch.load(_inside(root, f"{source}/features.pt"), map_location="cpu", weights_only=True)
+    compact = compact_sequence_recipe(config) if name == "sequence" else None
+    store = torch.load(
+        _inside(root, f"{source}/features.pt"), map_location="cpu", weights_only=True,
+        **({"mmap": True} if compact is not None else {}),
+    )
     if not isinstance(store, Mapping) or store.get("assay_id") != assay_id or store.get("schema_version") != schema:
         raise ValueError(f"Feature cache metadata mismatch: {leaf}")
     if "synthetic" in config and store.get("synthetic") != config["synthetic"]:
@@ -208,7 +216,7 @@ def _load_leaf(root: Path, source: str, assay_id: str, schema: int) -> tuple[dic
 def _float_tensor(value: object, name: str, ndim: int, convert: bool = True) -> Tensor:
     if not isinstance(value, Tensor) or not value.is_floating_point() or value.ndim != ndim:
         raise ValueError(f"{name} must be a {ndim}-dimensional floating-point tensor")
-    if min(value.shape) < 1 or not torch.isfinite(value).all():
+    if min(value.shape) < 1 or not tensor_isfinite(value):
         raise ValueError(f"{name} must be nonempty and finite")
     return value.to(dtype=torch.float64) if convert else value
 
@@ -225,6 +233,13 @@ def _config_fingerprint(config: Mapping) -> str:
         return value
 
     return hashlib.sha256(json.dumps(clean(config), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def pooled_sequence_recipe(config: Mapping, reference_length: int | None = None) -> dict | None:
+    """Validate an explicit ESM2 global-only mean recipe, preserving old caches."""
+    if compact_sequence_recipe(config, reference_length) is not None:
+        return None
+    return mean_sequence_recipe(config, reference_length)
 
 
 def kermut_probability_recipe(config: Mapping) -> dict | None:
@@ -290,7 +305,7 @@ def load_feature_bundle(
     if metadata.get("variants_file") != "variants.csv":
         raise ValueError("Expected variants_file='variants.csv'")
     if pooling != "mean":
-        raise ValueError("Only global residue-mean pooling is currently supported")
+        raise ValueError("Only global residue-mean pooling is currently supported, including for prepooled sequence caches")
     assay_id, reference = metadata["assay_id"], metadata["reference_sequence"]
     if not reference or set(reference) - set(ALPHABET):
         raise ValueError("Reference sequence must contain canonical amino acids")
@@ -347,12 +362,33 @@ def load_feature_bundle(
     probability_recipe = None
     if "sequence" in stores:
         sequence_store = stores["sequence"]
-        embedding = _float_tensor(sequence_store.get("embeddings"), "Sequence embeddings", 3, convert=False)
+        sequence_config = configs["sequence"]
+        compact_recipe = compact_sequence_recipe(sequence_config, len(reference))
+        pooled_recipe = pooled_sequence_recipe(sequence_config, len(reference))
+        validate_global_window_payload(sequence_store, compact_recipe or pooled_recipe)
+        embedding = _float_tensor(
+            sequence_store.get("embeddings"), "Sequence embeddings", 2 if pooled_recipe or compact_recipe else 3, convert=False,
+        )
+        if compact_recipe is None and (any(key in sequence_store for key in COMPACT_SITE_FIELDS) or "cache_layout" in sequence_store):
+            raise ValueError("Compact site tensors require an explicit centered-site recipe")
+        if pooled_recipe is not None:
+            if any(type(sequence_store.get(key)) is not type(value) or sequence_store.get(key) != value
+                   for key, value in pooled_recipe.items()):
+                raise ValueError("Pooled sequence payload does not match its pooling/truncation recipe or represented length")
+            if embedding.dtype != torch.float32 or embedding.shape[1] != sequence_config["hidden_size"]:
+                raise ValueError("Pooled sequence embeddings must have float32 shape [variants, hidden_size]")
+            if "sequence_site" in branches:
+                raise ValueError("sequence_site requires per-residue embeddings; the selected sequence cache is mean-pooled")
         cached_ids = sequence_store.get("variant_ids", [])
         hashes = sequence_store.get("sequence_hashes", [])
+        if compact_recipe is not None and (
+            not isinstance(cached_ids, list) or any(not isinstance(value, str) for value in cached_ids)
+            or not isinstance(hashes, list) or any(not isinstance(value, str) for value in hashes)
+        ):
+            raise ValueError("Compact sequence cache IDs and hashes must be string lists")
         if len(cached_ids) != len(set(cached_ids)) or set(cached_ids) != set(ids) or len(cached_ids) != embedding.shape[0]:
             raise ValueError("Sequence cache must cover exactly the variant table, with unique IDs")
-        if len(hashes) != len(cached_ids) or embedding.shape[1] != len(reference):
+        if len(hashes) != len(cached_ids) or (pooled_recipe is None and compact_recipe is None and embedding.shape[1] != len(reference)):
             raise ValueError("Sequence cache residue axis or hash count is invalid")
         lookup = {variant_id: i for i, variant_id in enumerate(cached_ids)}
         order = [lookup[variant_id] for variant_id in ids]
@@ -360,10 +396,33 @@ def load_feature_bundle(
             if hashlib.sha256(sequence.encode("utf-8")).hexdigest() != hashes[i]:
                 raise ValueError("Sequence hash mismatch")
         cache_order = torch.tensor(order, dtype=torch.long)
+        site_embedding = None
+        site_order = None
+        if compact_recipe is not None:
+            if "input_signature" in metadata and sequence_store.get("input_signature") != metadata["input_signature"]:
+                raise ValueError("Compact sequence input signature mismatch")
+            mutations_by_id = dict(zip(ids, mutations))
+            cached_mutations = [mutations_by_id[variant_id] for variant_id in cached_ids]
+            embedding, site_embedding = validate_compact_sequence_payload(
+                sequence_store, sequence_config, len(reference), cached_mutations,
+            )
+            if cached_ids != list(ids):
+                offsets = [0]
+                for mutation in cached_mutations:
+                    offsets.append(offsets[-1] + len(mutation))
+                site_order = torch.tensor([
+                    occurrence for index in order for occurrence in range(offsets[index], offsets[index + 1])
+                ], dtype=torch.long)
         if "sequence_global" in branches:
-            global_features = embedding.mean(dim=1, dtype=torch.float64)[cache_order]
+            if compact_recipe is not None:
+                global_features = (embedding if cached_ids == list(ids) else embedding[cache_order]).double()
+            else:
+                global_features = (embedding.double() if pooled_recipe else embedding.mean(dim=1, dtype=torch.float64))[cache_order]
         if "sequence_site" in branches:
-            local_features["sequence_site"] = embedding[cache_order[owners], positions - 1].double()
+            if compact_recipe is not None:
+                local_features["sequence_site"] = (site_embedding if site_order is None else site_embedding[site_order]).double()
+            else:
+                local_features["sequence_site"] = embedding[cache_order[owners], positions - 1].double()
     if "structure" in stores:
         structural = _float_tensor(stores["structure"].get("embeddings"), "Structural embeddings", 2)
         if structural.shape[0] != len(reference):

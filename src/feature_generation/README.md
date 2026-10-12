@@ -45,6 +45,11 @@ The checkpoint is shared with the backbone-only recipe; its output cache is
 separate. Sequence generation is not implemented. ProteinMPNN variant sequence
 likelihoods are prepared separately with the `score` command below.
 
+The ProteinMPNN presets set `max_length: null`, so extraction and scoring have
+no sequence-length cap. A positive integer can impose an optional operational
+limit. ESM-IF1 retains its maximum of 1,022 residues. These inverse-folding
+workflows use complete references and structures, without truncation or windows.
+
 Install/update from `env.yaml`, or use `python -m pip install -r requirements.txt`
 in a Python 3.10 venv. Added inference dependencies are Biopython, Biotite, SciPy,
 and PyTorch Geometric. Official inference source is downloaded at pinned commits
@@ -99,9 +104,10 @@ python -m feature_generation.cli validate --features "data/features/pretrained/$
 
 Conditional inference performs one decoder pass per reference position per
 order, so it costs substantially more than backbone-only extraction. This
-matches the extraction recipe for supported single-chain inputs of up to 1,022
-residues; exact published outputs additionally depend on the same structure and
-runtime. Seed 37 and the order count are recorded in cache provenance.
+matches the extraction recipe for supported single-chain inputs; exact published
+outputs additionally depend on the same structure and runtime. Longer references
+can exceed GPU memory or the job's time allocation despite the removed length
+guard. Seed 37 and the order count are recorded in cache provenance.
 `--resume` rejects a changed
 recipe under an existing cache ID.
 
@@ -157,50 +163,70 @@ Upstream implementations: [ProteinMPNN](https://github.com/dauparas/ProteinMPNN)
 
 ESM2 scoring uses the pretrained Hugging Face `EsmForMaskedLM` head and WT
 masked marginals. For each position mutated by any selected variant, it masks
-exactly that residue in the WT sequence and computes model log-probabilities.
+exactly that residue in its WT context and computes model log-probabilities.
 The score for variant `v` is:
 
 ```text
 score(v) = sum over mutated positions i:
-    log p(mutant_i | WT with position i masked)
-  - log p(WT_i     | WT with position i masked)
+    log p(mutant_i | WT context with position i masked)
+  - log p(WT_i     | WT context with position i masked)
 ```
 
 WT has score zero. Multiple substitutions add contributions from the same WT
-context. Higher values indicate that the model favors the mutant residues over
+context for each position. Higher values indicate that the model favors the mutant residues over
 WT. The score does not use experimental labels or a structure. Each unique
 mutation position is evaluated once per assay and reused across variants. This
 is the masked-marginal scoring recipe; the existing embedding cache alone cannot
 supply these scores, so a separate inference stage uses the checkpoint's MLM head.
 
-Both existing ESM2 checkpoint configs work (8M and 650M). Scoring always uses the
-final pretrained MLM head; embedding `layer` and representation `cache_id` do not
+`scoring_window="centered"` uses the full WT reference when it fits in
+`max_length`, otherwise a window centered on the masked position and clamped to
+the sequence ends. The default NKN preparation preset enables this mode with
+`max_length=1022`. For one-based position `p`, set `W=min(L,max_length)` and
+`start=max(0,min(p-1-W//2,L-W))`; score the slice `WT[start:start+W]`, masking
+its residue at zero-based offset `p-1-start`. BOS/EOS tokens are added afterward.
+For a 3,000-residue reference, positions 1,000 and 2,300 use residues 489–1,510
+and 1,789–2,810 respectively. Other positions in each window stay wild type,
+including positions mutated elsewhere in the variant. Distant context outside
+the window does not affect the score.
+
+All ESM2 extraction presets work for scoring (8M and 650M, pooled, residue, or
+centered-site). Configs omitting `scoring_window` retain `"full"`: full-reference
+scoring with the existing length check and cache identity. This choice is
+independent of embedding pooling and `site_embeddings`.
+Scoring always uses the final pretrained MLM head; embedding `layer` and
+representation `cache_id` do not
 select its scoring layer or output directory. The main NKN and Kermut presets
 select the 650M checkpoint. The 8M preset remains available for smoke tests.
 
 ```bash
 # Required only if weights/tokenizer are not downloaded yet; valid assets are reused.
-python -m feature_generation.cli download --config configs/extraction/esm2_650m.json
+python -m feature_generation.cli download --config configs/extraction/esm2_650m_centered.json
 
-python -m feature_generation.cli score --config configs/extraction/esm2_650m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --batch-size 8 --resume
+python -m feature_generation.cli score --config configs/extraction/esm2_650m_centered.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --batch-size 8 --resume
 
-python -m feature_generation.cli validate --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --feature-type scores --model-family esm2 --cache-id esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371
+python -m feature_generation.cli validate --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --feature-type scores --model-family esm2 --cache-id esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371-centered1022
 ```
 
 Use `--device cpu` without a GPU. `--batch-size` caps the number of masked WT
 copies per forward pass; `max_tokens_per_batch` additionally limits total tokens,
-including BOS/EOS. Scoring never truncates. `--num-orders` and structure-manifest
+including BOS/EOS; the budget applies to each context window. `--num-orders` and structure-manifest
 options apply to ProteinMPNN and are rejected for ESM2. New dependencies are not
 needed: the verified safetensors checkpoint already contains the MLM head.
 
 `prepare_esm2.sbatch` downloads/verifies ESM2 650M and then runs both layer-33
-embedding extraction and scoring for the pilot assay. The Conda environment and
+embedding extraction and scoring for every assay in the configured
+`raw_substitutions/DMS_substitutions.csv` catalog. Its default
+`configs/extraction/esm2_650m_centered.json` saves centered mutation-site vectors
+and a full-sequence mean from fixed non-overlapping windows for NKN's sequence
+branches, plus centered-window
+masked-marginal scores for its GP mean. The Conda environment and
 ProteinGym assay CSVs must already exist. First-time downloads need outbound
 HTTPS from the compute node; verified completed caches are reused on resubmission.
 
 ```text
 data/features/pretrained/<assay>/
-  scores/esm2/esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371/
+  scores/esm2/esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371-centered1022/
     mean_score.csv
     config.json
     provenance.json
@@ -211,31 +237,27 @@ The CSV has `variant_id,score` with exact coverage of the shared `variants.csv`.
 The filename describes its role in the GP mean; the ESM2 value is a sum of mutation
 log-odds. Its metadata records checkpoint hashes, masking recipe, precision and
 score direction. The recipe ID includes checkpoint, inference precision and
-revision. Representation caches and ProteinMPNN score caches are preserved.
+revision; centered scoring adds `-centered<max_length>` and recipe version 2.
+Its metadata declares the window policy and coordinate convention. Full-reference
+version-1 scores remain readable under their original IDs. Switching scoring
+mode does not change the embedding cache identity, so completed embeddings can
+be reused. NKN now explicitly selects the centered scores; Kermut's preset
+continues selecting full-reference scores. ProteinMPNN score caches are preserved.
 
 Select just ESM2 scores for the mean function:
 
 ```json
 {
   "score_sources": [
-    "scores/esm2/esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371"
+    "scores/esm2/esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371-centered1022"
   ]
 }
 ```
 
-The NKN batch preset uses ESM2 650M and ProteinMPNN together by listing both
-sources. They become separate score columns, each standardized using training
-variants only; the GP learns a
-coefficient for each. This choice is independent of `model.enabled_branches`.
-
-`configs/esm2_mean_score_smoke.json` selects ESM2 representations and ESM2
-scores. `configs/esm2_proteinmpnn_combined_mean_smoke.json` selects both kernel
-modalities and both mean-score sources. Both configs run only five training steps
-for integration testing:
-
-```bash
-python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/esm2_mean_score_smoke.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --output results/esm2_mean_smoke
-```
+The NKN batch preset selects only ESM2 650M scores. Listing ProteinMPNN scores
+as an additional source creates a separate score column; each is standardized
+using training variants only, and the GP learns a coefficient for each.
+This choice is independent of `model.enabled_branches`.
 
 Recipe references: [official ESM variant scoring](https://github.com/facebookresearch/esm/blob/main/examples/variant-prediction/predict.py),
 [Kermut ESM2 scoring](https://github.com/petergroth/kermut/blob/main/kermut/cmdline/preprocess_data/extract_esm2_zero_shots.py).
@@ -251,7 +273,7 @@ the normalization); the score is not derived from the canonical 20-way extractio
 cache. There is no WT subtraction, DMS-label input, or finetuning.
 
 ```bash
-python -m feature_generation.cli score --config configs/extraction/proteinmpnn_v48_020.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --batch-size 8 --resume
+python -m feature_generation.cli score --config configs/extraction/proteinmpnn_v48_020.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --batch-size 1 --resume
 python -m feature_generation.cli validate --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --feature-type scores --model-family proteinmpnn --cache-id v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb
 ```
 
@@ -259,10 +281,16 @@ Use `--device cpu` when no GPU is available. This reuses the existing ProteinMPN
 checkpoint and structure manifest; no new dependencies or model downloads are
 needed if extraction already ran. Scoring can also run before extraction.
 `prepare_proteinmpnn.sbatch` downloads and verifies the pinned checkpoint/source
-and chain-A ProteinGym reference structure, then extracts the Kermut
-sequence-conditioned features and prepares variant scores. These are four
+and ProteinGym reference structures for every selected catalog assay, then
+extracts the Kermut sequence-conditioned features and prepares variant scores.
+Existing structure manifests, including custom sources, are validated and
+reused. New structures use their sole polymer chain; multichain structures need
+a separately prepared manifest with an explicit chain. These are four
 stages: model assets, structure, features, and scores. The job retains seed 0
 and one order for variant scoring, independently of the Kermut feature recipe.
+Scoring uses one complete variant per batch to reduce peak GPU memory for long
+proteins. Both ProteinMPNN presets disable the optional sequence-length guard;
+the job still requires full-reference structures and sufficient memory/runtime.
 It uses `proteinmpnn_v48_020.json` only for that separate scoring stage; the
 job's feature extraction uses `proteinmpnn_v48_020_kermut.json`.
 No checkpoint or structure needs to be downloaded before submission. The Conda
@@ -316,20 +344,85 @@ Set experiment `score_sources` explicitly to the generated score source:
 }
 ```
 
-`configs/esm2_proteinmpnn_mean_score_smoke.json` selects the existing ESM2-8M
-and ProteinMPNN representations with these scores and five GP training steps.
-This is an integration smoke test, not a converged performance experiment:
-
-```bash
-python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/esm2_proteinmpnn_mean_score_smoke.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --output results/esm2_proteinmpnn_mean_smoke
-```
-
 The GP loader validates dedicated score caches, joins scores by variant ID and
 standardizes each score using training variants only. Legacy `zero_shot`
 descriptors remain readable; all new score artifacts use `mean_score.csv`.
 
 Official scoring sources: [ProteinMPNN sequence scoring](https://github.com/dauparas/ProteinMPNN/blob/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/protein_mpnn_run.py),
 [ProteinMPNN NLL reduction](https://github.com/dauparas/ProteinMPNN/blob/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/protein_mpnn_utils.py).
+
+## Preparing the full catalog on Slurm
+
+Both preparation scripts select every catalog `DMS_id` by default, preserving
+separate assays for the same protein. `DMS_substitutions.csv` supplies metadata;
+it is not itself a variant assay. Each catalog entry must have its corresponding
+CSV beside the catalog. Outputs remain under `data/features/pretrained/<assay>/`.
+
+For the full catalog, use one assay per array task. Run from the repository root
+with Python available (the listing helper needs only the standard library):
+
+```bash
+esm_count=$(python sbatch_run/run_prepare_rep/list_assays.py \
+  --config configs/extraction/esm2_650m_centered.json --count)
+mpnn_count=$(python sbatch_run/run_prepare_rep/list_assays.py \
+  --config configs/extraction/proteinmpnn_v48_020_kermut.json --count)
+
+esm_job=$(sbatch --parsable --array="0-$((esm_count - 1))%4" \
+  sbatch_run/run_prepare_rep/prepare_esm2.sbatch)
+sbatch --array="0-$((mpnn_count - 1))%4" \
+  --dependency="afterany:${esm_job%%;*}" \
+  sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
+```
+
+`%4` limits each array to four simultaneous GPU jobs. The dependency waits for
+the ESM2 array to finish, including failed tasks, before starting ProteinMPNN;
+this avoids simultaneous writes to shared assay metadata by the two models.
+These are standard [Slurm array options](https://slurm.schedmd.com/job_array.html).
+Each task retains the script's two-hour time limit and resource request. Increase
+the time limit with `sbatch --time=...` when an individual assay needs longer.
+
+Task indices are zero-based catalog row numbers. Keep the catalog unchanged
+while tasks are queued or running. To identify or rerun one task:
+
+```bash
+python sbatch_run/run_prepare_rep/list_assays.py \
+  --config configs/extraction/esm2_650m_centered.json --task-index 63
+sbatch --array=63 sbatch_run/run_prepare_rep/prepare_esm2.sbatch
+```
+
+Submitting either script without `--array` processes the whole selection
+sequentially in one GPU allocation; the two-hour default may be insufficient
+for this mode. Logs include the array job/task IDs. Both scripts use `--resume`
+and `--continue-on-error`: failed assays are reported, remaining assays and the
+scoring stage are still attempted, and any failed stage gives a nonzero exit.
+Shared setup failures, such as an invalid catalog or failed model download,
+stop the job before extraction.
+
+The default ESM2 compact preset uses at most 1,022 residues in each model input
+and supports mutation sites anywhere in the full reference. Its output estimate
+is `(number_of_variants + mutation_occurrences) * 1280 * 4` bytes plus four int64
+arrays per mutation occurrence. It has a 32 GiB output guard; the batch job
+requests 192 GiB host RAM. Peak process memory includes input tables, model
+weights, and validation. Completed assays can resume; partial assays restart.
+The default preset also scores long references with centered WT windows, so
+both ESM2 stages cover mutation positions beyond residue 1,022. ProteinMPNN's
+default presets also have no reference-length cap, but still require a valid
+full-reference structure. Its job requests 16 GiB host RAM and two hours, and
+scores one variant per batch; long references may need more memory or time.
+ESM-IF1 retains its 1,022-residue limit.
+
+To prepare Kermut's pooled prefix embeddings instead, pass the pooled preset:
+
+```bash
+sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch --config configs/extraction/esm2_650m.json
+```
+
+`ESM2_CONFIG` can also select the extraction config; `--config` takes precedence.
+Use that same config when listing array indices if its catalog differs. The
+pooled preset averages the first 1,022 residues (the full sequence when shorter)
+and retains its 4 GiB output limit. It can extract embeddings for longer
+references, but its scoring stage still fails the full-reference length check.
+These pooled caches cannot supply NKN's `sequence_site` branch.
 
 ## ProSST: sequence embeddings conditioned on a reference structure
 
@@ -448,8 +541,9 @@ python -m feature_generation.cli extract --config configs/extraction/esm2_8m.jso
 python -m feature_generation.cli validate --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019
 ```
 
-Use `python -m feature_generation.cli` for all extraction commands, and the
-`esm2_650m.json` configuration for the larger checkpoint. Download is a separate
+Use `python -m feature_generation.cli` for all extraction commands. For the
+larger checkpoint, choose `esm2_650m_centered.json` for NKN's site and global
+branches or `esm2_650m.json` for Kermut's pooled vectors. Download is a separate
 explicit step; extraction uses local files only and works with
 `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`.
 
@@ -459,6 +553,63 @@ The presets are:
 | --- | --- | --- | --- | --- |
 | `esm2_8m.json` | `facebook/esm2_t6_8M_UR50D` | `c731040fcd8d73dceaa04b0a8e6329b345b0f5df` | 6 | 320 |
 | `esm2_650m.json` | `facebook/esm2_t33_650M_UR50D` | `08e4846e537177426273712802403f7ba8261b6c` | 33 | 1280 |
+| `esm2_650m_residue.json` | `facebook/esm2_t33_650M_UR50D` | `08e4846e537177426273712802403f7ba8261b6c` | 33 | 1280 |
+| `esm2_650m_centered.json` | `facebook/esm2_t33_650M_UR50D` | `08e4846e537177426273712802403f7ba8261b6c` | 33 | 1280 |
+
+The `esm2_8m.json` and `esm2_650m.json` presets use `pooling="mean"` and
+`truncation="prefix"`: tokenize only the first `min(sequence_length, 1022)`
+residues and average their embeddings,
+excluding special tokens and padding. This matches Kermut's prefix-mean
+preprocessing. Mutations after residue 1,022 do not affect these ESM2 vectors.
+Cache IDs end in `-mean-first1022`; rerun preparation to create these caches.
+The Kermut configuration selects the corresponding pooled ID.
+
+The optional `esm2_650m_residue.json` preset
+uses `pooling="none"` and `truncation="reject"`. It saves `[N,L,1280]` embeddings
+for the full sequence and rejects references longer than 1,022 residues.
+Its cache ID is `esm2_t33_650M_UR50D-layer33-08e4846e5371`, so compatible existing
+residue caches can be reused with that selection. The loader takes mutation
+vectors and averages all residues when this legacy recipe is selected.
+
+The NKN preset selects `esm2_650m_centered.json`, with
+`site_embeddings="centered"`. For a one-based mutation
+position `p`, reference length `L`, and window length `W=min(L,1022)`, it uses
+zero-based bounds `start=max(0,min(p-1-W//2,L-W))`, `end=start+W`.
+It processes the actual variant sequence without masking and retains the vector
+at local index `p-1-start`. Other mutations inside the window provide context;
+mutations outside it cannot influence that site's vector. Identical window
+bounds within a variant reuse one model evaluation. Short variants use their
+full sequence for both sites and the mean.
+
+For the global vector, this preset uses `pooling="mean"`, `truncation="none"`,
+and `global_window="non_overlapping"`. Split the full variant at fixed offsets
+`0,1022,2044,...`, letting the final window be shorter. Combine window means
+using each window's residue count as its weight; exclude BOS, EOS, and padding.
+For `L=3000`, the mean is `(1022*g1 + 1022*g2 + 956*g3)/3000`. Every residue
+contributes exactly once, and the same boundaries apply to WT and all variants.
+Mutations after residue 1,022 can therefore affect the global vector. These are
+window-context embeddings, so they do not reproduce full-sequence attention
+across window boundaries. Centered site windows contribute to the global vector
+only when their bounds exactly match a global window; otherwise they supply
+site vectors alone. Model evaluations with matching bounds are reused.
+
+The cache ID ends in `-mean-all-nonoverlap1022-centered-sites`. The compact leaf stores
+float32 `embeddings[N,D]` (global means), `site_embeddings[M,D]` (one row per
+mutation occurrence), and int64 `site_variant_indices`, `site_positions`,
+`site_window_starts`, `site_window_ends`. Site positions are one-based; window
+bounds are zero-based and half-open. WT variants have zero site rows but still
+have a global vector. Full reference positions, sequences, hashes, and variant
+IDs remain intact. Validation checks exact mutation coverage and window bounds,
+and finite-value checks use bounded chunks. Loading uses memory mapping for the
+compact file. Extraction accumulates the compact tensors in CPU RAM and commits
+one atomic `features.pt` per assay; it does not persist intermediate batches.
+Global-only pooled, full-residue, and compact caches use separate recipe IDs.
+The previous `-mean-first1022-centered-sites` caches remain readable with their
+prefix recipe, but cannot be resumed as full-sequence globals. Prepare the new
+embedding cache before running the updated NKN preset. Masked-marginal score
+metadata and cache IDs do not change, so completed centered score caches are
+reused. Full-window pooling adds model passes for long proteins, without
+increasing the number of saved global or site vectors.
 
 Weights, tokenizer files and a checksum manifest live under
 `data/models/esm2/<model>/<revision>/`. Only safetensors weights are downloaded.
@@ -520,8 +671,20 @@ include `--assay-index`, `--output-root`, `--device cpu|cuda|auto`, and
 
 `max_tokens_per_batch` includes the two special tokens per sequence. Increase
 it when a single sequence exceeds the budget, or reduce it to fit GPU memory.
-Batching never truncates sequences. ESM-2 rejects sequences longer
-than `max_length` (at most 1022 residues); windowing is not implemented.
+With `pooling="mean", truncation="prefix", site_embeddings="none"`, ESM2 processes
+the first `max_length` residues (at most 1022) and budgets tokens for that prefix.
+With `site_embeddings="centered"`, it also processes the windows needed for
+mutation-site vectors, using the same per-window token budget.
+With `global_window="non_overlapping"`, `pooling="mean"`, and `truncation="none"`,
+all residues contribute through fixed windows no larger than `max_length`.
+The final shorter window receives proportionally less weight. This mode also
+supports global-only caches with `site_embeddings="none"`.
+The residue preset and legacy configs omitting these settings use
+`pooling="none", truncation="reject"`: they save per-residue embeddings and
+reject sequences longer than `max_length`.
+Prefix truncation requires mean pooling. Masked-marginal scoring independently
+uses `scoring_window="full"` (the default) or `"centered"`; the centered preset
+selects the latter so `max_length` limits each scoring window, not the reference.
 
 Saved embeddings always use float32. ESM-2 inference defaults to float32 and supports
 explicit float16/bfloat16 configurations on suitable devices. Select a new
@@ -531,10 +694,13 @@ uses CUDA when available, otherwise CPU; a CUDA failure does not silently switch
 the execution device. The 650M preset has not been benchmarked on a 4-GB GPU;
 adjust batch size/precision or select CPU as needed.
 
-The runner holds one assay tensor in CPU memory. Estimated tensor storage is
-`N * L * D * 4` bytes. `max_output_gib` defaults to 4 and guards that tensor's
-size, not total process memory. Model weights, batches, and validation require
-additional memory. There is no sharded output format in this version.
+The runner holds one assay's output tensors in CPU memory. Estimated tensor
+storage is `N * D * 4` bytes for pooled embeddings, `N * L * D * 4` for full
+residue embeddings, or `(N + M) * D * 4 + M * 32` for compact caches with `M`
+mutation occurrences. `max_output_gib` defaults to 4; the centered preset sets
+it to 32. This guards output tensor size, not total process memory. Model
+weights, batches, and validation require additional memory. There is no sharded
+output format in this version.
 
 ## Saved contract and GP integration
 
@@ -551,9 +717,16 @@ data/features/pretrained/<assay>/
 
 `features.pt` contains `schema_version=2`, `synthetic=false`, `assay_id`,
 `reference_sequence`, one-based int64 `positions`, ordered `variant_ids`,
-`sequence_hashes`, and float32 `embeddings[N,L,D]`. Beginning/end tokens and
-padding are excluded. The model layer is configurable; the default is the final
-normalized layer. Pooling is left to the existing GP loader.
+`sequence_hashes`, and float32 `embeddings[N,D]` for the pooled presets. The
+reference, positions, variant sequences and hashes retain full assay identity;
+they are not shortened to the prefix. Payload fields `pooling`, `truncation`,
+`max_length` and `represented_length` record the embedding coverage. Prefix
+recipes use `represented_length=min(reference_length,max_length)`. Full-window
+recipes use the complete reference length and additionally record
+`global_window="non_overlapping"` and
+`global_window_aggregation="length_weighted_mean"`. Beginning/end tokens and padding are excluded from
+the average. The model layer is configurable; the default is the final
+normalized layer. Unpooled caches use `embeddings[N,L,D]`.
 
 `config.json` records stable model/preprocessing identity, pinned revision,
 checkpoint hashes, layer, dtype and backend/library versions. `provenance.json`
@@ -562,6 +735,8 @@ artifact hashes. A leaf is committed only after writing all artifacts; readers
 never see a partially written completed leaf. The first completed sequence
 recipe becomes the assay default. Select another recipe explicitly with
 `validate --cache-id ...` or the GP configuration's `feature_selection`.
+If an assay already defaults to a residue cache, creating the pooled cache does
+not change that default; use the updated GP configs or select the new ID.
 
 The existing synthetic fixture is preserved. The new sequence cache is
 compatible with the sequence portion of `data_loading.load_feature_bundle`;
@@ -570,6 +745,8 @@ require the modalities selected by `model.enabled_branches` (all four branches b
 default) and at least one score source. ESM2 masked-marginal scores and ProteinMPNN
 sequence likelihoods are generated with `score` and selected through `score_sources`.
 Structure embeddings are not generated by the current extraction commands.
+Global-only pooled caches support `sequence_global`; `sequence_site` requires
+either a full-residue cache or the explicit compact centered-site recipe.
 
 ## Validation
 

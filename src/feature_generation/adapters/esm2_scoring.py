@@ -5,6 +5,8 @@ from collections.abc import Iterator, Sequence
 import torch
 from torch import Tensor
 
+from data_loading.sequence_windows import centered_window_bounds
+
 from .esm2 import ALPHABET, ESM2Adapter
 from ..config import MODEL_PRESETS
 
@@ -18,7 +20,11 @@ class ESM2ScoreAdapter(ESM2Adapter):
     def score_metadata(self) -> dict:
         metadata = self.metadata()
         # A scoring recipe has no chosen representation layer or pooling method.
-        for name in ("checkpoint", "layer", "embedding_dim", "hidden_size", "pooling", "includes_special_tokens"):
+        for name in (
+            "checkpoint", "layer", "embedding_dim", "hidden_size", "pooling", "includes_special_tokens",
+            "site_embeddings", "cache_layout", "site_context", "window_policy", "window_indexing",
+            "global_window", "global_window_aggregation",
+        ):
             metadata.pop(name, None)
         metadata.update(
             feature_type="scores", model_family="esm2", model_class="EsmForMaskedLM",
@@ -30,7 +36,15 @@ class ESM2ScoreAdapter(ESM2Adapter):
             masking="one_wild_type_residue_at_a_time", wild_type_subtraction=True,
             noncanonical_tokens="retained_in_normalization",
             alphabet=CANONICAL_ALPHABET, precision_policy="float32_log_softmax",
+            # Full-context scoring keeps its original recipe and cache identity,
+            # independently of the selected embedding policy.
+            truncation="reject",
         )
+        if self.config.scoring_window == "centered":
+            metadata.update(
+                scoring_recipe_version=2, scoring_window="centered", truncation="centered",
+                window_policy="centered_clamped", window_indexing="zero_based_half_open",
+            )
         return metadata
 
     def load(self) -> None:
@@ -115,16 +129,18 @@ class ESM2ScoreAdapter(ESM2Adapter):
 
         Each required site is evaluated once, with only that WT site masked.
         Multiple mutations share this WT context; their contributions are
-        additive. Scores retain the native model vocabulary normalization.
+        additive. Centered mode limits each WT context to a clamped window
+        around that site. Scores retain the native model vocabulary normalization.
         """
         if type(batch_size) is not int or batch_size < 1:
             raise ValueError("batch_size must be a positive integer")
         if not isinstance(reference_sequence, str) or not reference_sequence or set(reference_sequence) - ALPHABET:
             raise ValueError("Reference must be a nonempty canonical amino-acid sequence")
         length = len(reference_sequence)
-        if length > self.config.max_length:
+        if length > self.config.max_length and self.config.scoring_window == "full":
             raise ValueError(f"Reference has {length} residues, exceeding max_length={self.config.max_length}; truncation is disabled")
-        if length + 2 > self.config.max_tokens_per_batch:
+        represented_length = min(length, self.config.max_length)
+        if represented_length + 2 > self.config.max_tokens_per_batch:
             raise ValueError("One reference sequence exceeds max_tokens_per_batch, including BOS/EOS tokens")
         if isinstance(sequences, (str, bytes)):
             raise ValueError("sequences must be a nonempty collection of full-length sequences")
@@ -141,25 +157,44 @@ class ESM2ScoreAdapter(ESM2Adapter):
             mutations.append([(site, aa) for site, aa in enumerate(sequence) if aa != reference_sequence[site]])
         sites = sorted({site for changes in mutations for site, _ in changes})
         self.load()
-        input_ids, attention_mask, residue_positions, amino_acid_ids = self._reference_tokens(reference_sequence)
-        masked_batch_size = min(batch_size, self.config.max_tokens_per_batch // (length + 2))
+        # Short references share one tokenization in both scoring modes. Long
+        # references are tokenized window by window, never as a complete input.
+        reference_tokens = self._reference_tokens(reference_sequence) if length <= self.config.max_length else None
+        masked_batch_size = min(batch_size, self.config.max_tokens_per_batch // (represented_length + 2))
         log_odds = torch.empty((len(sites), 20), dtype=torch.float32)
         site_rows = {site: row for row, site in enumerate(sites)}
         aa_columns = {aa: column for column, aa in enumerate(CANONICAL_ALPHABET)}
         for start in range(0, len(sites), masked_batch_size):
             batch_sites = sites[start:start + masked_batch_size]
             count = len(batch_sites)
-            positions = residue_positions[batch_sites].to(self._device)
+            if reference_tokens is not None:
+                input_ids, attention_mask, residue_positions, amino_acid_ids = reference_tokens
+                positions = residue_positions[batch_sites].to(self._device)
+                masked_ids = input_ids.to(self._device).expand(count, -1).clone()
+                batch_attention = attention_mask.to(self._device).expand(count, -1)
+            else:
+                window_tokens = {}
+                token_rows, attention_rows, local_positions = [], [], []
+                for site in batch_sites:
+                    bounds = centered_window_bounds(site + 1, length, self.config.max_length)
+                    if bounds not in window_tokens:
+                        window_tokens[bounds] = self._reference_tokens(reference_sequence[bounds[0]:bounds[1]])
+                    input_ids, attention_mask, residue_positions, amino_acid_ids = window_tokens[bounds]
+                    token_rows.append(input_ids)
+                    attention_rows.append(attention_mask)
+                    local_positions.append(int(residue_positions[site - bounds[0]]))
+                masked_ids = torch.cat(token_rows).to(self._device)
+                batch_attention = torch.cat(attention_rows).to(self._device)
+                positions = torch.tensor(local_positions, device=self._device)
             rows = torch.arange(count, device=self._device)
-            masked_ids = input_ids.to(self._device).expand(count, -1).clone()
             masked_ids[rows, positions] = self._tokenizer.mask_token_id
             with torch.inference_mode():
                 output = self._model(
                     input_ids=masked_ids,
-                    attention_mask=attention_mask.to(self._device).expand(count, -1), return_dict=True,
+                    attention_mask=batch_attention, return_dict=True,
                 )
                 logits = output.logits
-                if tuple(logits.shape) != (count, length + 2, self._model.config.vocab_size):
+                if tuple(logits.shape) != (count, represented_length + 2, self._model.config.vocab_size):
                     raise ValueError("ESM2 returned an unexpected masked-language-model logits shape")
                 masked_logits = logits[rows, positions].to(torch.float32)
                 if not torch.isfinite(masked_logits).all():

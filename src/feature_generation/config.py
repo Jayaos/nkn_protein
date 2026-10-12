@@ -34,6 +34,11 @@ class ExtractionConfig:
     device: str = "auto"
     max_tokens_per_batch: int = 1024
     max_length: int = 1022
+    pooling: str = "none"
+    global_window: str = "prefix"
+    truncation: str = "reject"
+    site_embeddings: str = "none"
+    scoring_window: str = "full"
     inference_dtype: str = "float32"
     output_dtype: str = "float32"
     max_output_gib: float = 4.0
@@ -50,8 +55,37 @@ class ExtractionConfig:
             self.layer = preset["num_layers"]
         if type(self.layer) is not int or not 0 <= self.layer <= preset["num_layers"]:
             raise ValueError(f"layer must be between 0 and {preset['num_layers']}")
+        if self.pooling not in ("none", "mean"):
+            raise ValueError("pooling must be none or mean")
+        if self.global_window not in ("prefix", "non_overlapping"):
+            raise ValueError("global_window must be prefix or non_overlapping")
+        if self.truncation not in ("reject", "prefix", "none"):
+            raise ValueError("truncation must be reject, prefix, or none")
+        if self.global_window == "non_overlapping":
+            if self.pooling != "mean" or self.truncation != "none":
+                raise ValueError("non_overlapping global windows require mean pooling and truncation=none")
+        else:
+            if self.truncation == "none":
+                raise ValueError("truncation=none requires non_overlapping global windows")
+            if self.truncation == "prefix" and self.pooling != "mean":
+                raise ValueError("prefix truncation requires mean pooling")
+            if self.pooling == "mean" and self.truncation != "prefix":
+                raise ValueError("mean pooling requires prefix truncation")
+        if self.site_embeddings not in ("none", "centered"):
+            raise ValueError("site_embeddings must be none or centered")
+        if self.site_embeddings == "centered" and self.pooling != "mean":
+            raise ValueError("centered site embeddings require mean pooling")
+        if self.scoring_window not in ("full", "centered"):
+            raise ValueError("scoring_window must be full or centered")
         if self.cache_id is None:
             self.cache_id = f"{self.model_id.split('/')[-1]}-layer{self.layer}-{self.revision[:12]}"
+            if self.pooling == "mean":
+                if self.global_window == "non_overlapping":
+                    self.cache_id += f"-mean-all-nonoverlap{self.max_length}"
+                else:
+                    self.cache_id += f"-mean-first{self.max_length}"
+            if self.site_embeddings == "centered":
+                self.cache_id += "-centered-sites"
         if not isinstance(self.cache_id, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", self.cache_id) is None:
             raise ValueError("cache_id must be a safe single directory name")
         if self.cache_id.endswith(".") or self.cache_id.split(".")[0].upper() in {
@@ -70,7 +104,7 @@ class ExtractionConfig:
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")
         if self.max_length > 1022:
-            raise ValueError("This extractor supports at most 1022 residues; it never truncates")
+            raise ValueError("This extractor supports at most 1022 residues per model input")
         if self.inference_dtype not in ("float32", "float16", "bfloat16"):
             raise ValueError("inference_dtype must be float32, float16, or bfloat16")
         if self.output_dtype != "float32":

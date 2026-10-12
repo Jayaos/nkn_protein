@@ -62,7 +62,7 @@ def extract(
         try:
             safe_component(assay_id, "assay ID")
             inputs = prepare_assay(config.assay_index, assay_id, singles_only=singles_only, limit=limit)
-            if inputs.length > config.max_length:
+            if config.max_length is not None and inputs.length > config.max_length:
                 raise ValueError(
                     f"Reference length {inputs.length} exceeds max_length={config.max_length}; "
                     "structures and sequences are never truncated"

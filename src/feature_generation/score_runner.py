@@ -20,10 +20,13 @@ def default_cache_id(config: InverseFoldingConfig | ExtractionConfig, num_orders
     """Keep score recipes independent of representation-layer/cache selections."""
     family = getattr(config, "model_family", "esm2")
     if family == "esm2":
-        return (
+        cache_id = (
             f"{config.model_id.split('/')[-1]}-masked_marginals-"
             f"{config.inference_dtype}-{config.revision[:12]}"
         )
+        if config.scoring_window == "centered":
+            cache_id += f"-centered{config.max_length}"
+        return cache_id
     if family != "proteinmpnn":
         raise ValueError("Mean scoring currently supports only ProteinMPNN and ESM2")
     return (
@@ -49,13 +52,15 @@ def score(
     """Score variants with the selected pretrained recipe, without labels.
 
     ProteinMPNN evaluates full variant sequences on the reference backbone.
-    ESM2 evaluates masked WT positions and sums mutation log-odds. The extraction
-    config supplies checkpoint and paths; embedding layer selections are ignored.
+    ESM2 evaluates masked WT positions and sums mutation log-odds, optionally
+    using centered WT windows for long references. The extraction config supplies
+    checkpoint, paths and scoring_window; embedding layer selections are ignored.
     Scoring has a separate cache identity and never edits representation leaves.
     """
     family = getattr(config, "model_family", "esm2")
     if family not in ("proteinmpnn", "esm2"):
         raise ValueError("Mean scoring currently supports only ProteinMPNN and ESM2")
+    centered = family == "esm2" and config.scoring_window == "centered"
     if not assay_ids or len(set(assay_ids)) != len(assay_ids):
         raise ValueError("Select at least one unique assay")
     for name, value in (("batch_size", batch_size), ("num_orders", num_orders)):
@@ -90,7 +95,7 @@ def score(
         try:
             safe_component(assay_id, "assay ID")
             inputs = prepare_assay(config.assay_index, assay_id, singles_only=singles_only, limit=limit)
-            if inputs.length > config.max_length:
+            if config.max_length is not None and inputs.length > config.max_length and not centered:
                 raise ValueError(
                     f"Reference length {inputs.length} exceeds max_length={config.max_length}; "
                     "structures and sequences are never truncated"
@@ -102,7 +107,7 @@ def score(
                 if not manifest_path.is_relative_to(manifest_root):
                     raise ValueError("Structure manifest path escapes structure_manifest_dir")
                 structure = load_structure(manifest_path, inputs.reference_sequence, require_oxygen=True)
-            elif inputs.length + 2 > config.max_tokens_per_batch:
+            elif (min(inputs.length, config.max_length) if centered else inputs.length) + 2 > config.max_tokens_per_batch:
                 raise ValueError("One sequence exceeds max_tokens_per_batch, including BOS/EOS tokens")
             if model_metadata is None:
                 model_metadata = (adapter.score_metadata(num_orders=num_orders) if family == "proteinmpnn"
@@ -131,6 +136,9 @@ def score(
                     index for sequence in inputs.sequences
                     for index, (wt, mutant) in enumerate(zip(inputs.reference_sequence, sequence)) if wt != mutant
                 })
+                if centered:
+                    event["scoring_window"] = "centered"
+                    event["window_length"] = min(inputs.length, config.max_length)
             emit(event)
             if not loaded:
                 adapter.load()

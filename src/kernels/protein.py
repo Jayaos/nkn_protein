@@ -132,10 +132,14 @@ class ProteinKernel(nn.Module):
                     "variants" if name == "sequence_global" else "mutation occurrences"
                 ))
 
-    def prepare_training_geometry(self, train, *, use_triangle: bool = True) -> None:
-        """Cache fixed geometry and symmetric NKN pairs for immutable training inputs.
+    def prepare_training_geometry(
+        self, train, *, use_triangle: bool = True, use_unique_features: bool = True,
+    ) -> None:
+        """Cache geometry and repeated/symmetric pairs for immutable training inputs.
 
         ``use_triangle=False`` retains dense NKN evaluation for numerical checks.
+        ``use_unique_features=False`` keeps occurrence-wise triangular evaluation
+        of the inverse-folding branch instead of sharing identical feature pairs.
         Different or modified inputs continue through the ordinary dense path.
         """
         self.clear_geometry_cache()
@@ -147,7 +151,9 @@ class ProteinKernel(nn.Module):
                     raise ValueError(f"Feature dimension for {name} differs from its training dimension")
                 self.branches[name].prepare_geometry(features)
             if use_triangle:
-                self._training_triangle = TrainingTriangle.prepare(self, train)
+                self._training_triangle = TrainingTriangle.prepare(
+                    self, train, use_unique_features=use_unique_features,
+                )
         except Exception:
             self.clear_geometry_cache()
             raise
@@ -175,6 +181,10 @@ class ProteinKernel(nn.Module):
                  for primitive in branch.primitives], dim=-1,
             )
             packed = branch.nkn(primitives)
+            if prepared.occurrence_to_unique_pairs is not None:
+                # Restore every occurrence before the unchanged mutation sums.
+                # Autograd accumulates each repeated pair's parameter gradient.
+                packed = packed.index_select(0, prepared.occurrence_to_unique_pairs)
             if name != "sequence_global":
                 # The local NKN must precede mutation aggregation. Expand here
                 # to preserve its summation order for multi-mutation variants.

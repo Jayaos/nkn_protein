@@ -25,6 +25,20 @@ def _signature(value: dict) -> str:
     return hashlib.sha256(stable_json(value).encode("utf-8")).hexdigest()
 
 
+def _resume_configs_match(saved: dict, requested: dict, model_family: str) -> bool:
+    """Compare inference identity after validating the original saved artifact.
+
+    ProteinMPNN's max_length only controls admission of a full reference; it
+    does not change model inputs or inference for an admitted structure. Keep
+    the on-disk config and all of its integrity signatures unchanged. Other
+    families, and all other top-level or nested fields, retain exact equality.
+    """
+    if model_family == "proteinmpnn":
+        saved = {key: value for key, value in saved.items() if key != "max_length"}
+        requested = {key: value for key, value in requested.items() if key != "max_length"}
+    return saved == requested
+
+
 def _leaf(root: Path, model_family: str, cache_id: str) -> Path:
     if model_family not in FAMILIES:
         raise ValueError(f"Unsupported inverse-folding model family: {model_family!r}")
@@ -182,7 +196,7 @@ def check_existing(
         if not resume:
             raise FileExistsError(f"Feature cache already exists: {leaf}; use --resume to validate and reuse it")
         validate_inverse_cache(root, model_family, cache_id)
-        if _read_json(_inside(leaf, "config.json")) != config:
+        if not _resume_configs_match(_read_json(_inside(leaf, "config.json")), config, model_family):
             raise ValueError("Existing checkpoint, conditioning, or structure differs; use a new cache ID")
         _register_default(root, model_family, cache_id)
         return True

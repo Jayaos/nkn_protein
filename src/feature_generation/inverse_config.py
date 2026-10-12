@@ -26,7 +26,9 @@ class InverseFoldingConfig:
     device: str = "auto"
     inference_dtype: str = "float32"
     output_dtype: str = "float32"
-    max_length: int = 1022
+    # ProteinMPNN accepts full structures; a positive value is an optional
+    # resource guard. ESM-IF1 retains its existing 1,022-residue default/cap.
+    max_length: int | None = None
     seed: int = 0
     num_orders: int = 10
 
@@ -71,8 +73,14 @@ class InverseFoldingConfig:
             raise ValueError("device must be auto, cpu, or cuda")
         if self.inference_dtype != "float32" or self.output_dtype != "float32":
             raise ValueError("Native inverse folding inference_dtype and output_dtype must be float32")
-        if type(self.max_length) is not int or not 1 <= self.max_length <= 1022:
-            raise ValueError("max_length must be an integer between 1 and 1022; truncation is disabled")
+        if self.model_family == "proteinmpnn":
+            if self.max_length is not None and (type(self.max_length) is not int or self.max_length < 1):
+                raise ValueError("ProteinMPNN max_length must be null or a positive integer; truncation is disabled")
+        else:
+            if self.max_length is None:
+                self.max_length = 1022
+            if type(self.max_length) is not int or not 1 <= self.max_length <= 1022:
+                raise ValueError("ESM-IF1 max_length must be an integer between 1 and 1022; truncation is disabled")
         if type(self.seed) is not int or not 0 <= self.seed < 2**32:
             raise ValueError("seed must be an integer between 0 and 2**32-1")
 

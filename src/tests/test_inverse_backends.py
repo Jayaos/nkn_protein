@@ -35,7 +35,7 @@ class InverseBackendTests(unittest.TestCase):
     def test_rejects_unsupported_recipes_and_unsafe_cache_paths(self):
         for kwargs in ({"conditioning_mode": "reference_prefix"}, {"revision": "main"},
                        {"cache_id": "../escape"}, {"cache_id": "CON"}, {"seed": True},
-                       {"inference_dtype": "float16"}, {"max_length": 1023},
+                       {"inference_dtype": "float16"}, {"model_family": "esm_if1", "max_length": 1023},
                        {"feature_type": "sequence"}, {"model_family": []}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 InverseFoldingConfig(**kwargs)

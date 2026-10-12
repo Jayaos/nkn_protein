@@ -117,9 +117,14 @@ features/<assay>/
 must match its complete sequences. Structural embeddings and inverse-folding
 probabilities are shared wild-type arrays indexed by one-based reference position.
 Working tensors are converted to float64; cache files are not rewritten.
-The current adapter uses mean pooling over all sequence residues for the global
-branch. Model-specific preprocessing and other pooling can later be supplied
-through the model-independent `FeatureBatch` API. The old
+The global branch accepts residue embeddings and averages them, or loads
+prepooled vectors directly. The NKN ESM2 preset saves mutation-site vectors from
+centered windows and a separate full-sequence mean from fixed non-overlapping
+windows, including for long references.
+The pooled ESM2 presets used by
+Kermut average only the first 1,022 residues (all residues when shorter).
+Model-specific preprocessing and other pooling can be supplied through the
+model-independent `FeatureBatch` API. The old
 `ProteinFitnessDataset.as_feature_matrices` demo transformations are not used.
 
 Mean score sources default to the distinct representation directories required
@@ -238,9 +243,13 @@ adjacent `resolved_config.json` unless an explicit configuration is supplied.
 The [ESM2 + ProteinMPNN job](../sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch)
 defaults to the real shared cache for `A0A1I9GEU1_NEIME_Kennouche_2019` and
 [`configs/esm2_proteinmpnn_nkn.json`](../configs/esm2_proteinmpnn_nkn.json).
-It requests 15 CPUs and no GPU. ESM2 650M layer-33 embeddings and ProteinMPNN
-sequence-conditioned distributions provide two kernel branches. The GP mean
-uses only ESM2 650M masked-marginal scores. The inverse-folding cache uses ten
+It requests 15 CPUs and no GPU. ESM2 650M layer-33 centered windows provide
+`sequence_site` vectors at mutation positions, while `sequence_global` vectors
+average every residue of each variant using fixed non-overlapping windows of
+up to 1,022 residues, weighted by each window's residue count.
+ProteinMPNN sequence-conditioned distributions
+provide the third branch, `inverse_folding`. The GP mean uses only ESM2 650M
+masked-marginal scores. The inverse-folding cache uses ten
 orders with seed 37 and retains the stored 20 amino-acid values without
 renormalization through `inverse_folding_policy: "sequence_conditional"`.
 
@@ -251,6 +260,24 @@ finish successfully:
 sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch
 sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
 ```
+
+ESM2 preparation defaults to `configs/extraction/esm2_650m_centered.json`, with
+192 GiB host RAM and a 32 GiB compact-output guard. It stores only the mutation
+vectors and global means; it does not allocate every residue for every variant.
+The new `-mean-all-nonoverlap1022-centered-sites` cache must be prepared before
+using the updated NKN preset. Existing prefix-mean and residue recipes remain
+readable and separate. Centered masked-marginal scores retain their existing
+recipe, so matching completed score caches can be reused.
+`--resume` reuses completed assay caches; interrupted assays restart extraction.
+Both ESM2 stages support sites anywhere in long references. Scoring uses
+`scoring_window: "centered"`: it masks each required WT position inside a window
+of up to 1,022 residues and sums mutant-minus-WT log probabilities per variant.
+Short references use full WT context. The updated NKN preset selects the new
+`-centered1022` score cache; older full-reference score caches remain separate.
+ProteinMPNN's presets now use `max_length: null`, removing its sequence-length
+guard while retaining full-reference structure requirements. Its preparation
+job scores one complete variant per batch; GPU memory and runtime still limit
+practical input sizes. ESM-IF1 retains its 1,022-residue limit.
 
 The NKN launcher uses the cluster's existing `nkn_protein` Conda environment.
 
@@ -427,18 +454,23 @@ Set `model.enabled_branches` to any nonempty combination of these names:
 | `sequence_site` | `sequence` | Variant residue embeddings at mutation positions |
 | `sequence_global` | `sequence` | Mean-pooled variant residue embeddings |
 
-For exactly two branches using sequence and inverse-folding features:
+The ESM2 + ProteinMPNN NKN preset enables three branches:
 
 ```json
 {
   "model": {
-    "enabled_branches": ["sequence_global", "inverse_folding"]
+    "enabled_branches": ["sequence_site", "sequence_global", "inverse_folding"]
   }
 }
 ```
 
-Add `sequence_site` to also use mutation-site sequence features; both sequence
-branches share the same selected cache. Only enabled branches are constructed,
+`sequence_site` accepts a full residue cache or the compact centered-site cache;
+the global-only pooled ESM2 presets cannot supply it. Both sequence branches
+share the same selected cache. For compact caches, top-level `pooling: "mean"`
+loads the stored global average and does not average the mutation-site vectors.
+The current NKN preset covers the full sequence; older compact recipes cover
+only the prefix.
+For full residue caches, it averages all residues. Only enabled branches are constructed,
 and the final NKN automatically receives that many inputs. Disabled feature
 caches and default descriptors are not required. Any remaining enabled branch
 still requires its actual features. Empty, duplicate and unknown branch selections
@@ -446,7 +478,7 @@ are rejected. Omit the setting to retain the original four-branch model.
 
 `feature_selection` independently chooses the family/checkpoint for each feature
 type. The NKN batch preset selects
-`esm2/esm2_t33_650M_UR50D-layer33-08e4846e5371` for `sequence` and
+`esm2/esm2_t33_650M_UR50D-layer33-08e4846e5371-mean-all-nonoverlap1022-centered-sites` for `sequence` and
 `proteinmpnn/v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb` for
 `inverse_folding`. Enabling an NKN branch does not select a different pretrained
 model or regenerate its representations.
@@ -474,9 +506,7 @@ scores or ProteinMPNN sequence likelihoods in `scores/<family>/<recipe>/mean_sco
 Select either family or both sources as independent GP mean columns. See
 [ESM2 score preparation](feature_generation/README.md#esm2-scores-for-the-gp-mean)
 and [ProteinMPNN score preparation](feature_generation/README.md#proteinmpnn-scores-for-the-gp-mean).
-`configs/esm2_mean_score_smoke.json` selects only ESM2 representations/scores;
-`configs/esm2_proteinmpnn_combined_mean_smoke.json` selects both modalities and
-both scorers. Branch selection alone does not supply missing scores.
+Branch selection alone does not supply missing scores.
 
 The branch selection is saved in resolved configs and GP checkpoints. Construction
 uses a fixed canonical branch order, regardless of JSON ordering. Older configs
@@ -484,11 +514,6 @@ and checkpoints without the new setting retain all four branches. Prediction mus
 use the fitted checkpoint's branch selection; CLI prediction automatically reads
 its adjacent `resolved_config.json` when no `--config` is supplied. When moving
 a checkpoint, keep that config beside it or supply `--config` explicitly.
-
-`configs/sequence_inverse_smoke.json` selects two branches for synthetic fixture
-features and limits training to five updates per restart. Using this preset with
-`cv` requires a fold CSV matching the selected fixture variants; the full-assay
-ProteinGym fold CSV does not match the 16-variant fixture cache.
 
 Per-branch kernel settings remain under `model.branches`. Overrides may specify
 just the branches/settings being changed; omitted settings use defaults. For example:
@@ -524,19 +549,27 @@ targets are rejected. Training inputs are detached and copied before fitting.
 Each fit caches their fixed pairwise distances, cosine similarities, and
 Bhattacharyya products in float64, sharing distances between primitive kernels.
 For this prepared training batch, branch and final NKNs evaluate only the upper
-triangle and mirror the result, including each diagonal once. Local NKN values
-are still aggregated over mutations before the final NKN. This reduces repeated
-pair arithmetic without changing the model or approximating the dense GP;
-floating-point reduction order can produce small rounding differences.
+triangle and mirror the result, including each diagonal once. The inverse-folding
+branch additionally evaluates pairs of exactly identical feature rows only once
+per training step, including repeated ProteinMPNN probabilities. Equality is
+checked on feature vectors, not residue positions. Values are mapped back to all
+mutation occurrences before the unchanged mutation aggregation and final NKN;
+autograd accumulates every repeated pair's contribution. Initialization retains
+the full occurrence-weighted lengthscale median. These optimizations reduce
+repeated pair arithmetic without changing the model or approximating the dense
+GP; floating-point reduction order can produce small rounding differences.
 Lengthscales, NKN parameters, learned covariances, and Cholesky factors still
 update at every training step. Full geometry is retained for fallback, alongside
 packed triangular geometry and index maps. These caches use quadratic memory,
 are excluded from checkpoints, and are bypassed for different or modified inputs
 and for features requiring gradients. Direct kernel calls remain uncached unless
 `prepare_training_geometry(train)` is called explicitly.
-For numerical comparisons, `prepare_training_geometry(train, use_triangle=False)`
-keeps geometry caching but evaluates every NKN pair. Clearing caches or moving
-the kernel to a different device/dtype discards both dense and triangular caches.
+For numerical comparisons,
+`prepare_training_geometry(train, use_unique_features=False)` retains triangular
+evaluation without feature deduplication, while `use_triangle=False` keeps
+geometry caching but evaluates every NKN pair. Both optimizations are automatic
+in normal fitting; no JSON or Slurm option is required. Clearing caches or moving
+the kernel to a different device/dtype discards all prepared geometry and maps.
 Lengthscale medians exclude zero distances but retain repeated occurrences;
 even-sized medians average the middle two values. Training defaults to one
 initialization with seed `0` and lengthscale multiplier `1.0`. Multiple starts

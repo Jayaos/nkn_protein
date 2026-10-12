@@ -30,6 +30,14 @@ and [paper](https://proceedings.neurips.cc/paper_files/paper/2024/file/34547650b
 
 The default selects ESM2 **650M** layer-33 embeddings and masked-marginal scores,
 plus ProteinMPNN `v_48_020` distributions prepared with Kermut's extraction recipe.
+ESM2 embeddings average the first 1,022 residues of each variant, or the full
+sequence when shorter. Mutations beyond that prefix do not affect the ESM2
+vector. Rerun ESM2 preparation to generate the selected `-mean-first1022` cache;
+existing residue caches remain separate. Kermut's selected full-reference ESM2
+scoring recipe still requires references of at most 1,022 residues. ProteinMPNN's
+presets have no sequence-length cap and still require complete reference structures.
+The NKN centered-window ESM2 score recipe is available separately; this preset
+continues selecting the original full-reference score cache.
 The GP mean combines ESM2 and ProteinMPNN variant scores; the publication's
 mean uses ESM2 alone. ProteinMPNN variant scoring uses one order and seed 0.
 For each reference position, ProteinMPNN conditions on the backbone and the
@@ -39,7 +47,7 @@ amino-acid category `X` without renormalizing. The resulting 20 values can sum
 to less than one; the loader and kernel preserve those values.
 
 This matches the ProteinMPNN extraction recipe for the pipeline's supported
-single-chain structures of up to 1,022 residues. It does not establish numerical
+single-chain structures. It does not establish numerical
 reproduction of the publication: matching structure inputs, model/runtime versions, assay folds,
 and benchmark aggregation still matters. The baseline implementation also
 needs comparison against the authors' released predictions before claiming
@@ -83,12 +91,18 @@ Prepare the selected caches first. On the cluster, submit both preparation
 jobs and wait for them to finish successfully before submitting Kermut:
 
 ```bash
-sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch
+sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch --config configs/extraction/esm2_650m.json
 sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
 ```
 
+The ESM2 config override selects Kermut's pooled prefix cache. Without it, the
+preparation job defaults to the compact centered-site cache used by NKN's `sequence_site`
+branch. Both cache recipes can coexist and share the same downloaded checkpoint.
+
 The ProteinMPNN job writes the sequence-conditioned cache selected by Kermut
-and retains the existing separate variant-score recipe. Existing backbone-only
+and retains the existing separate variant-score recipe. It scores one variant
+per batch to reduce GPU memory; long references can still exceed available
+memory or runtime. Existing backbone-only
 outputs cannot satisfy Kermut's cache selection. To extract only the Kermut
 distributions from prepared model and structure assets, run:
 

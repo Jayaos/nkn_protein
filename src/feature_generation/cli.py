@@ -81,6 +81,8 @@ def _progress(event: dict) -> None:
     elif status == "scoring":
         if event.get("model_family") == "esm2":
             detail = f"ESM2 masked marginals at {event['num_masked_positions']} WT positions"
+            if event.get("scoring_window") == "centered":
+                detail += f", centered windows of {event['window_length']} residues"
         else:
             detail = f"{event['num_orders']} decoding orders"
         print(f"{assay}: scoring {event['num_variants']} variants ({detail})", file=sys.stderr)

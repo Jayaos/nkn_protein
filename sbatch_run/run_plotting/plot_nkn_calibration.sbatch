@@ -24,7 +24,7 @@ Plot calibration diagnostics from saved NKN model runs.
   --results-dir PATH   Results root (default: PLOT_RESULTS_DIR or results).
   --assay ID           Restrict discovery to an assay; repeat for several.
   --run-dir PATH       Select a model-run directory; repeat for several.
-  --output-dir PATH    Output root (default: PLOT_OUTPUT_DIR, or each run/plots).
+  --output-dir PATH    Output root (default: PLOT_OUTPUT_DIR or plots).
   --formats png pdf    One or more output formats.
   --dpi INTEGER       Raster resolution (default: 200).
 
@@ -57,10 +57,8 @@ fi
 cd -- "$project_root"
 
 # Argparse uses the last supplied value, so explicit CLI options take precedence.
-plot_defaults=(--results-dir "${PLOT_RESULTS_DIR:-results}")
-if [[ -n "${PLOT_OUTPUT_DIR:-}" ]]; then
-  plot_defaults+=(--output-dir "$PLOT_OUTPUT_DIR")
-fi
+plot_defaults=(--results-dir "${PLOT_RESULTS_DIR:-results}"
+               --output-dir "${PLOT_OUTPUT_DIR:-plots}")
 
 export PYTHONNOUSERSITE=1
 if ! command -v conda >/dev/null 2>&1; then
