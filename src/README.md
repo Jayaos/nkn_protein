@@ -599,6 +599,12 @@ held-out metrics directly, without inventing a five-fold mean or deviation.
 Labels supplied to prediction are only exported alongside predictions; they
 are not used for conditioning, model selection, or automatic recalibration.
 
+Saved interval and pairwise calibration metrics can be plotted with
+`sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch`. By default, PNG/PDF
+figures and a JSON plotting summary go to each `results/<protein>/<model-run>/plots/`
+directory. See [plotting instructions](../sbatch_run/run_plotting/README.md) for
+custom output locations, assay selection, dependencies, and aggregation details.
+
 ## Validation
 
 After installing the package, run from the repository root:
