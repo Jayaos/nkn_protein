@@ -385,8 +385,8 @@ Select just ESM2 scores for the mean function:
 }
 ```
 
-The generic NKN batch preset selects only ESM2 650M scores. The NEIME and FKBP3
-launchers use `configs/esm2_proteinmpnn_nkn_two_scores.json`, which also selects
+The generic NKN batch preset selects only ESM2 650M scores. The five-assay array
+launcher uses `configs/esm2_proteinmpnn_nkn_two_scores.json`, which also selects
 ProteinMPNN sequence-likelihood scores. Each source creates a separate score
 column; each is standardized
 using training variants only, and the GP learns a coefficient for each.

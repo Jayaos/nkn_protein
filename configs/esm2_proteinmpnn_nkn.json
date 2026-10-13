@@ -4,22 +4,22 @@
     "branches": {
       "sequence_site": {
         "copies": {"cosine": 1, "rbf": 1, "matern32": 1},
-        "widths": [8, 4, 4, 2, 1]
+        "widths": [4, 2, 1]
       },
       "sequence_global": {
         "copies": {"cosine": 1, "rbf": 1, "matern32": 1},
-        "widths": [8, 4, 4, 2, 1]
+        "widths": [4, 2, 1]
       },
       "inverse_folding": {
         "copies": {"hellinger_exp": 1, "hellinger_rbf": 1, "bhattacharyya": 1},
-        "widths": [8, 4, 4, 2, 1]
+        "widths": [4, 2, 1]
       },
       "structure_distance": {
         "copies": {"exp": 1, "rbf": 1, "matern32": 1},
-        "widths": [8, 4, 4, 2, 1]
+        "widths": [4, 2, 1]
       }
     },
-    "final_widths": [8, 4, 4, 2, 1]
+    "final_widths": [4, 2, 1]
   },
   "feature_selection": {
     "sequence": "esm2/esm2_t33_650M_UR50D-layer33-08e4846e5371-mean-all-nonoverlap1022-centered-sites",

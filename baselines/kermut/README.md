@@ -151,22 +151,49 @@ posterior, supports unlabeled cached variants and defaults to the adjacent
 resolved configuration. Prediction verifies assay, reference, feature sources,
 structure identity and ordered score sources against the checkpoint.
 
-Use either assay-specific CPU launcher:
+Use the five-assay CPU array launcher from the repository root on the cluster:
 
 ```bash
-sbatch sbatch_run/run_kermut/run_kermut_A0A1I9GEU1_NEIME_Kennouche_2019.sbatch
-sbatch sbatch_run/run_kermut/run_kermut_FKBP3_HUMAN_Tsuboyama_2023_2KFV.sbatch
+sbatch sbatch_run/run_kermut/run_kermut_assays.sbatch
+
+# Only FKBP3 or NEIME:
+sbatch --array=2 sbatch_run/run_kermut/run_kermut_assays.sbatch
+sbatch --array=4 sbatch_run/run_kermut/run_kermut_assays.sbatch
+
+# Both FKBP3 and NEIME:
+sbatch --array=2,4 sbatch_run/run_kermut/run_kermut_assays.sbatch
+
+# Also parallelize the 15 folds within each assay:
+sbatch sbatch_run/run_kermut/run_kermut_assays.sbatch singles --parallel
+
+# Limit the array to two concurrent assays:
+sbatch --array=0-4%2 sbatch_run/run_kermut/run_kermut_assays.sbatch
 ```
 
-Each fixes its named assay and defaults to
+The fixed array mapping matches the NKN array:
+
+| Array index | Assay |
+| --- | --- |
+| 0 | `TPMT_HUMAN_Matreyek_2018` |
+| 1 | `RASK_HUMAN_Weng_2022_binding-DARPin_K55` |
+| 2 | `FKBP3_HUMAN_Tsuboyama_2023_2KFV` |
+| 3 | `DYR_ECOLI_Thompson_2019` |
+| 4 | `A0A1I9GEU1_NEIME_Kennouche_2019` |
+
+Each task selects its assay by array index and defaults to
 `data/features/pretrained/singles/<assay>` for singles selections.
-Both use ESM2 650M layer-33 embeddings, sequence-conditioned ProteinMPNN
+The default `configs/kermut_esm2_proteinmpnn.json` uses ESM2 650M layer-33 embeddings, sequence-conditioned ProteinMPNN
 distributions (ten orders, seed 37), and a GP mean combining ESM2 650M
 masked-marginal scores with ProteinMPNN sequence likelihoods (one order, seed 0).
-They forward setting arguments, `--parallel`, and `--config PATH` to the shared
-launcher; `FEATURES` and configuration overrides remain available. Results
-are separated by assay under
-`results/<assay>/kermut_esm2_proteinmpnn_<selection>_<job_id>/`.
+The array forwards setting arguments, `--parallel`, and `--config PATH` to the
+shared launcher; `FEATURES` and `KERMUT_CONFIG` overrides remain available.
+Prepare features, both score caches, and the structure manifest for every selected
+assay before submission. Each task defaults to all three singles CV protocols
+(15 fits) and requests 15 CPUs, 16 GB RAM, and a 24-hour limit. Assays may run
+concurrently; within each assay, fits run sequentially unless `--parallel` is set.
+Logs are `kermut_assays-<array-job-id>_<index>.out` in the submission directory.
+Results are separated by assay under
+`results/<assay>/kermut_esm2_proteinmpnn_<selection>_<task-job-id>/`.
 
 The generic CPU Slurm launcher remains available and follows the existing NKN
 job conventions:

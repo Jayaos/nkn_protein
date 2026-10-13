@@ -17,7 +17,7 @@ sequence-conditioned runs with seed 37, averaging log probabilities and
 removing `X` without renormalization. The ProteinMPNN preparation job generates
 this sequence-conditioned cache and the separate variant likelihood scores.
 The generic NKN batch preset uses only ESM2 650M scores in its GP mean.
-The NEIME and FKBP3 launchers default to `configs/esm2_proteinmpnn_nkn_two_scores.json`,
+The five-assay array launcher defaults to `configs/esm2_proteinmpnn_nkn_two_scores.json`,
 which includes both ESM2 and ProteinMPNN mean scores.
 
 ## Installation and first run
@@ -313,28 +313,53 @@ An assay without doubles fails when a mixed or extrapolation setting is requeste
 settings are never silently skipped. The job requires published column names and
 five folds, and never generates replacement assignments.
 
-Use either assay-specific launcher from the repository root on the cluster:
+To run five assays as one Slurm array, submit from the repository root on the cluster:
 
 ```bash
-sbatch sbatch_run/run_nkn/run_nkn_A0A1I9GEU1_NEIME_Kennouche_2019.sbatch
-sbatch sbatch_run/run_nkn/run_nkn_FKBP3_HUMAN_Tsuboyama_2023_2KFV.sbatch
+sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch
 
-# Run all 15 singles fits concurrently for either assay:
-sbatch sbatch_run/run_nkn/run_nkn_A0A1I9GEU1_NEIME_Kennouche_2019.sbatch singles --parallel
-sbatch sbatch_run/run_nkn/run_nkn_FKBP3_HUMAN_Tsuboyama_2023_2KFV.sbatch singles --parallel
+# Run only FKBP3 or NEIME:
+sbatch --array=2 sbatch_run/run_nkn/run_nkn_assays.sbatch
+sbatch --array=4 sbatch_run/run_nkn/run_nkn_assays.sbatch
+
+# Run both FKBP3 and NEIME:
+sbatch --array=2,4 sbatch_run/run_nkn/run_nkn_assays.sbatch
+
+# Optionally run the 15 folds within each assay concurrently as well:
+sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch singles --parallel
+
+# Or limit the array to two concurrent assays:
+sbatch --array=0-4%2 sbatch_run/run_nkn/run_nkn_assays.sbatch
 ```
 
-Each fixes its named assay and defaults to
-`data/features/pretrained/singles/<assay>` for singles selections.
-Both default to
-[`configs/esm2_proteinmpnn_nkn_two_scores.json`](../configs/esm2_proteinmpnn_nkn_two_scores.json),
-which uses the same kernel and training settings as the generic preset and includes
+The array has a fixed mapping:
+
+| Array index | Assay |
+| --- | --- |
+| 0 | `TPMT_HUMAN_Matreyek_2018` |
+| 1 | `RASK_HUMAN_Weng_2022_binding-DARPin_K55` |
+| 2 | `FKBP3_HUMAN_Tsuboyama_2023_2KFV` |
+| 3 | `DYR_ECOLI_Thompson_2019` |
+| 4 | `A0A1I9GEU1_NEIME_Kennouche_2019` |
+
+Each task defaults to `data/features/pretrained/singles/<assay>` and
+[`configs/esm2_proteinmpnn_nkn_two_scores.json`](../configs/esm2_proteinmpnn_nkn_two_scores.json).
+The preset uses `[4, 2, 1]` in every enabled branch and the final NKN, and includes
 both ESM2 650M masked-marginal and ProteinMPNN sequence-likelihood scores in the GP
 mean. Each score is standardized using training variants and has its own learned
-coefficient. They forward settings,
-`--parallel`, and `--config PATH` to the shared launcher; `FEATURES` and
-`NKN_CONFIG` overrides remain available. Outputs use the assay-specific
-`results/<assay>/` directory described below.
+coefficient. Tasks default to all three singles protocols (15 fits per assay).
+The requested 15 CPUs, 32 GB RAM, and 24-hour limit apply to each assay task.
+Without `--parallel`, folds within an assay run sequentially; the array allows
+different assays to run concurrently. Settings, `--parallel`, and `--config PATH`
+are forwarded to the shared launcher; `FEATURES` and `NKN_CONFIG` overrides remain
+available. Prepare features, both score caches, and the structure
+manifest for every selected assay before submission.
+
+Logs are `nkn_assays-<array-job-id>_<index>.out` in the submission directory;
+each task writes its own
+`results/<assay>/nkn_esm2_proteinmpnn_<selection>_<task-job-id>/` directory.
+Slurm's `%A` and `%a` log tokens identify the array and task respectively;
+see [Slurm job arrays](https://slurm.schedmd.com/job_array.html).
 
 The generic launcher also remains available:
 
@@ -466,7 +491,10 @@ For example, change `training.learning_rate` to `0.0005` and
 values remain as listed in that file. Initialization lists must have equal
 lengths; adding entries requests additional starts per split. NKN widths alternate
 linear and product layers, ending with linear width `1`; each product width must
-be half the preceding even linear width, as in `[8, 4, 4, 2, 1]`.
+be half the preceding even linear width, as in `[4, 2, 1]`.
+Both `esm2_proteinmpnn_nkn.json` and `esm2_proteinmpnn_nkn_two_scores.json`
+use `[4, 2, 1]` for every enabled branch and the final NKN, with one copy of
+each selected primitive kernel.
 
 The CPU batch job sets `device` to `"cpu"` and `num_threads` to the Slurm CPU
 allocation in serial mode, or the computed per-worker thread count with
