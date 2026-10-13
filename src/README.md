@@ -262,16 +262,17 @@ masked-marginal scores. The inverse-folding cache uses ten
 orders with seed 37 and retains the stored 20 amino-acid values without
 renormalization through `inverse_folding_policy: "sequence_conditional"`.
 
-Prepare these inputs before running NKN, and wait for both preparation jobs to
-finish successfully:
+Prepare the selected assay inputs before running NKN, and wait for both
+preparation jobs to finish successfully:
 
 ```bash
 sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch
 sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
 ```
 
-Both jobs prepare only `A0A1I9GEU1_NEIME_Kennouche_2019`, then
-`FKBP3_HUMAN_Tsuboyama_2023_2KFV`. Optional `--array=0-1` selects one of those
+Both jobs prepare only `DYR_ECOLI_Thompson_2019`,
+`TPMT_HUMAN_Matreyek_2018`, then `RASK_HUMAN_Weng_2022_binding-DARPin_K55`.
+Optional `--array=0-2` selects one of those
 assays per task. They pass `--singles-only` to extraction and scoring and write to
 `data/features/pretrained/singles/<assay>/`. Each single mutant is prepared once
 for reuse across all singles folds and protocols. Existing full-assay caches
@@ -279,6 +280,8 @@ remain at their original paths; they are not migrated into the singles root.
 For full-variant preparation, use the extraction/scoring CLI with
 `--output-root data/features/pretrained` and omit `--singles-only` from both
 stages. See the [preparation guide](feature_generation/README.md).
+The NEIME and FKBP3 run examples below require their previously prepared caches;
+the current preparation selection covers the three additional assays.
 
 ESM2 preparation defaults to `configs/extraction/esm2_650m_centered.json`, with
 192 GiB host RAM and a 32 GiB compact-output guard. It stores only the mutation

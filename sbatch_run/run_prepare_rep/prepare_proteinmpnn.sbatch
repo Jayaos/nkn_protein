@@ -24,10 +24,11 @@
 # Other assays require complete structures; long inputs still need sufficient GPU memory.
 # Variant scoring uses one sequence per batch to reduce peak GPU memory.
 # Submit: sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
-# Process only A0A1I9GEU1_NEIME_Kennouche_2019 and FKBP3_HUMAN_Tsuboyama_2023_2KFV.
+# Process only DYR_ECOLI_Thompson_2019, TPMT_HUMAN_Matreyek_2018, and
+# RASK_HUMAN_Weng_2022_binding-DARPin_K55, in that order.
 # Select single mutants only, saved under data/features/pretrained/singles/.
-# An optional --array=0-1 selects A0A1I9GEU1 at index 0 and FKBP3 at index 1.
-# Without an array, both assays run in this job.
+# An optional --array=0-2 selects DYR at index 0, TPMT at 1, and RASK at 2.
+# Without an array, all three assays run in this job.
 # Failed assays are reported without stopping the remaining assays or stages.
 # Submission from a repository subdirectory is also supported; logs go to the
 # submission directory. Slurm spools this script, so its own path is not used.
@@ -65,8 +66,9 @@ feature_config="configs/extraction/proteinmpnn_v48_020_kermut.json"
 score_config="configs/extraction/proteinmpnn_v48_020.json"
 selection_args=(
   --config "$feature_config"
-  --assay A0A1I9GEU1_NEIME_Kennouche_2019
-  --assay FKBP3_HUMAN_Tsuboyama_2023_2KFV
+  --assay DYR_ECOLI_Thompson_2019
+  --assay TPMT_HUMAN_Matreyek_2018
+  --assay RASK_HUMAN_Weng_2022_binding-DARPin_K55
 )
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
   selection_args+=(--task-index "$SLURM_ARRAY_TASK_ID")

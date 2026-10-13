@@ -17,8 +17,10 @@ PREPARATION = Path("sbatch_run/run_prepare_rep")
 CONFIGS = ("esm2_650m.json", "esm2_650m_residue.json", "esm2_650m_centered.json",
            "proteinmpnn_v48_020_kermut.json", "proteinmpnn_v48_020.json")
 SCRIPTS = ("prepare_esm2.sbatch", "prepare_proteinmpnn.sbatch")
-SELECTED_ASSAYS = ["A0A1I9GEU1_NEIME_Kennouche_2019", "FKBP3_HUMAN_Tsuboyama_2023_2KFV"]
-ASSAYS = [SELECTED_ASSAYS[1], "protein_Z_assay_1", SELECTED_ASSAYS[0], "protein_Z_assay_2"]
+SELECTED_ASSAYS = ["DYR_ECOLI_Thompson_2019", "TPMT_HUMAN_Matreyek_2018",
+                   "RASK_HUMAN_Weng_2022_binding-DARPin_K55"]
+ASSAYS = [SELECTED_ASSAYS[1], "protein_Z_assay_1", SELECTED_ASSAYS[2],
+          SELECTED_ASSAYS[0], "protein_Z_assay_2"]
 
 
 def available_bash():
@@ -105,13 +107,13 @@ class PreparationTargetTests(PreparationFixture):
         self.assertEqual(result.stdout.splitlines(), SELECTED_ASSAYS)
         result = self.invoke_helper(*arguments, "--count")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "2")
+        self.assertEqual(result.stdout.strip(), str(len(SELECTED_ASSAYS)))
         for index, assay in enumerate(SELECTED_ASSAYS):
             with self.subTest(index=index):
                 result = self.invoke_helper(*arguments, "--task-index", str(index))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.splitlines(), [assay])
-        result = self.invoke_helper(*arguments, "--task-index", "2")
+        result = self.invoke_helper(*arguments, "--task-index", str(len(SELECTED_ASSAYS)))
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
 
@@ -325,7 +327,7 @@ class PreparationSbatchTests(PreparationFixture):
                 self.assertIn("use ESM2 mean scores", result.stdout)
                 extracted = next(record["args"] for record in records if record["kind"] == "extract")
                 targets = [extracted[index + 1] for index, value in enumerate(extracted) if value == "--assay"]
-                self.assertEqual(targets, [assay] if array else [assay, SELECTED_ASSAYS[1]])
+                self.assertEqual(targets, [assay] if array else [assay, *SELECTED_ASSAYS[1:]])
                 verified = [record["args"][0] for record in records if record["kind"] == "structure-verify"]
                 self.assertEqual(verified, targets)
                 scores = [record["args"] for record in records if record["kind"] == "score"]
@@ -334,7 +336,7 @@ class PreparationSbatchTests(PreparationFixture):
                 else:
                     self.assertEqual(len(scores), 1)
                     scored = [scores[0][index + 1] for index, value in enumerate(scores[0]) if value == "--assay"]
-                    self.assertEqual(scored, [SELECTED_ASSAYS[1]])
+                    self.assertEqual(scored, SELECTED_ASSAYS[1:])
 
     def assert_esm2_config(self, records, expected):
         for stage in ("download", "extract", "score"):
@@ -408,7 +410,7 @@ class PreparationSbatchTests(PreparationFixture):
     def test_selection_failure_stops_before_model_or_structure_download(self):
         for script in SCRIPTS:
             with self.subTest(script=script):
-                result, records = self.invoke(script, {"SLURM_ARRAY_TASK_ID": "2"})
+                result, records = self.invoke(script, {"SLURM_ARRAY_TASK_ID": str(len(SELECTED_ASSAYS))})
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(records, [])
         (self.raw / f"{SELECTED_ASSAYS[1]}.csv").unlink()
@@ -453,9 +455,9 @@ class PreparationSbatchTests(PreparationFixture):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(f"{SELECTED_ASSAYS[0]}: structure failed", result.stderr)
         downloads = [record["args"][0] for record in records if record["kind"] == "structure-download"]
-        self.assertEqual(downloads, [SELECTED_ASSAYS[0]])
+        self.assertEqual(downloads, [SELECTED_ASSAYS[0], *SELECTED_ASSAYS[2:]])
         verified = [record["args"][0] for record in records if record["kind"] == "structure-verify"]
-        self.assertEqual(verified, [SELECTED_ASSAYS[1]])
+        self.assertEqual(verified, SELECTED_ASSAYS[1:])
         self.assert_targets(records, SELECTED_ASSAYS)
 
 

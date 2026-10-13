@@ -344,8 +344,9 @@ needed: the verified safetensors checkpoint already contains the MLM head.
 
 `prepare_esm2.sbatch` downloads/verifies ESM2 650M and then runs both layer-33
 embedding extraction and scoring with `--singles-only` for only
-`A0A1I9GEU1_NEIME_Kennouche_2019` and `FKBP3_HUMAN_Tsuboyama_2023_2KFV`, in that
-order, using the configured `raw_substitutions/DMS_substitutions.csv` catalog.
+`DYR_ECOLI_Thompson_2019`, `TPMT_HUMAN_Matreyek_2018`, and
+`RASK_HUMAN_Weng_2022_binding-DARPin_K55`, in that order, using the configured
+`raw_substitutions/DMS_substitutions.csv` catalog.
 Its default
 `configs/extraction/esm2_650m_centered.json` saves centered mutation-site vectors
 and a full-sequence mean from fixed non-overlapping windows for NKN's sequence
@@ -413,7 +414,7 @@ Use `--device cpu` when no GPU is available. This reuses the existing ProteinMPN
 checkpoint and structure manifest; no new dependencies or model downloads are
 needed if extraction already ran. Scoring can also run before extraction.
 `prepare_proteinmpnn.sbatch` downloads and verifies the pinned checkpoint/source
-and ProteinGym reference structures for the same two selected assays, then
+and ProteinGym reference structures for the same three selected assays, then
 extracts the Kermut sequence-conditioned features and prepares variant scores,
 using `--singles-only` for both stages. The reference distribution still covers
 every residue; the shared variant table and scores contain only single mutants.
@@ -485,12 +486,13 @@ descriptors remain readable; all new score artifacts use `mean_score.csv`.
 Official scoring sources: [ProteinMPNN sequence scoring](https://github.com/dauparas/ProteinMPNN/blob/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/protein_mpnn_run.py),
 [ProteinMPNN NLL reduction](https://github.com/dauparas/ProteinMPNN/blob/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/protein_mpnn_utils.py).
 
-## Preparing the two selected assays on Slurm
+## Preparing the three selected assays on Slurm
 
 Both preparation scripts select only these assays, in this order:
 
-1. `A0A1I9GEU1_NEIME_Kennouche_2019`
-2. `FKBP3_HUMAN_Tsuboyama_2023_2KFV`
+1. `DYR_ECOLI_Thompson_2019`
+2. `TPMT_HUMAN_Matreyek_2018`
+3. `RASK_HUMAN_Weng_2022_binding-DARPin_K55`
 
 `DMS_substitutions.csv` supplies metadata; it is not itself a variant assay.
 Each selected catalog entry must have its corresponding
@@ -500,39 +502,40 @@ under `data/features/pretrained/singles/<assay>/`.
 Optionally use one assay per array task. Run from the repository root:
 
 ```bash
-esm_job=$(sbatch --parsable --array=0-1 \
+esm_job=$(sbatch --parsable --array=0-2 \
   sbatch_run/run_prepare_rep/prepare_esm2.sbatch)
-sbatch --array=0-1 \
+sbatch --array=0-2 \
   --dependency="afterany:${esm_job%%;*}" \
   sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
 ```
 
-The array contains two GPU tasks. The dependency waits for
+Each array contains three GPU tasks. The dependency waits for
 the ESM2 array to finish, including failed tasks, before starting ProteinMPNN;
 this avoids simultaneous writes to shared assay metadata by the two models.
 These are standard [Slurm array options](https://slurm.schedmd.com/job_array.html).
-Each task retains the script's two-hour time limit and resource request. Increase
+Each task retains the script's one-hour time limit and resource request. Increase
 the time limit with `sbatch --time=...` when an individual assay needs longer.
 
-Task index `0` selects A0A1I9GEU1 and index `1` selects FKBP3; indices refer to
+Task indices `0`, `1`, and `2` select DYR, TPMT, and RASK, respectively; indices refer to
 the selected list, not raw catalog row numbers. The listing helper accepts
 repeatable `--assay` filters to match this selection (and needs only the Python
-standard library). To confirm the count or rerun FKBP3:
+standard library). To confirm the count or rerun TPMT:
 
 ```bash
 python sbatch_run/run_prepare_rep/list_assays.py \
   --config configs/extraction/esm2_650m_centered.json \
-  --assay A0A1I9GEU1_NEIME_Kennouche_2019 \
-  --assay FKBP3_HUMAN_Tsuboyama_2023_2KFV --count
+  --assay DYR_ECOLI_Thompson_2019 \
+  --assay TPMT_HUMAN_Matreyek_2018 \
+  --assay RASK_HUMAN_Weng_2022_binding-DARPin_K55 --count
 sbatch --array=1 sbatch_run/run_prepare_rep/prepare_esm2.sbatch
 ```
 
-The filtered count is `2`; replace `--count` with `--task-index 1` to print the
+The filtered count is `3`; replace `--count` with `--task-index 1` to print the
 second assay. Without `--assay` filters the helper still lists the entire catalog,
 which is broader than the preparation jobs' selection.
 
-Submitting either script without `--array` processes both selected assays
-sequentially in one GPU allocation; the two-hour default may be insufficient
+Submitting either script without `--array` processes all three selected assays
+sequentially in one GPU allocation; the one-hour default may be insufficient
 for this mode. Logs include the array job/task IDs. Both scripts use `--resume`
 and `--continue-on-error`: failed assays are reported, remaining assays and the
 scoring stage are still attempted, and any failed stage gives a nonzero exit.
@@ -548,7 +551,7 @@ weights, and validation. Completed assays can resume; partial assays restart.
 The default preset also scores long references with centered WT windows, so
 both ESM2 stages cover mutation positions beyond residue 1,022. ProteinMPNN's
 default presets also have no reference-length cap, but still require a valid
-full-reference structure. Its job requests 16 GiB host RAM and two hours, and
+full-reference structure. Its job requests 16 GiB host RAM and one hour, and
 scores one variant per batch; long references may need more memory or time.
 ESM-IF1 retains its 1,022-residue limit.
 

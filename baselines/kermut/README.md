@@ -98,14 +98,17 @@ sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch
 sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
 ```
 
-Both jobs prepare only `A0A1I9GEU1_NEIME_Kennouche_2019`, then
-`FKBP3_HUMAN_Tsuboyama_2023_2KFV`. Optional `--array=0-1` selects one of those
+Both jobs prepare only `DYR_ECOLI_Thompson_2019`,
+`TPMT_HUMAN_Matreyek_2018`, then `RASK_HUMAN_Weng_2022_binding-DARPin_K55`.
+Optional `--array=0-2` selects one of those
 assays per task. They pass `--singles-only` for extraction and scoring and save to
 `data/features/pretrained/singles/<assay>/`, reusing each single mutant's outputs
 across folds. Existing full-assay caches are not moved or modified. For mixed or
 extrapolation experiments, prepare full-variant caches through the CLI with
 `--output-root data/features/pretrained` and omit `--singles-only` consistently
 from extraction and scoring.
+The NEIME run examples below require its previously prepared cache; the current
+preparation selection covers the three additional assays.
 
 The ESM2 preparation default supplies both the NKN and Kermut presets. Existing
 matching centered caches can be reused without preparing a separate pooled cache.
