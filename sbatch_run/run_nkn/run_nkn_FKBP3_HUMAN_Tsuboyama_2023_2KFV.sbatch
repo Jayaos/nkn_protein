@@ -13,8 +13,9 @@
 
 # NKN on FKBP3_HUMAN_Tsuboyama_2023_2KFV using the shared NKN runner.
 # Defaults: ESM2 650M and sequence-conditioned ProteinMPNN caches under
-# data/features/pretrained/singles/FKBP3_HUMAN_Tsuboyama_2023_2KFV, with only ESM2 650M
-# scores feeding the GP mean via configs/esm2_proteinmpnn_nkn.json.
+# data/features/pretrained/singles/FKBP3_HUMAN_Tsuboyama_2023_2KFV, with both ESM2 650M
+# and ProteinMPNN scores feeding the GP mean via
+# configs/esm2_proteinmpnn_nkn_two_scores.json.
 # Submit from the repository root or a subdirectory. Arguments and optional
 # cache/config overrides are handled by the shared launcher; ASSAY is fixed here.
 # Usage: sbatch sbatch_run/run_nkn/run_nkn_FKBP3_HUMAN_Tsuboyama_2023_2KFV.sbatch [singles|SETTING] [--config PATH] [--parallel]
@@ -33,4 +34,5 @@ while [[ ! -f "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
 done
 
 export ASSAY="FKBP3_HUMAN_Tsuboyama_2023_2KFV"
+export NKN_CONFIG="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn_two_scores.json}"
 exec bash "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch" "$@"

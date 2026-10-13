@@ -16,7 +16,9 @@ the ProteinMPNN Kermut recipe (`configs/extraction/proteinmpnn_v48_020_kermut.js
 sequence-conditioned runs with seed 37, averaging log probabilities and
 removing `X` without renormalization. The ProteinMPNN preparation job generates
 this sequence-conditioned cache and the separate variant likelihood scores.
-The NKN batch preset uses only ESM2 650M scores in its GP mean.
+The generic NKN batch preset uses only ESM2 650M scores in its GP mean.
+The NEIME and FKBP3 launchers default to `configs/esm2_proteinmpnn_nkn_two_scores.json`,
+which includes both ESM2 and ProteinMPNN mean scores.
 
 ## Installation and first run
 
@@ -321,8 +323,12 @@ sbatch sbatch_run/run_nkn/run_nkn_FKBP3_HUMAN_Tsuboyama_2023_2KFV.sbatch singles
 
 Each fixes its named assay and defaults to
 `data/features/pretrained/singles/<assay>` for singles selections.
-Both use the shared NKN preset's ESM2 650M and sequence-conditioned ProteinMPNN
-features, with only ESM2 650M scores in the GP mean. They forward settings,
+Both default to
+[`configs/esm2_proteinmpnn_nkn_two_scores.json`](../configs/esm2_proteinmpnn_nkn_two_scores.json),
+which uses the same kernel and training settings as the generic preset and includes
+both ESM2 650M masked-marginal and ProteinMPNN sequence-likelihood scores in the GP
+mean. Each score is standardized using training variants and has its own learned
+coefficient. They forward settings,
 `--parallel`, and `--config PATH` to the shared launcher; `FEATURES` and
 `NKN_CONFIG` overrides remain available. Outputs use the assay-specific
 `results/<assay>/` directory described below.
