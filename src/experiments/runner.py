@@ -21,7 +21,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from config import ExperimentConfig
+from config import ExperimentConfig, STRUCTURE_DISTANCE_DISABLED_ASSAYS
 from data_loading import FeatureBatch
 from evaluation import aggregate_folds, evaluate_fold, spearman
 from gp.linalg import NumericalError
@@ -33,6 +33,19 @@ from .settings import SETTING_SCHEMES
 _MIXED_DEPTHS = {"mixed_random_singles": 1, "mixed_random_doubles": 2}
 _THREAD_ENVIRONMENT = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
 _FOLD_WORKER_STATE = None
+
+
+def _resolve_assay_config(batch, config):
+    """Keep programmatic runs consistent with CLI assay restrictions."""
+    if not isinstance(config, ExperimentConfig):
+        return config
+    resolved = config.for_assay(batch.assay_id)
+    if batch.assay_id in STRUCTURE_DISTANCE_DISABLED_ASSAYS and "structure_distance" in batch.local_features:
+        raise ValueError(
+            f"{batch.assay_id} disables structure_distance; reload features using "
+            "config.for_assay(batch.assay_id).model.enabled_branches"
+        )
+    return resolved
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -511,6 +524,7 @@ def run_cv(
     Parallel custom fit functions must be importable module-level callables.
     Progress callbacks run in the parent and may remain local closures.
     """
+    config = _resolve_assay_config(batch, config)
     if type(fold_workers) is not int or not 1 <= fold_workers <= config.evaluation.n_folds:
         raise ValueError("fold_workers must be an integer between 1 and n_folds")
     if fold_workers > 1:
@@ -575,6 +589,7 @@ def run_predict(
     load_function: Callable | None = None,
 ) -> dict[str, Any]:
     """Predict a feature batch; experimental labels are optional and unused."""
+    config = _resolve_assay_config(batch, config)
     if batch.num_variants == 0:
         raise ValueError("Prediction requires at least one variant")
     torch.set_num_threads(config.num_threads)
@@ -615,6 +630,7 @@ def run_extrapolation(
     Unused singles, wild type, and higher-order variants are recorded without
     entering either partition.
     """
+    config = _resolve_assay_config(batch, config)
     _require_targets(batch)
     if (
         isinstance(sample_ratio, bool) or not isinstance(sample_ratio, (int, float))

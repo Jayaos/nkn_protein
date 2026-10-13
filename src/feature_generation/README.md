@@ -105,7 +105,7 @@ This implementation was tested with Python 3.10 and PyTorch 2.5.1.
 ## Inverse folding: ProteinMPNN and ESM-IF1
 
 The CLI is the main workflow. Both models write one `[L, 20]` distribution for
-the reference structure, shared by all assay variants; DMS labels are not model
+the reference structure (or `[C, 20]` for explicitly covered fragment positions), shared by all assay variants; DMS labels are not model
 inputs. The supported recipes have different conditioning:
 
 | Config | Checkpoint | Conditioning |
@@ -129,7 +129,8 @@ likelihoods are prepared separately with the `score` command below.
 The ProteinMPNN presets set `max_length: null`, so extraction and scoring have
 no sequence-length cap. A positive integer can impose an optional operational
 limit. ESM-IF1 retains its maximum of 1,022 residues. These inverse-folding
-workflows use complete references and structures, without truncation or windows.
+workflows never truncate model inputs. Explicit fragment manifests supply each
+registered piece separately; `max_length` still limits the full assay reference.
 
 Install/update from `env.yaml`, or use `python -m pip install -r requirements.txt`
 in a Python 3.10 venv. Added inference dependencies are Biopython, Biotite, SciPy,
@@ -157,7 +158,7 @@ A direct structure URL can be supplied with `download-structure --url ...`.
 Raw downloads live in `data/structures/raw/`, and validated manifests in
 `data/structures/manifests/<assay>.json`. The manifest records the structure hash,
 coordinate model, target chain, and reference-position-to-author-residue mapping.
-The selected chain must match the entire reference sequence with N/CA/C atoms;
+For a single-structure manifest, the selected chain must match the entire reference sequence with N/CA/C atoms;
 ProteinMPNN additionally requires O. Partial coverage, sequence mismatches,
 noncanonical residues, and ambiguous backbone alternate conformations are rejected.
 Other chains are not used as structural context in this first version.
@@ -199,7 +200,7 @@ includes exact source URLs, upstream commits, and file SHA-256 checksums.
 Use `--output-root data/features/inverse_smoke --limit 4` on every extraction
 command in an isolated smoke test, with the same `--singles-only` selection for
 all models sharing that root. `--limit` changes only the shared variant
-table; inverse-folding inference still covers the complete reference. A full-assay
+table; inverse-folding inference still covers every registered structure residue. A full-assay
 cache and a subset cannot occupy the same assay directory. `--resume` checks the
 checkpoint, structure, mapping, extraction settings, and all saved artifact hashes.
 
@@ -215,7 +216,7 @@ presets use `data/features/pretrained/singles`; ESM-IF1 uses
   completion.json
 ```
 
-`features.pt` stores `probabilities[L,20]`, `log_probs[L,20]`, one-based `positions`,
+`features.pt` stores `probabilities[C,20]`, `log_probs[C,20]`, one-based `positions`,
 reference identity, and alphabet `ACDEFGHIKLMNPQRSTVWY`. Vocabulary entries are
 selected by amino-acid identity. The backbone-only ProteinMPNN and ESM-IF1 recipes
 normalize over these 20 candidates at T=1; their probability rows sum to one.
@@ -223,6 +224,8 @@ Kermut's sequence-conditioned ProteinMPNN recipe preserves the values after
 log averaging and removing `X`, without a second normalization. Both tensors
 are finite float32, and log probabilities agree with their probabilities.
 Special tokens and ProteinMPNN's `X` are excluded from the saved tensors.
+For a full structure, `C=L` and positions are `1..L`. Fragment caches store only
+covered positions; probability row indices are resolved through `positions`.
 
 All recipe leaves can coexist; the first completed leaf becomes the inverse-folding
 default. Select one using `feature_selection["inverse_folding"] = "<family>/<recipe>"`
@@ -236,9 +239,50 @@ sequence-conditioned ProteinMPNN cache as Kermut, together with ESM2 650M.
 It declares `inverse_folding_policy: "sequence_conditional"` so the NKN loader
 and kernels preserve the saved values without renormalization. Configurations
 using normalized backbone-only or ESM-IF1 distributions retain the default
-`"normalized"` policy. NKN's separate ProteinMPNN mean-score input still uses
-one autoregressive order with seed 0; feature conditioning does not change
-that scoring recipe.
+`"normalized"` policy. The current NKN preset uses ESM2 mean scores. Optional
+ProteinMPNN mean scores for full structures use one autoregressive order with
+seed 0; feature conditioning does not change that scoring recipe.
+
+### BRCA2 fragment preparation
+
+`BRCA2_HUMAN_Erwood_2022_HEK293T` uses three ProteinGym PDB files with separate
+coordinate frames. The standard download command recognizes this assay and
+registers a schema-v2 fragment manifest:
+
+```bash
+python -m feature_generation.cli download-structure --assay BRCA2_HUMAN_Erwood_2022_HEK293T
+python -m feature_generation.cli extract --config configs/extraction/proteinmpnn_v48_020_kermut.json --assay BRCA2_HUMAN_Erwood_2022_HEK293T --singles-only --device cuda --resume
+python -m feature_generation.cli validate --features data/features/pretrained/singles/BRCA2_HUMAN_Erwood_2022_HEK293T --feature-type inverse_folding --model-family proteinmpnn --cache-id v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb
+```
+
+ProteinMPNN processes reference intervals 1–1000, 1001–2085, and 2086–2832 in
+three independent calls, each using the configured seed and order count. Its
+sequence context is local to each fragment. Output rows are concatenated in
+reference-position order without changing probabilities or normalizing them
+again. The cache retains the full 3418-residue reference and contains `[2832,20]`
+probabilities plus their explicit positions. All 265 variants in the current
+assay mutate covered sites. Positions 2833–3418 have no structure-derived
+probabilities, and extraction/loading rejects mutations there.
+
+Each fragment must exactly match its declared reference slice. Overlapping or
+out-of-order intervals, changed files, ambiguous chains, and missing required
+backbone atoms are rejected. The manifest records each fragment's checksum,
+local author numbering, reference interval, and a combined identity. Coordinates
+are never concatenated into a global structure. Single-structure consumers,
+including distance kernels and full-sequence ProteinMPNN scoring, reject these
+manifests. The ProteinMPNN preparation job skips its optional mean-score stage
+for this assay; prepare ESM2 scores for the default NKN mean instead.
+
+NKN automatically disables `structure_distance` for this assay before feature
+loading and records the effective branches in the saved run configuration.
+The other configured branches retain their usual inputs. ESM2 sequence features
+and mean scores must also be prepared with the existing ESM2 workflow.
+
+Local fragments can be registered explicitly using repeated file/range pairs:
+
+```bash
+python -m feature_generation.cli prepare-structure --assay BRCA2_HUMAN_Erwood_2022_HEK293T --structure data/structures/raw/BRCA2_HUMAN_1-1000.pdb --reference-range 1-1000 --structure data/structures/raw/BRCA2_HUMAN_1001-2085.pdb --reference-range 1001-2085 --structure data/structures/raw/BRCA2_HUMAN_2086-2832.pdb --reference-range 2086-2832
+```
 
 Upstream implementations: [ProteinMPNN](https://github.com/dauparas/ProteinMPNN),
 [ESM-IF1](https://github.com/facebookresearch/esm/tree/main/examples/inverse_folding).

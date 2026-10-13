@@ -1,6 +1,6 @@
 """Validated, serializable experiment settings independent of pretrained models."""
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 import json
 import math
 from pathlib import Path
@@ -11,6 +11,9 @@ IF_PRIMITIVES = ("hellinger_exp", "hellinger_rbf", "bhattacharyya")
 STRUCTURE_DISTANCE_PRIMITIVES = ("exp", "rbf", "matern32")
 DEFAULT_BRANCHES = ("inverse_folding", "structure", "sequence_site", "sequence_global")
 BRANCH_NAMES = (*DEFAULT_BRANCHES, "structure_distance")
+# This assay's reference joins separate BRCA2 fragments. Their structure
+# coordinates do not define physical distances between all reference sites.
+STRUCTURE_DISTANCE_DISABLED_ASSAYS = frozenset({"BRCA2_HUMAN_Erwood_2022_HEK293T"})
 
 
 def branch_primitives(name):
@@ -191,6 +194,15 @@ class ExperimentConfig:
         if not isinstance(self.structure_manifest_dir, (str, Path)) or not str(self.structure_manifest_dir).strip():
             raise ValueError("structure_manifest_dir must be a nonempty path")
         self.structure_manifest_dir = str(self.structure_manifest_dir)
+
+    def for_assay(self, assay_id):
+        """Resolve known assay restrictions before loading features or saving a run."""
+        if assay_id not in STRUCTURE_DISTANCE_DISABLED_ASSAYS or "structure_distance" not in self.model.enabled_branches:
+            return self
+        branches = tuple(name for name in self.model.enabled_branches if name != "structure_distance")
+        if not branches:
+            raise ValueError(f"{assay_id} disables structure_distance; enable at least one other kernel branch")
+        return replace(self, model=replace(self.model, enabled_branches=branches))
 
     def to_dict(self):
         return asdict(self)

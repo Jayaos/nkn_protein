@@ -518,6 +518,22 @@ three-branch ESM2 + ProteinMPNN preset, remove `structure_distance` from
 Older configs and checkpoints using `physical_distance` are accepted on load;
 new configurations and checkpoints use the name `structure_distance`.
 
+For `BRCA2_HUMAN_Erwood_2022_HEK293T`, the experiment CLI and batch launcher
+automatically remove `structure_distance` before loading features. Resolved run
+configs and checkpoints record the remaining branches. The three independently
+folded ProteinGym structures do not share a validated coordinate frame.
+Programmatic callers should use `config = config.for_assay(assay_id)` before
+loading their feature batch; experiment runners reject a BRCA2 batch that still
+contains this branch. Other assays retain their configured branch selection.
+
+BRCA2 inverse-folding extraction runs each fragment separately and stitches its
+probability rows at reference positions 1–1000, 1001–2085, and 2086–2832. The
+full reference remains 3418 residues long. All current assay mutation sites lie
+inside the covered region; requesting an uncovered site raises an error. The
+default ESM2 mean scores remain applicable. See
+[fragment preparation](feature_generation/README.md#brca2-fragment-preparation)
+for extraction commands and cache details.
+
 `feature_selection` independently chooses the family/checkpoint for each feature
 type. The NKN batch preset selects
 `esm2/esm2_t33_650M_UR50D-layer33-08e4846e5371-mean-all-nonoverlap1022-centered-sites` for `sequence` and

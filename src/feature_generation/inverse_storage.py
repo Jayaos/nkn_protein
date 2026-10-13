@@ -16,7 +16,9 @@ from .storage import (
     _assay_lock, _assay_metadata, _atomic_json, _ensure_assay,
     _inside, _read_json, _write_json,
 )
-from .structure_inputs import validate_structure_metadata
+from .structure_fragments import (
+    inverse_structure_positions, validate_inverse_structure_metadata as validate_structure_metadata,
+)
 
 FAMILIES = ("proteinmpnn", "esm_if1")
 
@@ -100,6 +102,15 @@ def _validate_config(config: dict, model_family: str, cache_id: str) -> None:
     if not isinstance(structure, dict):
         raise ValueError("Missing structure metadata")
     validate_structure_metadata(structure, structure.get("reference_sequence"))
+    if structure.get("schema_version") == 2:
+        expected_fragment_recipe = {
+            "structure_context": "independent_reference_fragments",
+            "residue_indexing": "explicit_one_based_reference_positions",
+            "fragment_aggregation": "concatenate_disjoint_reference_ranges",
+            "fragment_seed_policy": "same_seed_per_fragment",
+        }
+        if any(config.get(key) != value for key, value in expected_fragment_recipe.items()):
+            raise ValueError("Fragment inverse-folding cache requires an explicit independent-fragment recipe")
     if model_family == "proteinmpnn" and any("O" not in row["backbone_atoms"] for row in structure["residue_mapping"]):
         raise ValueError("ProteinMPNN structure metadata requires oxygen at every residue")
 
@@ -137,6 +148,8 @@ def validate_distributions(
 def _validate_payload(store: object, metadata: dict, config: dict) -> None:
     if not isinstance(store, dict):
         raise ValueError("features.pt must contain a tensor dictionary")
+    if config["structure"].get("assay_id") != metadata["assay_id"]:
+        raise ValueError("Inverse-folding structure belongs to a different assay")
     expected = {
         "schema_version": 2,
         "synthetic": False,
@@ -149,14 +162,15 @@ def _validate_payload(store: object, metadata: dict, config: dict) -> None:
     }
     if any(store.get(key) != value for key, value in expected.items()):
         raise ValueError("Inverse-folding payload metadata mismatch")
-    length = len(metadata["reference_sequence"])
+    expected_positions = inverse_structure_positions(config["structure"], metadata["reference_sequence"])
+    length = len(expected_positions)
     positions = store.get("positions")
     if (
         not isinstance(positions, Tensor)
         or positions.dtype != torch.long
-        or not torch.equal(positions, torch.arange(1, length + 1))
+        or not torch.equal(positions, expected_positions)
     ):
-        raise ValueError("Expected complete one-based reference positions")
+        raise ValueError("Expected one-based reference positions matching the registered structure coverage")
     validate_distributions(
         store.get("probabilities"), store.get("log_probs"), length,
         normalization=config["normalization"],
@@ -215,7 +229,11 @@ def write_inverse_cache(
     root = Path(root).resolve()
     _validate_config(config, model_family, cache_id)
     validate_structure_metadata(config["structure"], inputs.reference_sequence)
-    validate_distributions(probabilities, log_probs, inputs.length, normalization=config["normalization"])
+    if config["structure"].get("assay_id") != inputs.assay_id:
+        raise ValueError("Inverse-folding structure belongs to a different assay")
+    positions = inverse_structure_positions(config["structure"], inputs.reference_sequence)
+    _validate_mutation_coverage(inputs.rows, inputs.reference_sequence, positions)
+    validate_distributions(probabilities, log_probs, len(positions), normalization=config["normalization"])
     payload = {
         "schema_version": 2,
         "synthetic": False,
@@ -225,7 +243,7 @@ def write_inverse_cache(
         "structure_input_signature": config["structure"]["input_signature"],
         "config_signature": _signature(config),
         "alphabet": ALPHABET,
-        "positions": torch.arange(1, inputs.length + 1),
+        "positions": positions,
         "probabilities": probabilities.detach().contiguous(),
         "log_probs": log_probs.detach().contiguous(),
     }
@@ -254,6 +272,15 @@ def write_inverse_cache(
         pending.rename(leaf)
         _register_default(root, model_family, cache_id)
     return leaf
+
+
+def _validate_mutation_coverage(rows: list[dict], reference: str, positions: Tensor) -> None:
+    required = {position for row in rows for position in parse_substitutions(
+        row["mutant"], row["mutated_sequence"], reference,
+    )}
+    missing = sorted(required - set(positions.tolist()))
+    if missing:
+        raise ValueError(f"Inverse-folding structures do not cover mutation positions: {missing}")
 
 
 def _validate_assay(root: Path, metadata: dict) -> list[dict]:
@@ -372,13 +399,15 @@ def validate_inverse_cache(root: str | Path, model_family: str | None = None, ca
         raise ValueError("Inverse-folding provenance mismatch")
     store = torch.load(_inside(leaf, "features.pt"), map_location="cpu", weights_only=True)
     _validate_payload(store, metadata, config)
+    _validate_mutation_coverage(rows, metadata["reference_sequence"], store["positions"])
     return {
         "assay_id": metadata["assay_id"],
         "model_family": model_family,
         "cache_id": cache_id,
         "num_variants": len(rows),
         "reference_length": len(metadata["reference_sequence"]),
-        "shape": [len(metadata["reference_sequence"]), len(ALPHABET)],
+        "shape": [len(store["positions"]), len(ALPHABET)],
+        "covered_residues": len(store["positions"]),
         "alphabet": ALPHABET,
         "conditioning_mode": config["conditioning_mode"],
         "path": str(leaf),

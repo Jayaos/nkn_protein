@@ -249,6 +249,7 @@ class PreparationSbatchTests(PreparationFixture):
             module('feature_generation.inverse_checkpoints', download=download_model)
             module('feature_generation.structure_inputs',
                    download_proteingym_structure=download_structure, load_structure=load_structure)
+            module('feature_generation.structure_fragments', load_inverse_structure=load_structure)
             module('fcntl', LOCK_EX=2, flock=lock_download)
             module('data_loading')
             module('data_loading.catalog', AssayCatalog=FakeCatalog)
@@ -308,6 +309,32 @@ class PreparationSbatchTests(PreparationFixture):
                     )
                 else:
                     self.assert_esm2_config(records, "configs/extraction/esm2_650m_centered.json")
+
+    def test_brca2_extracts_fragments_and_only_other_assays_receive_proteinmpnn_scores(self):
+        assay = "BRCA2_HUMAN_Erwood_2022_HEK293T"
+        self.rows.append({"DMS_id": assay, "DMS_filename": f"{assay}.csv", "target_seq": "ACD", "UniProt_ID": "BRCA2_HUMAN"})
+        self.write_catalog()
+        (self.raw / f"{assay}.csv").write_text("mutant,mutated_sequence,DMS_score\nA1C,CCD,1.0\n", encoding="utf-8")
+        script = self.root / PREPARATION / SCRIPTS[1]
+        script.write_text(script.read_text().replace(f"--assay {SELECTED_ASSAYS[0]}", f"--assay {assay}"),
+                          encoding="utf-8", newline="\n")
+        for array in (False, True):
+            with self.subTest(brca2_only=array):
+                result, records = self.invoke(SCRIPTS[1], {"SLURM_ARRAY_TASK_ID": "0"} if array else {})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("use ESM2 mean scores", result.stdout)
+                extracted = next(record["args"] for record in records if record["kind"] == "extract")
+                targets = [extracted[index + 1] for index, value in enumerate(extracted) if value == "--assay"]
+                self.assertEqual(targets, [assay] if array else [assay, SELECTED_ASSAYS[1]])
+                verified = [record["args"][0] for record in records if record["kind"] == "structure-verify"]
+                self.assertEqual(verified, targets)
+                scores = [record["args"] for record in records if record["kind"] == "score"]
+                if array:
+                    self.assertEqual(scores, [])
+                else:
+                    self.assertEqual(len(scores), 1)
+                    scored = [scores[0][index + 1] for index, value in enumerate(scores[0]) if value == "--assay"]
+                    self.assertEqual(scored, [SELECTED_ASSAYS[1]])
 
     def assert_esm2_config(self, records, expected):
         for stage in ("download", "extract", "score"):

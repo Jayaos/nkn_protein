@@ -66,7 +66,10 @@ def _parser() -> argparse.ArgumentParser:
         structure.add_argument("--model-index", type=int, default=1, help="One-based coordinate model index")
         structure.add_argument("--manifest-dir", type=Path, default=PROJECT_ROOT / "data/structures/manifests")
         if command == "prepare-structure":
-            structure.add_argument("--structure", type=Path, required=True)
+            structure.add_argument("--structure", type=Path, action="append", required=True,
+                                   help="Local structure; repeat with matching --reference-range for fragments")
+            structure.add_argument("--reference-range", action="append", metavar="START-END",
+                                   help="One-based inclusive reference interval for each --structure, in order")
             structure.add_argument("--source-url", help="Optional provenance URL for the local structure")
         else:
             structure.add_argument("--url", help="Direct HTTPS PDB/mmCIF URL; omitted to use the checksum-pinned ProteinGym archive")
@@ -120,8 +123,26 @@ def main(argv: list[str] | None = None) -> int:
             from .structure_inputs import prepare_structure, download_structure, download_proteingym_structure
             common = dict(chain_id=args.chain, model_index=args.model_index)
             if args.command == "prepare-structure":
-                path = prepare_structure(args.assay_index, args.assay, args.structure,
-                                         output_dir=args.manifest_dir, source_url=args.source_url, **common)
+                if args.reference_range:
+                    from .structure_fragments import prepare_structure_fragments
+                    import re
+
+                    if len(args.reference_range) != len(args.structure) or any(
+                        re.fullmatch(r"[1-9][0-9]*-[1-9][0-9]*", value) is None for value in args.reference_range
+                    ):
+                        raise ValueError("Provide one START-END --reference-range per --structure")
+                    if args.source_url:
+                        raise ValueError("--source-url applies to single-structure registration")
+                    ranges = [tuple(map(int, value.split("-"))) for value in args.reference_range]
+                    path = prepare_structure_fragments(
+                        args.assay_index, args.assay, args.structure, ranges,
+                        output_dir=args.manifest_dir, **common,
+                    )
+                else:
+                    if len(args.structure) != 1:
+                        raise ValueError("Multiple --structure files require a --reference-range for each")
+                    path = prepare_structure(args.assay_index, args.assay, args.structure[0],
+                                             output_dir=args.manifest_dir, source_url=args.source_url, **common)
             elif args.url:
                 path = download_structure(args.assay_index, args.assay, args.url,
                                           raw_dir=args.raw_dir, manifest_dir=args.manifest_dir, **common)

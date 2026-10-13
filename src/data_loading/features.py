@@ -405,7 +405,19 @@ def load_feature_bundle(
         if store.get("reference_sequence") != reference:
             raise ValueError(f"Reference sequence mismatch: {name}")
         positions = store.get("positions")
-        if not isinstance(positions, Tensor) or positions.dtype != torch.long or not torch.equal(positions, torch.arange(1, len(reference) + 1)):
+        expected_positions = torch.arange(1, len(reference) + 1)
+        structure_metadata = configs[name].get("structure", {})
+        if name == "inverse_folding" and isinstance(structure_metadata, Mapping) and structure_metadata.get("schema_version") == 2:
+            from feature_generation.structure_fragments import inverse_structure_positions
+            from feature_generation.inverse_storage import _validate_config
+
+            _validate_config(configs[name], configs[name]["model_family"], configs[name]["checkpoint"])
+            if structure_metadata.get("assay_id") != assay_id:
+                raise ValueError("Inverse-folding structure belongs to a different assay")
+            expected_positions = inverse_structure_positions(structure_metadata, reference)
+            if store.get("structure_input_signature") != structure_metadata["input_signature"]:
+                raise ValueError("Inverse-folding fragment structure identity mismatch")
+        if not isinstance(positions, Tensor) or positions.dtype != torch.long or not torch.equal(positions, expected_positions):
             raise ValueError(f"Expected complete one-based reference positions: {name}")
         if "synthetic" in metadata and store.get("synthetic") != metadata["synthetic"]:
             raise ValueError(f"Assay and feature provenance disagree: {name}")
@@ -485,8 +497,9 @@ def load_feature_bundle(
     if "inverse_folding" in stores:
         inverse_store = stores["inverse_folding"]
         inverse = _float_tensor(inverse_store.get("probabilities"), "Inverse-folding probabilities", 2)
-        if inverse.shape != (len(reference), 20):
-            raise ValueError("Probability features must cover the reference residues")
+        inverse_positions = inverse_store["positions"]
+        if inverse.shape != (len(inverse_positions), 20):
+            raise ValueError("Probability features must match their declared reference positions")
         if inverse_store.get("alphabet") != ALPHABET:
             raise ValueError("Inverse-folding amino-acid alphabet mismatch")
         probability_recipe = kermut_probability_recipe(configs["inverse_folding"])
@@ -495,13 +508,19 @@ def load_feature_bundle(
                 raise ValueError("Sequence-conditioned ProteinMPNN probabilities require an explicit sequence_conditional or Kermut loader policy")
             if (inverse <= 0).any() or (inverse.sum(-1) > 1 + 2e-5).any():
                 raise ValueError("Kermut ProteinMPNN probabilities must be positive with row mass at most one")
-        elif (inverse < 0).any() or not torch.allclose(inverse.sum(-1), torch.ones(len(reference), dtype=torch.float64), atol=1e-5, rtol=1e-5):
+        elif (inverse < 0).any() or not torch.allclose(inverse.sum(-1), torch.ones(len(inverse_positions), dtype=torch.float64), atol=1e-5, rtol=1e-5):
             raise ValueError("Inverse-folding distributions must be nonnegative and sum to one")
         if "log_probs" in inverse_store:
             log_probs = inverse_store["log_probs"]
             if not isinstance(log_probs, Tensor) or log_probs.shape != inverse.shape or not torch.allclose(log_probs.double(), inverse.log(), atol=1e-5, rtol=1e-5):
                 raise ValueError("Inverse-folding log probabilities are inconsistent")
-        local_features["inverse_folding"] = inverse[positions - 1]
+        inverse_lookup = torch.full((len(reference) + 1,), -1, dtype=torch.long)
+        inverse_lookup[inverse_positions] = torch.arange(len(inverse_positions))
+        inverse_rows = inverse_lookup[positions]
+        if (inverse_rows < 0).any():
+            missing = positions[inverse_rows < 0].unique().tolist()
+            raise ValueError(f"Inverse-folding structures do not cover mutation positions: {missing}")
+        local_features["inverse_folding"] = inverse[inverse_rows]
     geometry_signature = {}
     if "structure_distance" in branches:
         coordinates, geometry_signature = _structure_distance_features(

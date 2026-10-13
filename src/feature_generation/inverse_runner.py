@@ -11,7 +11,8 @@ import torch
 from .inputs import prepare_assay, safe_component
 from .inverse_storage import check_existing, make_leaf_config, validate_distributions, write_inverse_cache
 from .storage import ensure_assay
-from .structure_inputs import load_structure
+from .structure_fragments import StructureFragments, load_inverse_structure as load_structure
+from data_loading.features import parse_substitutions
 
 if TYPE_CHECKING:
     from .inverse_config import InverseFoldingConfig
@@ -76,6 +77,17 @@ def extract(
                 inputs.reference_sequence,
                 require_oxygen=config.model_family == "proteinmpnn",
             )
+            if structure.metadata.get("assay_id") != assay_id:
+                raise ValueError("Structure manifest belongs to a different assay")
+            fragments = structure.fragments if isinstance(structure, StructureFragments) else (structure,)
+            covered_positions = (structure.positions if isinstance(structure, StructureFragments)
+                                 else torch.arange(1, inputs.length + 1))
+            covered = set(covered_positions.tolist())
+            missing = sorted({position for row in inputs.rows for position in parse_substitutions(
+                row["mutant"], row["mutated_sequence"], inputs.reference_sequence,
+            )} - covered)
+            if missing:
+                raise ValueError(f"Inverse-folding structures do not cover mutation positions: {missing}")
             if model_metadata is None:
                 model_metadata = {
                     **adapter.metadata(),
@@ -85,7 +97,15 @@ def extract(
                     "seed": config.seed,
                     "inference_dtype": config.inference_dtype,
                 }
-            leaf_config = make_leaf_config(config.cache_id, config.model_family, model_metadata, structure.metadata)
+            effective_metadata = model_metadata
+            if isinstance(structure, StructureFragments):
+                effective_metadata = dict(
+                    model_metadata, structure_context="independent_reference_fragments",
+                    residue_indexing="explicit_one_based_reference_positions",
+                    fragment_aggregation="concatenate_disjoint_reference_ranges",
+                    fragment_seed_policy="same_seed_per_fragment",
+                )
+            leaf_config = make_leaf_config(config.cache_id, config.model_family, effective_metadata, structure.metadata)
             root = (config.output_root / assay_id).resolve()
             if not root.is_relative_to(config.output_root.resolve()):
                 raise ValueError("Assay path escapes output_root")
@@ -106,13 +126,21 @@ def extract(
             if not loaded:
                 adapter.load()
                 loaded = True
-            with torch.inference_mode():
-                prediction = adapter.predict(structure)
-            if not isinstance(prediction, dict):
-                raise ValueError("Inverse-folding adapter must return probabilities and log_probs")
-            probabilities, log_probs = prediction.get("probabilities"), prediction.get("log_probs")
+            predictions = []
+            for fragment in fragments:
+                with torch.inference_mode():
+                    prediction = adapter.predict(fragment)
+                if not isinstance(prediction, dict):
+                    raise ValueError("Inverse-folding adapter must return probabilities and log_probs")
+                validate_distributions(
+                    prediction.get("probabilities"), prediction.get("log_probs"),
+                    len(fragment.reference_sequence), normalization=leaf_config["normalization"],
+                )
+                predictions.append(prediction)
+            probabilities = torch.cat([prediction["probabilities"] for prediction in predictions])
+            log_probs = torch.cat([prediction["log_probs"] for prediction in predictions])
             validate_distributions(
-                probabilities, log_probs, inputs.length, normalization=leaf_config["normalization"],
+                probabilities, log_probs, len(covered_positions), normalization=leaf_config["normalization"],
             )
             provenance = {
                 "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -136,7 +164,10 @@ def extract(
                 "status": "completed",
                 "model_family": config.model_family,
                 "path": str(leaf),
-                "shape": [inputs.length, 20],
+                "shape": [len(covered_positions), 20],
+                "reference_length": inputs.length,
+                "covered_residues": len(covered_positions),
+                "num_structure_fragments": len(fragments),
                 "num_variants": n,
                 "elapsed_seconds": time.monotonic() - started,
             }

@@ -19,8 +19,9 @@
 # This job downloads and verifies the assets before extraction and scoring.
 # It prepares Kermut's sequence-conditioned cache and variant mean scores.
 # Feature extraction uses ten conditional passes over every reference position.
-# The default presets have no sequence-length cap. Complete reference structures
-# are required; long inputs still need sufficient GPU memory and execution time.
+# The default presets have no sequence-length cap. Registered BRCA2 fragments
+# support inverse-folding features; use ESM2 mean scores for that assay.
+# Other assays require complete structures; long inputs still need sufficient GPU memory.
 # Variant scoring uses one sequence per batch to reduce peak GPU memory.
 # Submit: sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
 # Process only A0A1I9GEU1_NEIME_Kennouche_2019 and FKBP3_HUMAN_Tsuboyama_2023_2KFV.
@@ -73,8 +74,12 @@ fi
 assay_list="$(python sbatch_run/run_prepare_rep/list_assays.py "${selection_args[@]}")"
 mapfile -t assays <<< "$assay_list"
 assay_args=()
+score_assay_args=()
 for assay in "${assays[@]}"; do
   assay_args+=(--assay "$assay")
+  if [[ "$assay" != BRCA2_HUMAN_Erwood_2022_HEK293T ]]; then
+    score_assay_args+=(--assay "$assay")
+  fi
 done
 printf 'Job: %s\nRepository: %s\nSelected assays: %s\n' "${SLURM_JOB_ID:-manual}" "$project_root" "${#assays[@]}"
 printf '  %s\n' "${assays[@]}"
@@ -98,7 +103,8 @@ print(f"Kermut extraction: {feature_config.conditioning_mode}; "
 print(f"Variant scoring seed: {score_config.seed}")
 for stage, config in (("Feature extraction", feature_config), ("Variant scoring", score_config)):
     length_policy = "no sequence-length cap" if config.max_length is None else f"at most {config.max_length} residues"
-    print(f"{stage} length policy: {length_policy}; complete reference required")
+    structure_policy = "registered BRCA2 fragments allowed" if stage == "Feature extraction" else "complete reference required"
+    print(f"{stage} length policy: {length_policy}; {structure_policy}")
 print("Variant scoring batch size: 1")
 
 import torch
@@ -130,13 +136,14 @@ with (config.model_dir / ".download.lock").open("a+b") as lock:
 PY
 
 failed=0
-printf '[2/4] Downloading/verifying reference structures and full-sequence mappings\n'
+printf '[2/4] Downloading/verifying reference structures and residue mappings\n'
 if python -u - "$feature_config" "${assays[@]}" <<'PY'
 import sys
 
 from data_loading.catalog import AssayCatalog
 from feature_generation.inverse_config import InverseFoldingConfig
-from feature_generation.structure_inputs import download_proteingym_structure, load_structure
+from feature_generation.structure_inputs import download_proteingym_structure
+from feature_generation.structure_fragments import load_inverse_structure
 
 config = InverseFoldingConfig.load(sys.argv[1])
 catalog = AssayCatalog(config.assay_index)
@@ -153,7 +160,7 @@ for assay_id in sys.argv[2:]:
                 manifest_dir=config.structure_manifest_dir,
             )
         # Preserve valid registered structures, including custom source files.
-        load_structure(manifest, reference)
+        load_inverse_structure(manifest, reference)
         print(f"{assay_id}: structure verified: {manifest}")
     except (OSError, ValueError, RuntimeError, KeyError, ImportError) as error:
         failures.append(assay_id)
@@ -190,18 +197,25 @@ fi
 # Retain the original score recipe/seed for existing NKN configurations.
 # One variant per batch reduces GPU memory for long complete sequences.
 printf '[4/4] Preparing variant mean_score.csv\n'
-if python -u -m feature_generation.cli score \
+for assay in "${assays[@]}"; do
+  if [[ "$assay" == BRCA2_HUMAN_Erwood_2022_HEK293T ]]; then
+    printf '%s: fragment inverse-folding features use ESM2 mean scores; skipping full-sequence ProteinMPNN scoring.\n' "$assay"
+  fi
+done
+if (( ${#score_assay_args[@]} )); then
+  if python -u -m feature_generation.cli score \
   --config "$score_config" \
-  "${assay_args[@]}" \
+  "${score_assay_args[@]}" \
   --singles-only \
   --device cuda \
   --batch-size 1 \
   --num-orders 1 \
   --resume \
   --continue-on-error; then
-  :
-else
-  failed=1
+    :
+  else
+    failed=1
+  fi
 fi
 
 if (( failed )); then

@@ -228,6 +228,14 @@ def load_structure(manifest_path: str | Path, reference_sequence: str, require_o
     manifest_path = Path(manifest_path).resolve()
     with manifest_path.open(encoding="utf-8") as handle:
         metadata = json.load(handle)
+    if isinstance(metadata, dict) and metadata.get("schema_version") == 2:
+        raise ValueError("Fragment collections do not define a shared coordinate frame; use load_inverse_structure for independent fragment inference")
+    return _load_structure_metadata(metadata, manifest_path, reference_sequence, require_oxygen)
+
+
+def _load_structure_metadata(metadata: dict, manifest_path: Path, reference_sequence: str,
+                             require_oxygen: bool = True) -> StructureInput:
+    """Load one schema-1 structure, including when nested in a fragment bundle."""
     validate_structure_metadata(metadata, reference_sequence)
     stored_path = metadata.get("structure_path")
     if not isinstance(stored_path, str) or not stored_path:
@@ -316,6 +324,9 @@ def download_proteingym_structure(index_path: str | Path, assay_id: str,
     if not filename or Path(filename).name != filename or Path(filename).suffix.lower() not in (".pdb", ".ent", ".cif", ".mmcif"):
         raise ValueError("Assay catalog needs a single pdb_file basename for ProteinGym acquisition")
     safe_component(filename, "structure filename")
+    if assay_id == "BRCA2_HUMAN_Erwood_2022_HEK293T" and filename == "BRCA2_HUMAN.pdb":
+        from .structure_fragments import download_proteingym_fragments
+        return download_proteingym_fragments(index_path, assay_id, chain_id, model_index, raw_dir, manifest_dir)
     manifest_path = Path(manifest_dir).resolve() / f"{assay_id}.json"
     if manifest_path.exists():
         existing = load_structure(manifest_path, record.reference_sequence, require_oxygen=False)

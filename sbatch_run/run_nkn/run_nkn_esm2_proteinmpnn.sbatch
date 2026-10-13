@@ -19,6 +19,8 @@
 # without renormalization, and physical-distance kernels on reference CA atoms
 # loaded from structure_manifest_dir. Only ESM2 650M masked-marginal scores feed the
 # learned GP mean in the default preset. CPU only.
+# BRCA2_HUMAN_Erwood_2022_HEK293T disables structure_distance because its reference
+# joins separate structure fragments; the other selected branches remain active.
 #
 # From the repository root (or a subdirectory):
 #   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch [singles|all|SETTING] [--config PATH] [--parallel]
@@ -220,6 +222,10 @@ if config.evaluation.n_folds != 5:
 metadata = json.loads((Path(sys.argv[3]) / "assay.json").read_text(encoding="utf-8"))
 if metadata.get("assay_id") != sys.argv[4] or metadata.get("synthetic") is not False:
     raise SystemExit("error: Expected real pretrained features for the selected assay.")
+requested_branches = config.model.enabled_branches
+config = config.for_assay(metadata["assay_id"])
+if config.model.enabled_branches != requested_branches:
+    print(f"Assay {metadata['assay_id']}: structure_distance disabled for separate reference fragments.")
 Path(sys.argv[2]).write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
 execution_plan = {
     "parallel": sys.argv[5] == "true",
