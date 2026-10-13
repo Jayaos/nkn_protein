@@ -349,8 +349,8 @@ order, using the configured `raw_substitutions/DMS_substitutions.csv` catalog.
 Its default
 `configs/extraction/esm2_650m_centered.json` saves centered mutation-site vectors
 and a full-sequence mean from fixed non-overlapping windows for NKN's sequence
-branches, plus centered-window
-masked-marginal scores for its GP mean. The Conda environment and
+branches, plus centered-window masked-marginal scores. Kermut's default reuses
+the global mean and score caches; it does not use the saved site vectors. The Conda environment and
 ProteinGym assay CSVs must already exist. First-time downloads need outbound
 HTTPS from the compute node; verified completed caches are reused on resubmission.
 
@@ -371,8 +371,8 @@ revision; centered scoring adds `-centered<max_length>` and recipe version 2.
 Its metadata declares the window policy and coordinate convention. Full-reference
 version-1 scores remain readable under their original IDs. Switching scoring
 mode does not change the embedding cache identity, so completed embeddings can
-be reused. NKN now explicitly selects the centered scores; Kermut's preset
-continues selecting full-reference scores. ProteinMPNN score caches are preserved.
+be reused. NKN and Kermut both explicitly select the centered scores.
+ProteinMPNN score caches are preserved.
 
 Select just ESM2 scores for the mean function:
 
@@ -550,14 +550,17 @@ full-reference structure. Its job requests 16 GiB host RAM and two hours, and
 scores one variant per batch; long references may need more memory or time.
 ESM-IF1 retains its 1,022-residue limit.
 
-To prepare Kermut's pooled prefix embeddings instead, pass the pooled preset:
+To prepare optional legacy pooled prefix embeddings, pass the pooled preset:
 
 ```bash
 sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch --config configs/extraction/esm2_650m.json
 ```
 
 `ESM2_CONFIG` can also select the extraction config; `--config` takes precedence.
-Use that same config and both `--assay` filters when listing array indices. The
+Using this optional recipe with Kermut also requires a copied experiment config
+selecting the `-mean-first1022` embedding cache and full-reference ESM2 score
+cache. The default Kermut config selects the centered preparation outputs.
+Use the same extraction config and both `--assay` filters when listing array indices. The
 pooled preset averages the first 1,022 residues (the full sequence when shorter)
 and retains its 4 GiB output limit. It can extract embeddings for longer
 references, but its scoring stage still fails the full-reference length check.
@@ -682,8 +685,9 @@ python -m feature_generation.cli validate --features data/features/pretrained/si
 ```
 
 Use `python -m feature_generation.cli` for all extraction commands. For the
-larger checkpoint, choose `esm2_650m_centered.json` for NKN's site and global
-branches or `esm2_650m.json` for Kermut's pooled vectors. Download is a separate
+larger checkpoint, choose `esm2_650m_centered.json` for both the NKN and Kermut
+presets. Kermut uses only the global vectors. `esm2_650m.json` retains the optional
+legacy prefix recipe. Download is a separate
 explicit step; extraction uses local files only and works with
 `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`.
 
@@ -699,10 +703,11 @@ The presets are:
 The `esm2_8m.json` and `esm2_650m.json` presets use `pooling="mean"` and
 `truncation="prefix"`: tokenize only the first `min(sequence_length, 1022)`
 residues and average their embeddings,
-excluding special tokens and padding. This matches Kermut's prefix-mean
+excluding special tokens and padding. This retains the legacy Kermut prefix-mean
 preprocessing. Mutations after residue 1,022 do not affect these ESM2 vectors.
 Cache IDs end in `-mean-first1022`; rerun preparation to create these caches.
-The Kermut configuration selects the corresponding pooled ID.
+Using these caches requires explicitly selecting their pooled IDs in the
+experiment config; the default Kermut preset selects the compact cache below.
 
 The optional `esm2_650m_residue.json` preset
 uses `pooling="none"` and `truncation="reject"`. It saves `[N,L,1280]` embeddings
@@ -711,7 +716,7 @@ Its cache ID is `esm2_t33_650M_UR50D-layer33-08e4846e5371`, so compatible existi
 residue caches can be reused with that selection. The loader takes mutation
 vectors and averages all residues when this legacy recipe is selected.
 
-The NKN preset selects `esm2_650m_centered.json`, with
+The NKN and Kermut presets select `esm2_650m_centered.json`, with
 `site_embeddings="centered"`. For a one-based mutation
 position `p`, reference length `L`, and window length `W=min(L,1022)`, it uses
 zero-based bounds `start=max(0,min(p-1-W//2,L-W))`, `end=start+W`.
@@ -719,7 +724,7 @@ It processes the actual variant sequence without masking and retains the vector
 at local index `p-1-start`. Other mutations inside the window provide context;
 mutations outside it cannot influence that site's vector. Identical window
 bounds within a variant reuse one model evaluation. Short variants use their
-full sequence for both sites and the mean.
+full sequence for both sites and the mean. Kermut reads only the global mean.
 
 For the global vector, this preset uses `pooling="mean"`, `truncation="none"`,
 and `global_window="non_overlapping"`. Split the full variant at fixed offsets
@@ -746,7 +751,7 @@ one atomic `features.pt` per assay; it does not persist intermediate batches.
 Global-only pooled, full-residue, and compact caches use separate recipe IDs.
 The previous `-mean-first1022-centered-sites` caches remain readable with their
 prefix recipe, but cannot be resumed as full-sequence globals. Prepare the new
-embedding cache before running the updated NKN preset. Masked-marginal score
+embedding cache before running the NKN or Kermut preset. Masked-marginal score
 metadata and cache IDs do not change, so completed centered score caches are
 reused. Full-window pooling adds model passes for long proteins, without
 increasing the number of saved global or site vectors.

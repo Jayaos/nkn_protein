@@ -121,8 +121,10 @@ The global branch accepts residue embeddings and averages them, or loads
 prepooled vectors directly. The NKN ESM2 preset saves mutation-site vectors from
 centered windows and a separate full-sequence mean from fixed non-overlapping
 windows, including for long references.
-The pooled ESM2 presets used by
-Kermut average only the first 1,022 residues (all residues when shorter).
+The Kermut preset reuses that compact cache's global vector and centered scores;
+it does not use the mutation-site vectors. Optional legacy pooled ESM2 presets
+average only the first 1,022 residues (all residues when shorter) and require
+explicit cache selection in the experiment config.
 Model-specific preprocessing and other pooling can be supplied through the
 model-independent `FeatureBatch` API. The old
 `ProteinFitnessDataset.as_feature_matrices` demo transformations are not used.
@@ -280,14 +282,14 @@ ESM2 preparation defaults to `configs/extraction/esm2_650m_centered.json`, with
 192 GiB host RAM and a 32 GiB compact-output guard. It stores only the mutation
 vectors and global means; it does not allocate every residue for every variant.
 The new `-mean-all-nonoverlap1022-centered-sites` cache must be prepared before
-using the updated NKN preset. Existing prefix-mean and residue recipes remain
+using the NKN or Kermut preset. Existing prefix-mean and residue recipes remain
 readable and separate. Centered masked-marginal scores retain their existing
 recipe, so matching completed score caches can be reused.
 `--resume` reuses completed assay caches; interrupted assays restart extraction.
 Both ESM2 stages support sites anywhere in long references. Scoring uses
 `scoring_window: "centered"`: it masks each required WT position inside a window
 of up to 1,022 residues and sums mutant-minus-WT log probabilities per variant.
-Short references use full WT context. The updated NKN preset selects the new
+Short references use full WT context. Both NKN and Kermut presets select the
 `-centered1022` score cache; older full-reference score caches remain separate.
 ProteinMPNN's presets now use `max_length: null`, removing its sequence-length
 guard while retaining full-reference structure requirements. Its preparation

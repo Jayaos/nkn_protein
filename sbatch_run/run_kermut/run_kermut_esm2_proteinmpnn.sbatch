@@ -14,8 +14,9 @@
 # Independent baseline under baselines/kermut; no imports from top-level kermut.
 # Requires the nkn_protein Conda environment, cached scalar scores, a registered
 # structure manifest, and completed outputs from both run_prepare_rep jobs.
-# Prepare ESM2 with --config configs/extraction/esm2_650m.json to select Kermut's
-# pooled cache; the preparation job's default compact site cache is used by NKN.
+# Reuse prepare_esm2.sbatch's default compact cache and centered scores. Kermut
+# reads only its global means over all residues in fixed non-overlapping windows.
+# Legacy prefix caches require explicit selections in a custom experiment JSON.
 # Defaults: ESM2 650M layer-33 mean embeddings and ProteinMPNN sequence-conditioned
 # distributions (10 orders, seed 37), with reference CA coordinates. The mean
 # learns a combination of ESM2 650M masked-marginal and ProteinMPNN sequence

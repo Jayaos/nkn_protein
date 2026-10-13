@@ -30,14 +30,17 @@ and [paper](https://proceedings.neurips.cc/paper_files/paper/2024/file/34547650b
 
 The default selects ESM2 **650M** layer-33 embeddings and masked-marginal scores,
 plus ProteinMPNN `v_48_020` distributions prepared with Kermut's extraction recipe.
-ESM2 embeddings average the first 1,022 residues of each variant, or the full
-sequence when shorter. Mutations beyond that prefix do not affect the ESM2
-vector. Rerun ESM2 preparation to generate the selected `-mean-first1022` cache;
-existing residue caches remain separate. Kermut's selected full-reference ESM2
-scoring recipe still requires references of at most 1,022 residues. ProteinMPNN's
-presets have no sequence-length cap and still require complete reference structures.
-The NKN centered-window ESM2 score recipe is available separately; this preset
-continues selecting the original full-reference score cache.
+It reuses the default ESM2 preparation outputs selected by NKN: the compact
+`-mean-all-nonoverlap1022-centered-sites` cache and `-centered1022` scores.
+Kermut reads only the saved global embedding from that compact cache; it does
+not use its mutation-site vectors. Global embeddings average every variant
+residue using fixed non-overlapping windows of at most 1,022 residues. Scores
+use WT windows centered on each masked position. For the short NEIME and FKBP3
+references, both the current and legacy prefix recipes use full-sequence
+context. For longer references, the current global vector includes residues
+beyond 1,022, whereas the legacy prefix vector excludes them; window boundaries
+still limit attention context. ProteinMPNN's presets have no sequence-length
+cap and still require complete reference structures for this baseline.
 The GP mean combines ESM2 and ProteinMPNN variant scores; the publication's
 mean uses ESM2 alone. ProteinMPNN variant scoring uses one order and seed 0.
 For each reference position, ProteinMPNN conditions on the backbone and the
@@ -66,7 +69,7 @@ default combines both sources:
 
 ```json
 "score_sources": [
-  "scores/esm2/esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371",
+  "scores/esm2/esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371-centered1022",
   "scores/proteinmpnn/v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb"
 ]
 ```
@@ -91,7 +94,7 @@ Prepare the selected caches first. On the cluster, submit both preparation
 jobs and wait for them to finish successfully before submitting Kermut:
 
 ```bash
-sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch --config configs/extraction/esm2_650m.json
+sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch
 sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
 ```
 
@@ -104,9 +107,15 @@ extrapolation experiments, prepare full-variant caches through the CLI with
 `--output-root data/features/pretrained` and omit `--singles-only` consistently
 from extraction and scoring.
 
-The ESM2 config override selects Kermut's pooled prefix cache. Without it, the
-preparation job defaults to the compact centered-site cache used by NKN's `sequence_site`
-branch. Both cache recipes can coexist and share the same downloaded checkpoint.
+The ESM2 preparation default supplies both the NKN and Kermut presets. Existing
+matching centered caches can be reused without preparing a separate pooled cache.
+The legacy prefix recipe remains optional: prepare with
+`--config configs/extraction/esm2_650m.json`, then explicitly select
+`esm2/esm2_t33_650M_UR50D-layer33-08e4846e5371-mean-first1022` in
+`feature_selection.sequence` and its full-reference ESM2 score source (without
+the `-centered1022` suffix) in a copied Kermut experiment JSON. Pass that JSON
+to the run's `--config`. This scoring recipe requires references no longer than
+1,022 residues. Both cache recipes can coexist and share the downloaded checkpoint.
 
 The ProteinMPNN job writes the sequence-conditioned cache selected by Kermut
 and retains the existing separate variant-score recipe. It scores one variant
