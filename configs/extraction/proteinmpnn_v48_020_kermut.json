@@ -5,7 +5,7 @@
   "revision": "8907e6671bfbfc92303b5f79c4b5e6ce47cdef57",
   "cache_id": "v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb",
   "model_dir": "data/models/proteinmpnn",
-  "output_root": "data/features/pretrained",
+  "output_root": "data/features/pretrained/singles",
   "assay_index": "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv",
   "structure_manifest_dir": "data/structures/manifests",
   "conditioning_mode": "sequence_conditional",

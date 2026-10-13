@@ -3,7 +3,7 @@
   "revision": "c731040fcd8d73dceaa04b0a8e6329b345b0f5df",
   "cache_id": "esm2_t6_8M_UR50D-layer6-c731040fcd8d-mean-first1022",
   "model_dir": "data/models/esm2",
-  "output_root": "data/features/pretrained",
+  "output_root": "data/features/pretrained/singles",
   "assay_index": "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv",
   "layer": 6,
   "device": "auto",

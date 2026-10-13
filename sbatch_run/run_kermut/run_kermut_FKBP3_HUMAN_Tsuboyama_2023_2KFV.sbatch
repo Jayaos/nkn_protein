@@ -13,7 +13,7 @@
 
 # Kermut on FKBP3_HUMAN_Tsuboyama_2023_2KFV using our baselines.kermut runner.
 # Defaults: ESM2 650M and sequence-conditioned ProteinMPNN caches under
-# data/features/pretrained/FKBP3_HUMAN_Tsuboyama_2023_2KFV.
+# data/features/pretrained/singles/FKBP3_HUMAN_Tsuboyama_2023_2KFV.
 # Submit from the repository root or a subdirectory. Arguments and optional
 # cache/config overrides are handled by the shared launcher; ASSAY is fixed here.
 # Usage: sbatch sbatch_run/run_kermut/run_kermut_FKBP3_HUMAN_Tsuboyama_2023_2KFV.sbatch [singles|SETTING] [--config PATH] [--parallel]

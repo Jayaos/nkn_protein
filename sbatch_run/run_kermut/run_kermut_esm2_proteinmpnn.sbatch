@@ -33,8 +33,10 @@
 # Copy/edit that JSON and select it with --config PATH or KERMUT_CONFIG=PATH.
 # --config takes precedence over KERMUT_CONFIG; paths use the repository root.
 # Default: singles, the three published singles CV protocols (15 fold fits).
+# Singles use data/features/pretrained/singles/<ASSAY>; other selections use
+# data/features/pretrained/<ASSAY>. FEATURES overrides either default.
 # Default assay: FKBP3_HUMAN_Tsuboyama_2023_2KFV, loaded from
-# data/features/pretrained/FKBP3_HUMAN_Tsuboyama_2023_2KFV.
+# data/features/pretrained/singles/FKBP3_HUMAN_Tsuboyama_2023_2KFV.
 # all: three singles CV runs, one shared mixed CV run, one extrapolation fit
 # (21 fits). The mixed run reports both singles and doubles evaluation settings.
 # The default ASSAY has only singles; all requires another assay with doubles.
@@ -134,7 +136,22 @@ if [[ -z "$assay" || "$assay" == *[/\\]* || "$assay" == "." || "$assay" == ".." 
   echo "error: ASSAY must be a ProteinGym assay ID, not a path." >&2
   exit 1
 fi
-features="${FEATURES:-data/features/pretrained/$assay}"
+singles_only=true
+for setting in "${settings[@]}"; do
+  if [[ "$setting" != singles_* ]]; then
+    singles_only=false
+    break
+  fi
+done
+feature_root="data/features/pretrained"
+scope_args=()
+coverage="full assay"
+if [[ "$singles_only" == true ]]; then
+  feature_root="$feature_root/singles"
+  scope_args=(--singles-only)
+  coverage="all single mutants"
+fi
+features="${FEATURES:-$feature_root/$assay}"
 singles_folds="${SINGLES_FOLDS_CSV:-data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/$assay.csv}"
 multiples_folds="${MULTIPLES_FOLDS_CSV:-data/DMS_ProteinGym_substitutions/cv_folds_multiples_substitutions/$assay.csv}"
 split_seed="${SPLIT_SEED:-2024}"
@@ -237,12 +254,13 @@ print(f"GP mean score sources: {len(config.score_sources) if config.score_source
 print(f"Training: {config.training.n_steps} AdamW updates; one initialization; seed {config.training.seed}; final iterate")
 PY
 
-printf '[1/3] Validating shared features, scores, and full assay coverage\n'
+printf '[1/3] Validating shared features, scores, and %s coverage\n' "$coverage"
 python -u -m baselines.kermut.cli validate \
   --features "$features" \
   --config "$runtime_config" \
   --assay-index "$assay_index" \
   --full-assay \
+  "${scope_args[@]}" \
   --device cpu \
   --output "$run_root/validation"
 
@@ -350,6 +368,7 @@ run_setting() {
       --config "$runtime_config" \
       --assay-index "$assay_index" \
       --full-assay \
+      "${scope_args[@]}" \
       --device cpu \
       --folds "$fold_snapshot" \
       --fold-workers "$fold_workers" \

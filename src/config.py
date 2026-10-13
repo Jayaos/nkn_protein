@@ -8,7 +8,20 @@ from pathlib import Path
 
 VECTOR_PRIMITIVES = ("cosine", "rbf", "matern32")
 IF_PRIMITIVES = ("hellinger_exp", "hellinger_rbf", "bhattacharyya")
-BRANCH_NAMES = ("inverse_folding", "structure", "sequence_site", "sequence_global")
+STRUCTURE_DISTANCE_PRIMITIVES = ("exp", "rbf", "matern32")
+DEFAULT_BRANCHES = ("inverse_folding", "structure", "sequence_site", "sequence_global")
+BRANCH_NAMES = (*DEFAULT_BRANCHES, "structure_distance")
+
+
+def branch_primitives(name):
+    """Return the permitted primitive family for a representation branch."""
+    if name == "inverse_folding":
+        return IF_PRIMITIVES
+    if name == "structure_distance":
+        return STRUCTURE_DISTANCE_PRIMITIVES
+    if name in DEFAULT_BRANCHES:
+        return VECTOR_PRIMITIVES
+    raise ValueError(f"Unknown branch: {name}")
 
 
 def validate_enabled_branches(values):
@@ -17,6 +30,8 @@ def validate_enabled_branches(values):
         raise ValueError("enabled_branches must be a nonempty list or tuple of branch names")
     if any(not isinstance(name, str) for name in values):
         raise ValueError("enabled_branches must contain branch names as strings")
+    # Accept the previous public spelling at configuration/loading boundaries.
+    values = tuple("structure_distance" if name == "physical_distance" else name for name in values)
     if len(set(values)) != len(values):
         raise ValueError("enabled_branches must not contain duplicate names")
     unknown = set(values) - set(BRANCH_NAMES)
@@ -52,7 +67,7 @@ class BranchConfig:
 
 
 def _branches():
-    return {name: BranchConfig(copies={p: 1 for p in (IF_PRIMITIVES if name == "inverse_folding" else VECTOR_PRIMITIVES)})
+    return {name: BranchConfig(copies={p: 1 for p in branch_primitives(name)})
             for name in BRANCH_NAMES}
 
 
@@ -60,23 +75,28 @@ def _branches():
 class ModelConfig:
     branches: dict = field(default_factory=_branches)
     final_widths: tuple = (8, 4, 4, 2, 1)
-    enabled_branches: tuple = BRANCH_NAMES
+    enabled_branches: tuple = DEFAULT_BRANCHES
 
     def __post_init__(self):
         self.enabled_branches = validate_enabled_branches(self.enabled_branches)
         self.final_widths = validate_widths(self.final_widths)
-        unknown = set(self.branches) - set(BRANCH_NAMES)
+        configured = dict(self.branches)
+        if "physical_distance" in configured:
+            if "structure_distance" in configured:
+                raise ValueError("Branch configurations must not contain both physical_distance and structure_distance")
+            configured["structure_distance"] = configured.pop("physical_distance")
+        unknown = set(configured) - set(BRANCH_NAMES)
         if unknown:
             raise ValueError(f"Unknown branch configurations: {sorted(unknown)}")
         # Omitted hyperparameters keep their defaults, including for disabled branches.
         defaults = _branches()
-        branches = {**defaults, **self.branches}
+        branches = {**defaults, **configured}
         self.branches = {
             k: v if isinstance(v, BranchConfig) else BranchConfig(**{**asdict(defaults[k]), **v})
             for k, v in branches.items()
         }
         for name, branch in self.branches.items():
-            allowed = IF_PRIMITIVES if name == "inverse_folding" else VECTOR_PRIMITIVES
+            allowed = branch_primitives(name)
             if set(branch.copies) - set(allowed):
                 raise ValueError(f"Unsupported primitives for {name}: {set(branch.copies) - set(allowed)}")
 
@@ -153,6 +173,7 @@ class ExperimentConfig:
     feature_selection: dict = field(default_factory=dict)
     score_sources: list | None = None
     inverse_folding_policy: str = "normalized"
+    structure_manifest_dir: str = "data/structures/manifests"
     pooling: str = "mean"
     device: str = "cpu"
     num_threads: int = 1
@@ -167,6 +188,9 @@ class ExperimentConfig:
             raise ValueError("The current cache adapter supports mean pooling; supply custom pooled features through FeatureBatch")
         if self.inverse_folding_policy not in ("normalized", "sequence_conditional"):
             raise ValueError("inverse_folding_policy must be 'normalized' or 'sequence_conditional'")
+        if not isinstance(self.structure_manifest_dir, (str, Path)) or not str(self.structure_manifest_dir).strip():
+            raise ValueError("structure_manifest_dir must be a nonempty path")
+        self.structure_manifest_dir = str(self.structure_manifest_dir)
 
     def to_dict(self):
         return asdict(self)

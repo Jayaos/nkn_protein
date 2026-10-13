@@ -1,7 +1,8 @@
 """List preparation targets from the extraction config's ProteinGym catalog.
 
 Uses only the Python standard library so array sizes can be computed on a login
-node before activating the GPU environment. Task indices follow catalog order.
+node before activating the GPU environment. Task indices follow catalog order,
+or the explicit --assay order when a subset is selected.
 """
 
 import argparse
@@ -52,12 +53,20 @@ def list_assays(config_path: Path) -> list[str]:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--assay", action="append", help="Select an assay; repeat for an ordered subset of the catalog")
     selection = parser.add_mutually_exclusive_group()
-    selection.add_argument("--count", action="store_true", help="Print the number of catalog assays")
-    selection.add_argument("--task-index", type=int, help="Select one assay by zero-based catalog row")
+    selection.add_argument("--count", action="store_true", help="Print the number of selected assays")
+    selection.add_argument("--task-index", type=int, help="Select one assay by zero-based index within the selected assays")
     args = parser.parse_args(argv)
     try:
         assays = list_assays(args.config)
+        if args.assay is not None:
+            if len(set(args.assay)) != len(args.assay):
+                raise ValueError("Requested assay IDs must be unique")
+            unknown = [assay for assay in args.assay if assay not in assays]
+            if unknown:
+                raise ValueError(f"Requested assays are missing from the catalog: {', '.join(unknown)}")
+            assays = args.assay
         if args.count:
             print(len(assays))
         elif args.task_index is not None:

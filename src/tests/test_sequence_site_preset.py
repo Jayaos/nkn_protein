@@ -3,9 +3,7 @@
 from dataclasses import replace
 from pathlib import Path
 import tempfile
-from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
 
 import torch
 
@@ -16,12 +14,14 @@ from feature_generation.inverse_config import InverseFoldingConfig
 from feature_generation.inverse_runner import extract as extract_inverse
 from feature_generation.runner import extract
 from feature_generation.score_runner import score
+from feature_generation.structure_inputs import load_structure, prepare_structure
 from kernels import ProteinKernel
 from tests.test_esm2_centered_score_pipeline import FakeCenteredScoreAdapter
 from tests.test_esm2_nonoverlap_pipeline import FakeNonoverlapAdapter
 from tests.test_esm2_pooling import PrefixAdapter
 from tests.test_feature_generation import residue_values, write_csv
-from tests.test_inverse_pipeline import FakeConditionalAdapter, structure_metadata
+from tests.test_inverse_pipeline import FakeConditionalAdapter
+from tests.test_structure_inputs import pdb_text
 
 
 REPOSITORY = Path(__file__).resolve().parents[2]
@@ -68,32 +68,32 @@ class SequenceSitePresetTests(unittest.TestCase):
             score_result = score(centered, ["tiny"], adapter_factory=FakeCenteredScoreAdapter)[0]
             self.assertEqual(config.score_sources, [score_result["score_source"]])
 
-            metadata = structure_metadata()
-            structure = SimpleNamespace(
-                metadata=metadata, reference_sequence="ACD", positions=torch.arange(1, 4),
-                coords=torch.zeros(3, 4, 3), structure_sha256=metadata["structure_sha256"],
-                input_signature=metadata["input_signature"],
-            )
-            with patch("feature_generation.inverse_runner.load_structure", return_value=structure):
-                extract_inverse(inverse, ["tiny"], adapter_factory=FakeConditionalAdapter)
+            pdb = root / "tiny.pdb"
+            pdb.write_text(pdb_text(), encoding="utf-8")
+            manifest = prepare_structure(index, "tiny", pdb, output_dir=root / "manifests")
+            structure = load_structure(manifest, "ACD")
+            extract_inverse(inverse, ["tiny"], adapter_factory=FakeConditionalAdapter)
 
             batch = load_feature_bundle(
                 output_root / "tiny", feature_selection=config.feature_selection,
                 score_sources=config.score_sources, pooling=config.pooling,
                 enabled_branches=config.model.enabled_branches,
                 inverse_folding_policy=config.inverse_folding_policy,
+                structure_manifest_dir=root / "manifests",
             )
             expected = torch.stack([residue_values(sequence) for sequence in sequences]).double()
             self.assertEqual(batch.variant_ids, ids)
             self.assertEqual(batch.owners.tolist(), [1, 2, 3, 3])
             self.assertEqual(batch.mutation_positions.tolist(), [1, 2, 1, 2])
-            self.assertEqual(set(batch.local_features), {"sequence_site", "inverse_folding"})
+            self.assertEqual(set(batch.local_features), {"sequence_site", "inverse_folding", "structure_distance"})
+            torch.testing.assert_close(batch.local_features["structure_distance"],
+                                       structure.coords[batch.mutation_positions - 1, 1].double())
             torch.testing.assert_close(batch.global_features, expected.mean(dim=1))
             torch.testing.assert_close(batch.local_features["sequence_site"], expected[[1, 2, 3, 3], [0, 1, 0, 1]])
             self.assertTrue((batch.local_features["inverse_folding"].sum(-1) < 1).all())
 
             kernel = ProteinKernel(config.model, batch)
-            self.assertEqual(set(kernel.branches), {"sequence_global", "sequence_site", "inverse_folding"})
+            self.assertEqual(set(kernel.branches), {"sequence_global", "sequence_site", "inverse_folding", "structure_distance"})
             covariance = kernel(batch)
             self.assertTrue(torch.isfinite(covariance).all())
             torch.testing.assert_close(covariance, covariance.T)

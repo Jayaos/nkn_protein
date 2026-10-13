@@ -8,14 +8,14 @@ import json
 import torch
 from torch import Tensor, nn
 
-from config import BRANCH_NAMES, validate_enabled_branches
+from config import BRANCH_NAMES, DEFAULT_BRANCHES, branch_primitives, validate_enabled_branches
 from data_loading.features import kermut_probability_recipe
 from .nkn import NeuralKernelNetwork, PrimitiveNKN
-from .primitives import IF_KERNELS, VECTOR_KERNELS, initial_lengthscale
+from .primitives import initial_lengthscale
 from .triangle import TrainingTriangle
 
 
-LOCAL_BRANCHES = ("inverse_folding", "structure", "sequence_site")
+LOCAL_BRANCHES = ("inverse_folding", "structure", "sequence_site", "structure_distance")
 BRANCHES = BRANCH_NAMES
 
 
@@ -47,7 +47,7 @@ class ProteinKernel(nn.Module):
         if not math.isfinite(lengthscale_multiplier) or lengthscale_multiplier <= 0:
             raise ValueError("The initial lengthscale multiplier must be finite and positive")
         # Older configurations without a selection retain the original four branches.
-        self.enabled_branches = validate_enabled_branches(getattr(config, "enabled_branches", BRANCHES))
+        self.enabled_branches = validate_enabled_branches(getattr(config, "enabled_branches", DEFAULT_BRANCHES))
         missing = set(self.enabled_branches) - set(config.branches)
         if missing:
             raise ValueError(f"Missing enabled branch configurations: {sorted(missing)}")
@@ -62,7 +62,7 @@ class ProteinKernel(nn.Module):
         branches = {}
         for name in self.enabled_branches:
             branch_config = config.branches[name]
-            allowed = IF_KERNELS if name == "inverse_folding" else VECTOR_KERNELS
+            allowed = set(branch_primitives(name))
             if set(branch_config.copies) - allowed:
                 raise ValueError(f"Invalid primitive kernels for {name}: {set(branch_config.copies) - allowed}")
             features = self._features(train, name)
@@ -126,6 +126,8 @@ class ProteinKernel(nn.Module):
                 raise ValueError(f"Features for {name} must be floating-point matrices with nonempty feature dimensions")
             if features.device != device:
                 raise ValueError("All enabled feature arrays and mutation owners must use the same device")
+            if name == "structure_distance" and (features.shape[1] != 3 or not torch.isfinite(features).all()):
+                raise ValueError("structure_distance features must be finite C-alpha coordinates with shape [occurrences, 3]")
             expected_rows = batch.num_variants if name == "sequence_global" else batch.owners.numel()
             if features.shape[0] != expected_rows:
                 raise ValueError(f"Feature rows for {name} must align with " + (

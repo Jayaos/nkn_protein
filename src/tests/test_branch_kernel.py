@@ -3,12 +3,16 @@
 from dataclasses import asdict
 from itertools import combinations
 import json
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
 import torch
 
-from config import BRANCH_NAMES, IF_PRIMITIVES, ExperimentConfig, ModelConfig, validate_enabled_branches
+from config import (
+    BRANCH_NAMES, DEFAULT_BRANCHES, IF_PRIMITIVES, STRUCTURE_DISTANCE_PRIMITIVES,
+    ExperimentConfig, ModelConfig, validate_enabled_branches,
+)
 from kernels import ProteinKernel
 
 
@@ -23,6 +27,7 @@ def selected_batch(names, *, empty=False):
         "inverse_folding": probabilities,
         "structure": vectors,
         "sequence_site": vectors + 0.25,
+        "structure_distance": torch.tensor([[0., 0., 0.], [3., 4., 0.], [3., 4., 0.], [0., 0., 6.]], dtype=DTYPE),
     }
     return SimpleNamespace(
         num_variants=4,
@@ -70,9 +75,28 @@ class BranchConfigurationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported primitives"):
             ModelConfig(enabled_branches=["inverse_folding"], branches={"inverse_folding": {"copies": {"cosine": 1}}})
 
+    def test_structure_distance_defaults_and_allowed_primitives(self):
+        config = ModelConfig(enabled_branches=["structure_distance"], branches={
+            "structure_distance": {"widths": [4, 2, 1]},
+        })
+        self.assertEqual(config.branches["structure_distance"].copies, dict.fromkeys(STRUCTURE_DISTANCE_PRIMITIVES, 1))
+        for branch, primitive in (("structure_distance", "cosine"), ("structure_distance", "hellinger_exp"),
+                                  ("sequence_site", "exp")):
+            with self.subTest(branch=branch, primitive=primitive), self.assertRaisesRegex(ValueError, "Unsupported primitives"):
+                ModelConfig(branches={branch: {"copies": {primitive: 1}}})
+
+    def test_manifest_path_serializes_and_legacy_defaults_stay_four_branches(self):
+        self.assertEqual(ModelConfig().enabled_branches, DEFAULT_BRANCHES)
+        config = ExperimentConfig(structure_manifest_dir=Path("custom/manifests"))
+        restored = ExperimentConfig.from_dict(json.loads(json.dumps(config.to_dict())))
+        self.assertEqual(restored.structure_manifest_dir, str(Path("custom/manifests")))
+        for invalid in (None, "", "   ", 3, []):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "structure_manifest_dir"):
+                ExperimentConfig(structure_manifest_dir=invalid)
+
 
 class SelectedKernelTests(unittest.TestCase):
-    def test_all_fifteen_combinations_covariance_gradients_and_parameters(self):
+    def test_all_branch_combinations_covariance_gradients_and_parameters(self):
         cases = 0
         for count in range(1, len(BRANCH_NAMES) + 1):
             for names in combinations(BRANCH_NAMES, count):
@@ -101,7 +125,7 @@ class SelectedKernelTests(unittest.TestCase):
                     cross = kernel(inputs, empty_mutations)
                     self.assertTrue(torch.isfinite(cross).all())
                     torch.testing.assert_close(cross, kernel(empty_mutations, inputs).T)
-        self.assertEqual(cases, 15)
+        self.assertEqual(cases, 31)
 
     def test_missing_enabled_features_fail_at_initialization_and_prediction(self):
         for name in BRANCH_NAMES:
@@ -126,15 +150,17 @@ class SelectedKernelTests(unittest.TestCase):
             kernel(inputs, wrong)
 
     def test_default_and_legacy_config_keep_state_layout_and_covariance(self):
-        inputs = selected_batch(BRANCH_NAMES)
+        inputs = selected_batch(DEFAULT_BRANCHES)
         default = ModelConfig()
         legacy_values = asdict(default)
         legacy_values.pop("enabled_branches")
+        legacy_values["branches"].pop("structure_distance")
         legacy_dataclass = ModelConfig(**legacy_values)
         # Existing consumers can still provide the pre-selection config interface.
-        legacy_object = SimpleNamespace(branches=default.branches, final_widths=default.final_widths)
+        legacy_object = SimpleNamespace(branches={name: default.branches[name] for name in DEFAULT_BRANCHES},
+                                        final_widths=default.final_widths)
         configs = (default, legacy_dataclass, legacy_object,
-                   ModelConfig(enabled_branches=list(reversed(BRANCH_NAMES))))
+                   ModelConfig(enabled_branches=list(reversed(DEFAULT_BRANCHES))))
         models = []
         for config in configs:
             torch.manual_seed(44)

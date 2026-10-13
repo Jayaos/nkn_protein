@@ -6,7 +6,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=V100
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
+#SBATCH --mem=64G
 #SBATCH --time=02:00:00
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%A_%a.out
@@ -23,8 +23,10 @@
 # are required; long inputs still need sufficient GPU memory and execution time.
 # Variant scoring uses one sequence per batch to reduce peak GPU memory.
 # Submit: sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
-# By default, process every assay in the configured raw-substitutions catalog.
-# An explicitly submitted Slurm array processes one catalog assay per task.
+# Process only A0A1I9GEU1_NEIME_Kennouche_2019 and FKBP3_HUMAN_Tsuboyama_2023_2KFV.
+# Select single mutants only, saved under data/features/pretrained/singles/.
+# An optional --array=0-1 selects A0A1I9GEU1 at index 0 and FKBP3 at index 1.
+# Without an array, both assays run in this job.
 # Failed assays are reported without stopping the remaining assays or stages.
 # Submission from a repository subdirectory is also supported; logs go to the
 # submission directory. Slurm spools this script, so its own path is not used.
@@ -60,7 +62,11 @@ export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 feature_config="configs/extraction/proteinmpnn_v48_020_kermut.json"
 # Scoring uses its own seed-0 recipe, independently of feature conditioning.
 score_config="configs/extraction/proteinmpnn_v48_020.json"
-selection_args=(--config "$feature_config")
+selection_args=(
+  --config "$feature_config"
+  --assay A0A1I9GEU1_NEIME_Kennouche_2019
+  --assay FKBP3_HUMAN_Tsuboyama_2023_2KFV
+)
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
   selection_args+=(--task-index "$SLURM_ARRAY_TASK_ID")
 fi
@@ -82,6 +88,8 @@ feature_config = InverseFoldingConfig.load(sys.argv[1])
 score_config = InverseFoldingConfig.load(sys.argv[2])
 if feature_config.assay_index != score_config.assay_index:
     raise SystemExit("error: Feature and score configs must use the same assay catalog.")
+if feature_config.output_root != score_config.output_root:
+    raise SystemExit("error: Feature and score configs must use the same output root.")
 if feature_config.structure_manifest_dir != score_config.structure_manifest_dir:
     raise SystemExit("error: Feature and score configs must use the same structure manifests.")
 print(f"Assay catalog: {feature_config.assay_index}")
@@ -167,6 +175,7 @@ printf '[3/4] Extracting Kermut sequence-conditioned amino-acid distributions\n'
 if python -u -m feature_generation.cli extract \
   --config "$feature_config" \
   "${assay_args[@]}" \
+  --singles-only \
   --device cuda \
   --resume \
   --continue-on-error; then
@@ -175,7 +184,7 @@ else
   failed=1
 fi
 
-# Score every variant using the full sequence and the fixed reference backbone.
+# Score every single mutant using the full sequence and the fixed reference backbone.
 # Store negative mean NLL (higher likelihood is larger) in a separate mean_score.csv.
 # These scores use native autoregressive probabilities, independent of the [L,20] cache.
 # Retain the original score recipe/seed for existing NKN configurations.
@@ -184,6 +193,7 @@ printf '[4/4] Preparing variant mean_score.csv\n'
 if python -u -m feature_generation.cli score \
   --config "$score_config" \
   "${assay_args[@]}" \
+  --singles-only \
   --device cuda \
   --batch-size 1 \
   --num-orders 1 \

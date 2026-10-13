@@ -154,6 +154,69 @@ class ExperimentSettingCLITests(unittest.TestCase):
         self.assertEqual(manifest["excluded_variant_ids"], ["variant_0"])
         self.assertEqual(manifest["n_variants"], 7)
 
+    def test_singles_only_cv_requires_complete_singles_from_mixed_assay(self):
+        mutants = ("A1V", "C2V", "D3V", "E4V", "A1V:C2V", "C2L", "D3L", "E4V:F5V")
+        sequences = ("VCDEF", "AVDEF", "ACVEF", "ACDVF", "VVDEF", "ALDEF", "ACLEF", "ACDVV")
+        index = self.root / "DMS_substitutions.csv"
+        write_csv(index, ["DMS_id", "DMS_filename", "target_seq"], [
+            [self.batch.assay_id, "mixed.csv", self.batch.reference_sequence],
+        ])
+        write_csv(self.root / "mixed.csv", ["variant_id", "mutant", "mutated_sequence", "DMS_score"], [
+            [variant_id, mutant, sequence, target]
+            for variant_id, mutant, sequence, target in zip(
+                self.batch.variant_ids, mutants, sequences, self.batch.targets.tolist(),
+            )
+        ])
+        counts = torch.bincount(self.batch.owners, minlength=self.batch.num_variants)
+        singles = replace(self.batch, sequences=sequences).select(counts == 1)
+        folds = self.root / "singles.csv"
+        rows = [row for row in read_predictions(self.folds) if row["mutant"] in singles.variant_ids]
+        write_csv(folds, list(rows[0]), [list(row.values()) for row in rows])
+
+        for setting in ("singles_random", "singles_modulo", "singles_contiguous"):
+            with self.subTest(setting=setting), patch("experiments.cli.load_feature_bundle", return_value=singles):
+                output = self.root / f"complete_{setting}"
+                status, _, errors = self.invoke("cv", output, [
+                    "--setting", setting, "--folds", folds,
+                    "--assay-index", index, "--full-assay", "--singles-only",
+                ])
+                self.assertEqual(status, 0, errors)
+                manifest = json.loads((output / "input_manifest.json").read_text())
+                self.assertTrue(manifest["singles_only"])
+                self.assertEqual(manifest["coverage"], "full")
+                self.assertEqual(manifest["n_variants"], 6)
+                self.assertEqual(
+                    {row["variant_id"] for row in read_predictions(output / "predictions.csv")},
+                    set(singles.variant_ids),
+                )
+
+        failures = (
+            ("missing_single", singles.select(list(range(5))), ["--singles-only"], "1 missing"),
+            ("legacy_full_assay", singles, [], "2 missing"),
+        )
+        for name, batch, flags, expected_error in failures:
+            with self.subTest(case=name), patch("experiments.cli.load_feature_bundle", return_value=batch):
+                output = self.root / name
+                status, _, errors = self.invoke("cv", output, [
+                    "--setting", "singles_random", "--folds", folds,
+                    "--assay-index", index, "--full-assay", *flags,
+                ])
+                self.assertEqual(status, 2, errors)
+                self.assertIn(expected_error, errors)
+                self.assertFalse(output.exists())
+
+    def test_singles_only_rejects_mixed_cv_before_loading_features(self):
+        for setting in ("mixed_random_singles", "mixed_random_doubles"):
+            with self.subTest(setting=setting), patch("experiments.cli.load_feature_bundle") as loader:
+                output = self.root / f"invalid_singles_only_{setting}"
+                status, _, errors = self.invoke("cv", output, [
+                    "--setting", setting, "--folds", self.folds, "--singles-only",
+                ])
+                self.assertEqual(status, 2, errors)
+                self.assertIn("--singles-only requires a singles_* CV setting", errors)
+                loader.assert_not_called()
+                self.assertFalse(output.exists())
+
     def test_invalid_modes_fail_before_loading_features_or_creating_outputs(self):
         invalid = [
             ("fit", []),

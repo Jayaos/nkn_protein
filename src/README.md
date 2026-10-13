@@ -145,10 +145,13 @@ include the assay ID. No feature extraction is inferred from a raw assay CSV.
 When `--assay-index` is supplied, complete indexed assay coverage is required
 unless `--allow-subset` is explicit. The current fixture contains 16 of its
 assay's 922 variants, so the validation example uses that flag. With
-`--singles-only` on validation or prediction, completeness refers to all indexed
-single substitutions. Training commands validate full assay coverage before
-selecting the mutation depths required by `--setting`. Rows are not silently
-removed to match an incomplete feature cache.
+`--singles-only` on validation, prediction, or `cv --setting singles_*`,
+completeness refers to all indexed single substitutions. In particular,
+`--full-assay --singles-only` requires complete singles coverage. Without
+`--singles-only`, training commands retain full raw-assay coverage checks before
+selecting the mutation depths required by `--setting`. Mixed CV and
+`single_to_double` require the full-assay inputs. Rows are not silently removed
+to match an incomplete feature cache.
 
 ## Fold inputs and experiments
 
@@ -248,7 +251,9 @@ It requests 15 CPUs and no GPU. ESM2 650M layer-33 centered windows provide
 average every residue of each variant using fixed non-overlapping windows of
 up to 1,022 residues, weighted by each window's residue count.
 ProteinMPNN sequence-conditioned distributions
-provide the third branch, `inverse_folding`. The GP mean uses only ESM2 650M
+provide the third branch, `inverse_folding`. Reference Cα coordinates supply
+the fourth branch, `structure_distance`, using the existing assay manifests in
+`data/structures/manifests`. The GP mean uses only ESM2 650M
 masked-marginal scores. The inverse-folding cache uses ten
 orders with seed 37 and retains the stored 20 amino-acid values without
 renormalization through `inverse_folding_policy: "sequence_conditional"`.
@@ -260,6 +265,16 @@ finish successfully:
 sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch
 sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
 ```
+
+Both jobs prepare only `A0A1I9GEU1_NEIME_Kennouche_2019`, then
+`FKBP3_HUMAN_Tsuboyama_2023_2KFV`. Optional `--array=0-1` selects one of those
+assays per task. They pass `--singles-only` to extraction and scoring and write to
+`data/features/pretrained/singles/<assay>/`. Each single mutant is prepared once
+for reuse across all singles folds and protocols. Existing full-assay caches
+remain at their original paths; they are not migrated into the singles root.
+For full-variant preparation, use the extraction/scoring CLI with
+`--output-root data/features/pretrained` and omit `--singles-only` from both
+stages. See the [preparation guide](feature_generation/README.md).
 
 ESM2 preparation defaults to `configs/extraction/esm2_650m_centered.json`, with
 192 GiB host RAM and a 32 GiB compact-output guard. It stores only the mutation
@@ -302,7 +317,8 @@ sbatch sbatch_run/run_nkn/run_nkn_A0A1I9GEU1_NEIME_Kennouche_2019.sbatch singles
 sbatch sbatch_run/run_nkn/run_nkn_FKBP3_HUMAN_Tsuboyama_2023_2KFV.sbatch singles --parallel
 ```
 
-Each fixes its named assay and defaults to `data/features/pretrained/<assay>`.
+Each fixes its named assay and defaults to
+`data/features/pretrained/singles/<assay>` for singles selections.
 Both use the shared NKN preset's ESM2 650M and sequence-conditioned ProteinMPNN
 features, with only ESM2 650M scores in the GP mean. They forward settings,
 `--parallel`, and `--config PATH` to the shared launcher; `FEATURES` and
@@ -358,8 +374,11 @@ records `sample_ratio` and `split_seed`.
 The top-level `config.json` records the expanded configuration actually used,
 including defaults and the job's CPU and thread settings.
 
-For the generic launcher, `ASSAY` chooses the assay. `FEATURES` overrides the default
-`data/features/pretrained/<assay>` cache. `SINGLES_FOLDS_CSV` and
+For the generic launcher, `ASSAY` chooses the assay. Singles selections default to
+`data/features/pretrained/singles/<assay>` and validate all indexed singles.
+Mixed selections, `all`, and `single_to_double` retain
+`data/features/pretrained/<assay>` and full-assay validation. `FEATURES` overrides
+the selected default cache. `SINGLES_FOLDS_CSV` and
 `MULTIPLES_FOLDS_CSV` override the corresponding published files. `SAMPLE_RATIO`
 (default `0.8`) controls the fraction of singles used for extrapolation training;
 `SPLIT_SEED` (default `2024`) selects the reproducible sample when the ratio is
@@ -408,7 +427,7 @@ supported only in serial execution.
 
 JSON configurations define `ExperimentConfig` fields. Unspecified fields use the
 validated defaults in `config.py`; a custom JSON is not merged with the ESM2 +
-ProteinMPNN preset. Copy that preset before editing to retain its two selected
+ProteinMPNN preset. Copy that preset before editing to retain its four selected
 branches, feature caches, and ESM2 score source.
 
 The [batch preset](../configs/esm2_proteinmpnn_nkn.json) explicitly lists the current
@@ -417,6 +436,7 @@ training, enabled-kernel, and evaluation hyperparameters:
 | JSON field | Controls |
 | --- | --- |
 | `inverse_folding_policy` | Require normalized distributions, or preserve declared sequence-conditioned ProteinMPNN values |
+| `structure_manifest_dir` | Directory of `<assay_id>.json` reference structure manifests for `structure_distance`; relative paths resolve from the repository root |
 | `training.learning_rate`, `training.betas`, `training.epsilon` | Adam optimizer settings |
 | `training.max_steps` | Maximum optimizer updates per initialization |
 | `training.min_steps`, `training.patience`, `training.tolerance` | Earliest stopping step, improvement window, and minimum improvement in NLL per variant |
@@ -447,19 +467,20 @@ above; those are separate from model initialization seeds.
 
 Set `model.enabled_branches` to any nonempty combination of these names:
 
-| Branch | Required feature cache | Representation |
+| Branch | Required input | Representation |
 | --- | --- | --- |
 | `inverse_folding` | `inverse_folding` | Reference amino-acid distributions at mutation positions |
 | `structure` | `structure` | Reference structural embeddings at mutation positions |
 | `sequence_site` | `sequence` | Variant residue embeddings at mutation positions |
 | `sequence_global` | `sequence` | Mean-pooled variant residue embeddings |
+| `structure_distance` | Reference structure manifest and PDB/mmCIF | Reference Cα coordinates at mutation positions, in angstroms |
 
-The ESM2 + ProteinMPNN NKN preset enables three branches:
+The ESM2 + ProteinMPNN NKN preset enables four branches:
 
 ```json
 {
   "model": {
-    "enabled_branches": ["sequence_site", "sequence_global", "inverse_folding"]
+    "enabled_branches": ["sequence_site", "sequence_global", "inverse_folding", "structure_distance"]
   }
 }
 ```
@@ -475,6 +496,27 @@ and the final NKN automatically receives that many inputs. Disabled feature
 caches and default descriptors are not required. Any remaining enabled branch
 still requires its actual features. Empty, duplicate and unknown branch selections
 are rejected. Omit the setting to retain the original four-branch model.
+
+`structure_distance` uses its own NKN with exponential (`exp`), RBF (`rbf`),
+and Matérn-3/2 (`matern32`) primitives on Euclidean Cα distances. Each primitive
+copy has an independent positive lengthscale in angstroms. These kernels are
+invariant to rigid translation and rotation of the reference coordinates.
+The branch NKN acts on mutation pairs before their covariances are summed into
+variant pairs; the final NKN then combines this branch with the other enabled
+branches. Copy counts and layer widths use the same configuration fields as
+the existing branches.
+
+The loader validates full reference coverage, residue mapping, structure checksum,
+and any selected structure-conditioned cache provenance. The structure identity
+is saved in the feature signature and checked during prediction. This branch
+does not require a learned `structure` embedding cache. The separate `structure`
+branch continues to represent learned embeddings; enabling it as well gives
+the five-branch architecture described in the method. Existing configurations
+and checkpoints keep their previous branch selections. To run the previous
+three-branch ESM2 + ProteinMPNN preset, remove `structure_distance` from
+`model.enabled_branches`.
+Older configs and checkpoints using `physical_distance` are accepted on load;
+new configurations and checkpoints use the name `structure_distance`.
 
 `feature_selection` independently chooses the family/checkpoint for each feature
 type. The NKN batch preset selects
@@ -495,7 +537,7 @@ behavior for existing backbone-only and ESM-IF1 configurations.
 For a direct CLI run using the same inputs as the batch job, supply its preset:
 
 ```powershell
-python -m experiments.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/esm2_proteinmpnn_nkn.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --assay-index data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv --full-assay --output results/A0A1I9GEU1_NEIME_Kennouche_2019/nkn_650m_random
+python -m experiments.cli cv --features data/features/pretrained/singles/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/esm2_proteinmpnn_nkn.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --assay-index data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv --full-assay --singles-only --output results/A0A1I9GEU1_NEIME_Kennouche_2019/nkn_650m_random
 ```
 
 The GP mean requires at least one mean score source. `score_sources` remains
@@ -507,6 +549,8 @@ Select either family or both sources as independent GP mean columns. See
 [ESM2 score preparation](feature_generation/README.md#esm2-scores-for-the-gp-mean)
 and [ProteinMPNN score preparation](feature_generation/README.md#proteinmpnn-scores-for-the-gp-mean).
 Branch selection alone does not supply missing scores.
+For a `structure_distance`-only model, select at least one existing score source
+explicitly; coordinates do not provide a zero-shot score.
 
 The branch selection is saved in resolved configs and GP checkpoints. Construction
 uses a fixed canonical branch order, regardless of JSON ordering. Older configs
@@ -525,7 +569,8 @@ just the branches/settings being changed; omitted settings use defaults. For exa
       "inverse_folding": {"copies": {"hellinger_exp": 3, "hellinger_rbf": 2, "bhattacharyya": 1}, "widths": [8, 4, 4, 2, 1]},
       "structure": {"copies": {"cosine": 1, "rbf": 2, "matern32": 2}, "widths": [8, 4, 4, 2, 1]},
       "sequence_site": {"copies": {"cosine": 1, "rbf": 2, "matern32": 2}, "widths": [8, 4, 4, 2, 1]},
-      "sequence_global": {"copies": {"cosine": 1, "rbf": 2, "matern32": 2}, "widths": [8, 4, 4, 2, 1]}
+      "sequence_global": {"copies": {"cosine": 1, "rbf": 2, "matern32": 2}, "widths": [8, 4, 4, 2, 1]},
+      "structure_distance": {"copies": {"exp": 1, "rbf": 2, "matern32": 2}, "widths": [8, 4, 4, 2, 1]}
     },
     "final_widths": [8, 4, 4, 2, 1]
   },

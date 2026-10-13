@@ -66,6 +66,7 @@ class PrimitiveTests(unittest.TestCase):
     def test_closed_forms_and_signed_cosine(self):
         vectors = torch.tensor([[1.0, 0.0], [-1.0, 0.0]], dtype=DTYPE)
         self.assertAlmostEqual(PrimitiveKernel("cosine")(vectors)[0, 1].item(), -1)
+        self.assertAlmostEqual(PrimitiveKernel("exp", 2)(vectors)[0, 1].item(), math.exp(-1))
         self.assertAlmostEqual(PrimitiveKernel("rbf", 2)(vectors)[0, 1].item(), math.exp(-0.5))
         self.assertAlmostEqual(
             PrimitiveKernel("matern32", 2)(vectors)[0, 1].item(),
@@ -76,7 +77,7 @@ class PrimitiveTests(unittest.TestCase):
         self.assertAlmostEqual(PrimitiveKernel("hellinger_exp", 2)(probabilities)[0, 1].item(), math.exp(-0.5))
         self.assertAlmostEqual(PrimitiveKernel("hellinger_rbf", 2)(probabilities)[0, 1].item(), math.exp(-0.125))
         torch.testing.assert_close(PrimitiveKernel("bhattacharyya")(probabilities), torch.eye(2, dtype=DTYPE))
-        for name in ("cosine", "rbf", "matern32"):
+        for name in ("cosine", "exp", "rbf", "matern32"):
             torch.testing.assert_close(PrimitiveKernel(name)(vectors).diag(), torch.ones(2, dtype=DTYPE))
 
     def test_psd_and_finite_lengthscale_gradients_at_duplicate_inputs(self):
@@ -85,7 +86,7 @@ class PrimitiveTests(unittest.TestCase):
         vectors = torch.cat([vectors, vectors[:1]])
         probabilities = torch.softmax(torch.randn(5, 20, dtype=DTYPE), dim=1)
         probabilities = torch.cat([probabilities, probabilities[:1]])
-        for name in ("cosine", "rbf", "matern32", "hellinger_exp", "hellinger_rbf", "bhattacharyya"):
+        for name in ("cosine", "exp", "rbf", "matern32", "hellinger_exp", "hellinger_rbf", "bhattacharyya"):
             inputs = probabilities if name.startswith("hellinger") or name == "bhattacharyya" else vectors
             kernel = PrimitiveKernel(name, 1.3)
             covariance = kernel(inputs)

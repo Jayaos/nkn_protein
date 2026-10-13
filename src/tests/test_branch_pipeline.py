@@ -11,7 +11,7 @@ import unittest
 
 import torch
 
-from config import BRANCH_NAMES
+from config import DEFAULT_BRANCHES
 from data_loading import load_feature_bundle
 from experiments import run_cv, run_extrapolation, run_predict
 from experiments.cli import main
@@ -57,8 +57,8 @@ class BranchPipelineTests(unittest.TestCase):
         torch.set_num_threads(1)
 
     def test_every_nonempty_subset_fits_predicts_and_round_trips(self):
-        for count in range(1, len(BRANCH_NAMES) + 1):
-            for names in combinations(BRANCH_NAMES, count):
+        for count in range(1, len(DEFAULT_BRANCHES) + 1):
+            for names in combinations(DEFAULT_BRANCHES, count):
                 with self.subTest(branches=names):
                     config = branch_config(names)
                     batch = select_branches(self.batch, names)
@@ -95,7 +95,7 @@ class BranchPipelineTests(unittest.TestCase):
         del state["model_config"]["enabled_branches"]
         torch.save(state, path)
         restored = FittedGP.load(path)
-        self.assertEqual(restored.model_config.enabled_branches, BRANCH_NAMES)
+        self.assertEqual(restored.model_config.enabled_branches, DEFAULT_BRANCHES)
         after = restored.predict(test)
         torch.testing.assert_close(after.mean, before.mean, rtol=1e-12, atol=1e-12)
         torch.testing.assert_close(after.observation_covariance, before.observation_covariance, rtol=1e-12, atol=1e-12)

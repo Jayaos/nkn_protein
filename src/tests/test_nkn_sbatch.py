@@ -52,9 +52,13 @@ class NknSbatchTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REPOSITORY / relative_path, target)
         (self.root / "src/torch.py").write_text('__version__ = "test stub"\n', encoding="utf-8")
-        (self.root / "features/assay.json").write_text(
-            json.dumps({"assay_id": "test", "synthetic": False}), encoding="utf-8",
-        )
+        for feature_dir in ("features", "data/features/pretrained/test",
+                            "data/features/pretrained/singles/test"):
+            directory = self.root / feature_dir
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "assay.json").write_text(
+                json.dumps({"assay_id": "test", "synthetic": False}), encoding="utf-8",
+            )
         (self.root / "folds.csv").write_text("mutant,fold_random_5\nA1C,0\n", encoding="utf-8")
         self.bootstrap = self.root / "bootstrap.sh"
         self.bootstrap.write_text(textwrap.dedent("""\
@@ -91,14 +95,19 @@ class NknSbatchTests(unittest.TestCase):
                         (output / f'{name}.csv').write_text('snapshot')
                 raise SystemExit(0)
             assert args[:2] == ['-m', os.environ['TEST_CLI_MODULE']]
-            if args[2] == 'validate':
-                raise SystemExit(0)
             options = {}
             for index, value in enumerate(args):
                 if value.startswith('--') and index + 1 < len(args):
                     options[value] = args[index + 1]
+            scope = {'features': options['--features'],
+                     'singles_only': '--singles-only' in args,
+                     'full_assay': '--full-assay' in args}
+            if args[2] == 'validate':
+                (root / 'validation.json').write_text(json.dumps(scope))
+                raise SystemExit(0)
             setting = options['--setting']
             record = {'setting': setting, 'command': args[2],
+                      **scope,
                       'fold_workers': int(options.get('--fold-workers', '1')),
                       'threads': int(os.environ['OMP_NUM_THREADS']),
                       'start': time.monotonic()}
@@ -110,17 +119,20 @@ class NknSbatchTests(unittest.TestCase):
             raise SystemExit(9 if setting == os.environ.get('TEST_FAIL_SETTING') else 0)
             """), encoding="utf-8")
 
-    def invoke(self, cpus, *arguments, fail_setting=None, config_environment=None):
+    def invoke(self, cpus, *arguments, fail_setting=None, config_environment=None,
+               features="features"):
         environment = os.environ.copy()
-        for name in ("FOLDS_CSV", self.config_variable, "TEST_FAIL_SETTING", "SLURM_CPUS_PER_TASK"):
+        for name in ("FOLDS_CSV", self.config_variable, "TEST_FAIL_SETTING", "SLURM_CPUS_PER_TASK", "FEATURES"):
             environment.pop(name, None)
         environment.update(
             BASH_ENV=self.bootstrap.as_posix(), TEST_ROOT=self.root.as_posix(),
             TEST_PYTHON=Path(sys.executable).as_posix(), ASSAY="test",
-            FEATURES="features", SINGLES_FOLDS_CSV="folds.csv", MULTIPLES_FOLDS_CSV="folds.csv",
+            SINGLES_FOLDS_CSV="folds.csv", MULTIPLES_FOLDS_CSV="folds.csv",
             SLURM_SUBMIT_DIR=self.root.as_posix(), SLURM_JOB_ID="1234",
             TEST_CLI_MODULE=self.cli_module,
         )
+        if features is not None:
+            environment["FEATURES"] = features
         if cpus is not None:
             environment['SLURM_CPUS_PER_TASK'] = str(cpus)
         if fail_setting:
@@ -133,6 +145,13 @@ class NknSbatchTests(unittest.TestCase):
         plans = list((self.root / "results").rglob("execution_plan.json"))
         plan = json.loads(plans[0].read_text()) if plans else None
         return result, records, plan
+
+    def assert_feature_scope(self, records, *, features, singles_only):
+        validation = json.loads((self.root / "validation.json").read_text())
+        for record in [validation, *records]:
+            self.assertEqual(record['features'], features)
+            self.assertEqual(record['singles_only'], singles_only)
+            self.assertTrue(record['full_assay'])
 
     @staticmethod
     def peak_concurrency(records):
@@ -151,15 +170,19 @@ class NknSbatchTests(unittest.TestCase):
         self.assertEqual(self.peak_concurrency(records), 3)
         self.assertEqual({(r['fold_workers'], r['threads']) for r in records}, {(5, 1)})
         self.assertEqual((plan['allocated_cpus'], plan['setting_workers']), (15, 3))
+        self.assert_feature_scope(records, features="features", singles_only=True)
         self.assertIn('Completed.', result.stdout)
 
     def test_default_remains_serial_with_all_threads_per_fit(self):
-        result, records, plan = self.invoke(4)
+        result, records, plan = self.invoke(4, features=None)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(records), 3)
         self.assertEqual(self.peak_concurrency(records), 1)
         self.assertEqual({(r['fold_workers'], r['threads']) for r in records}, {(1, 4)})
         self.assertFalse(plan['parallel'])
+        self.assert_feature_scope(
+            records, features="data/features/pretrained/singles/test", singles_only=True,
+        )
 
     def test_default_cpu_request_and_manual_fallback_are_fifteen(self):
         self.assertIn('#SBATCH --cpus-per-task=15', self.script.read_text())
@@ -190,12 +213,15 @@ class NknSbatchTests(unittest.TestCase):
         self.assertEqual({r['threads'] for r in records}, {1})
 
     def test_five_cpus_on_one_setting_provide_five_fold_workers(self):
-        result, records, _ = self.invoke(5, "singles_random", "--parallel")
+        result, records, _ = self.invoke(5, "singles_random", "--parallel", features=None)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([(r['fold_workers'], r['threads']) for r in records], [(5, 1)])
+        self.assert_feature_scope(
+            records, features="data/features/pretrained/singles/test", singles_only=True,
+        )
 
     def test_small_all_allocation_bounds_concurrent_settings_and_keeps_fit_route(self):
-        result, records, plan = self.invoke(2, "all", "--parallel")
+        result, records, plan = self.invoke(2, "all", "--parallel", features=None)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(records), 5)
         self.assertEqual(self.peak_concurrency(records), 2)
@@ -203,6 +229,7 @@ class NknSbatchTests(unittest.TestCase):
         self.assertEqual({(r['fold_workers'], r['threads']) for r in records}, {(1, 1)})
         extrapolation = next(r for r in records if r['setting'] == 'single_to_double')
         self.assertEqual(extrapolation['command'], 'fit')
+        self.assert_feature_scope(records, features="data/features/pretrained/test", singles_only=False)
 
     def test_child_failure_makes_job_fail_without_completion_message(self):
         result, records, _ = self.invoke(15, "singles", "--parallel", fail_setting="singles_modulo")

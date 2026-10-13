@@ -10,7 +10,7 @@ import unittest
 
 import torch
 
-from config import BRANCH_NAMES
+from config import DEFAULT_BRANCHES
 from data_loading import load_feature_bundle
 from tests.test_data import make_bundle
 
@@ -35,8 +35,8 @@ class OptionalBranchLoaderTests(unittest.TestCase):
 
     def test_all_fifteen_combinations_preserve_selected_features(self):
         full = load_feature_bundle(self.root)
-        for size in range(1, len(BRANCH_NAMES) + 1):
-            for branches in combinations(BRANCH_NAMES, size):
+        for size in range(1, len(DEFAULT_BRANCHES) + 1):
+            for branches in combinations(DEFAULT_BRANCHES, size):
                 with self.subTest(branches=branches):
                     batch = load_feature_bundle(self.root, enabled_branches=branches)
                     self.assertEqual(set(batch.local_features), set(branches) - {"sequence_global"})
@@ -52,7 +52,7 @@ class OptionalBranchLoaderTests(unittest.TestCase):
                     expected_scores = tuple(source for source in full.score_names if source.split("/")[0] in score_types)
                     self.assertEqual(batch.score_names, expected_scores)
                     self.assertEqual(batch.num_scores, len(score_types))
-                    if branches == BRANCH_NAMES:
+                    if branches == DEFAULT_BRANCHES:
                         self.assertEqual(batch.feature_signature, full.feature_signature)
                     else:
                         self.assertEqual(json.loads(batch.feature_signature["enabled_branches"]), list(branches))
@@ -84,7 +84,7 @@ class OptionalBranchLoaderTests(unittest.TestCase):
         self.assertIsNone(batch.global_features)
 
     def test_local_only_and_global_only_selection_and_device_transfer(self):
-        for branch in BRANCH_NAMES:
+        for branch in DEFAULT_BRANCHES:
             with self.subTest(branch=branch):
                 batch = load_feature_bundle(self.root, enabled_branches=[branch])
                 selected = batch.select([3, 0, 1]).to("cpu")

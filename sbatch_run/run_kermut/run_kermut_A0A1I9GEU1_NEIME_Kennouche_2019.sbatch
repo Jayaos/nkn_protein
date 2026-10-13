@@ -13,7 +13,7 @@
 
 # Kermut on A0A1I9GEU1_NEIME_Kennouche_2019 using our baselines.kermut runner.
 # Defaults: ESM2 650M and sequence-conditioned ProteinMPNN caches under
-# data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019.
+# data/features/pretrained/singles/A0A1I9GEU1_NEIME_Kennouche_2019.
 # Submit from the repository root or a subdirectory. Arguments and optional
 # cache/config overrides are handled by the shared launcher; ASSAY is fixed here.
 # Usage: sbatch sbatch_run/run_kermut/run_kermut_A0A1I9GEU1_NEIME_Kennouche_2019.sbatch [singles|all|SETTING] [--config PATH] [--parallel]

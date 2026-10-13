@@ -14,7 +14,7 @@ from typing import Mapping, Sequence
 import torch
 from torch import Tensor
 
-from config import BRANCH_NAMES, validate_enabled_branches
+from config import DEFAULT_BRANCHES, validate_enabled_branches
 from .sequence_windows import (
     COMPACT_SITE_FIELDS, compact_sequence_recipe, mean_sequence_recipe, tensor_isfinite,
     validate_compact_sequence_payload, validate_global_window_payload,
@@ -23,7 +23,7 @@ from .sequence_windows import (
 
 ALPHABET = "ACDEFGHIKLMNPQRSTVWY"
 FEATURE_TYPES = ("sequence", "structure", "inverse_folding")
-LOCAL_FEATURES = ("inverse_folding", "structure", "sequence_site")
+LOCAL_FEATURES = ("inverse_folding", "structure", "sequence_site", "structure_distance")
 
 
 def read_csv(path: str | Path) -> list[dict[str, str]]:
@@ -109,6 +109,8 @@ class FeatureBatch:
         for name, values in self.local_features.items():
             if values.ndim != 2 or values.shape[0] != self.owners.numel() or values.shape[1] < 1:
                 raise ValueError(f"Invalid packed local feature shape: {name}")
+            if name == "structure_distance" and values.shape[1] != 3:
+                raise ValueError("Physical-distance features must contain three-dimensional CA coordinates")
         if self.sequences and len(self.sequences) != n:
             raise ValueError("Sequence count must match variant count")
         if self.score_names and (len(self.score_names) != self.num_scores or len(set(self.score_names)) != self.num_scores):
@@ -271,6 +273,52 @@ def kermut_probability_recipe(config: Mapping) -> dict | None:
     return {**expected, "num_orders": num_orders, "seed": seed}
 
 
+def _structure_distance_features(manifest_dir, assay_id, reference, root, stores, configs, sources):
+    """Load mapped CA atoms and check any cached structural provenance."""
+    from feature_generation.structure_inputs import load_structure, validate_structure_metadata
+
+    manifest_root = Path(manifest_dir)
+    if not manifest_root.is_absolute():
+        manifest_root = Path(__file__).resolve().parents[2] / manifest_root
+    manifest_root = manifest_root.resolve()
+    manifest = (manifest_root / f"{assay_id}.json").resolve()
+    if manifest.parent != manifest_root:
+        raise ValueError("Assay structure manifest path escapes structure_manifest_dir")
+    structure = load_structure(manifest, reference, require_oxygen=False)
+    if structure.metadata.get("assay_id") != assay_id:
+        raise ValueError("Structure manifest belongs to a different assay")
+    # Sequence representations can also be structure-conditioned (e.g. ProSST).
+    # Check every selected cache that records structural identity.
+    for name, store in stores.items():
+        config = configs[name]
+        cached_structure = config.get("structure")
+        if cached_structure is not None:
+            validate_structure_metadata(cached_structure, reference)
+            if cached_structure.get("assay_id") != assay_id:
+                raise ValueError(f"{name} structure provenance belongs to a different assay")
+            if cached_structure["input_signature"] != structure.input_signature:
+                raise ValueError(f"Selected structure differs from the {name} feature structure")
+        recorded_provenance = [config, store]
+        if "provenance" in store:
+            recorded_provenance.append(store["provenance"])
+        provenance_path = _inside(root, f"{sources[name]}/provenance.json")
+        if provenance_path.exists():
+            recorded_provenance.append(json.loads(provenance_path.read_text(encoding="utf-8")))
+        for recorded in recorded_provenance:
+            if not isinstance(recorded, Mapping):
+                raise ValueError(f"{name} structure provenance must be an object")
+            for key, expected in (("structure_sha256", structure.structure_sha256),
+                                  ("structure_input_signature", structure.input_signature)):
+                if key in recorded and recorded[key] != expected:
+                    raise ValueError(f"{name} provenance disagrees with selected structure: {key}")
+    signature = {
+        "structure_distance.input_signature": structure.input_signature,
+        "structure_distance.structure_sha256": structure.structure_sha256,
+        "structure_distance.coordinates": "reference_CA_angstrom",
+    }
+    return structure.coords[:, 1].double(), signature
+
+
 def load_feature_bundle(
     feature_dir: str | Path,
     feature_selection: Mapping[str, str] | None = None,
@@ -280,6 +328,7 @@ def load_feature_bundle(
     enabled_branches: Sequence[str] | None = None,
     *,
     inverse_folding_policy: str = "normalized",
+    structure_manifest_dir: str | Path = "data/structures/manifests",
 ) -> FeatureBatch:
     """Load schema-v2 caches; selection and score sources never depend on labels.
 
@@ -293,11 +342,16 @@ def load_feature_bundle(
     Opt into ``inverse_folding_policy="sequence_conditional"`` to preserve
     declared geometric-mean ProteinMPNN probabilities without rescaling.
     The ``"kermut"`` policy remains an alias for the Kermut consumer.
+    The optional physical-distance branch reads CA coordinates directly from
+    verified structure manifests; relative manifest directories resolve from
+    the project root. It adds no representation cache or mean score source.
+    A physical-distance-only selection therefore needs explicit score_sources.
     """
     if inverse_folding_policy not in ("normalized", "sequence_conditional", "kermut"):
         raise ValueError("inverse_folding_policy must be 'normalized', 'sequence_conditional', or 'kermut'")
-    branches = BRANCH_NAMES if enabled_branches is None else validate_enabled_branches(enabled_branches)
-    needed_types = {"sequence" if name.startswith("sequence_") else name for name in branches}
+    branches = DEFAULT_BRANCHES if enabled_branches is None else validate_enabled_branches(enabled_branches)
+    needed_types = {"sequence" if name.startswith("sequence_") else name
+                    for name in branches if name != "structure_distance"}
     root = Path(feature_dir).resolve()
     metadata = json.loads((root / "assay.json").read_text(encoding="utf-8"))
     if metadata.get("schema_version") != 2 or metadata.get("layout_version") != 1:
@@ -448,14 +502,20 @@ def load_feature_bundle(
             if not isinstance(log_probs, Tensor) or log_probs.shape != inverse.shape or not torch.allclose(log_probs.double(), inverse.log(), atol=1e-5, rtol=1e-5):
                 raise ValueError("Inverse-folding log probabilities are inconsistent")
         local_features["inverse_folding"] = inverse[positions - 1]
+    geometry_signature = {}
+    if "structure_distance" in branches:
+        coordinates, geometry_signature = _structure_distance_features(
+            structure_manifest_dir, assay_id, reference, root, stores, configs, sources,
+        )
+        local_features["structure_distance"] = coordinates[positions - 1]
     selected_scores = list(score_sources) if score_sources is not None else list(sources.values())
     if not selected_scores or len(set(selected_scores)) != len(selected_scores):
         raise ValueError("Select at least one unique mean score source")
     columns = []
-    signature = {"schema_version": "2", "layout_version": "1", "pooling": pooling, **sources}
+    signature = {"schema_version": "2", "layout_version": "1", "pooling": pooling, **sources, **geometry_signature}
     if probability_recipe is not None:
         signature["inverse_folding.probability_recipe"] = json.dumps(probability_recipe, sort_keys=True, separators=(",", ":"))
-    if branches != BRANCH_NAMES:
+    if branches != DEFAULT_BRANCHES:
         signature["enabled_branches"] = json.dumps(branches, separators=(",", ":"))
     for name, config in configs.items():
         signature[f"{name}.config_sha256"] = _config_fingerprint(config)

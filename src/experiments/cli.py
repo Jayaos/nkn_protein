@@ -30,10 +30,10 @@ def _parser(prog="python -m experiments.cli") -> argparse.ArgumentParser:
         sub.add_argument("--quiet", action="store_true", help="Suppress optimizer progress")
         sub.add_argument("--assay-index", type=Path, help="Optionally validate against a processed ProteinGym assay index")
         coverage = sub.add_mutually_exclusive_group()
-        coverage.add_argument("--full-assay", action="store_true", help="Require complete indexed assay coverage (default with --assay-index)")
+        coverage.add_argument("--full-assay", action="store_true", help="Require complete indexed assay coverage (all singles with --singles-only; default with --assay-index)")
         coverage.add_argument("--allow-subset", action="store_true", help="Explicitly allow a cached subset of the indexed assay")
-        if command in ("validate", "predict"):
-            sub.add_argument("--singles-only", action="store_true", help="Select variants with exactly one substitution")
+        if command in ("validate", "cv", "predict"):
+            sub.add_argument("--singles-only", action="store_true", help="Select and validate only single substitutions; CV requires a singles_* setting")
         else:
             sub.set_defaults(singles_only=False)
         if command in ("fit", "cv"):
@@ -82,6 +82,7 @@ def _load_batch(args, config, feature_loader=None):
         device=config.device,
         enabled_branches=config.model.enabled_branches,
         inverse_folding_policy=config.inverse_folding_policy,
+        structure_manifest_dir=config.structure_manifest_dir,
     )
     if args.singles_only:
         counts = torch.bincount(batch.owners, minlength=batch.num_variants)
@@ -126,6 +127,8 @@ def _input_manifest(args, batch, excluded_variant_ids=()):
 def _validate_setting_arguments(args):
     if args.command not in ("fit", "cv"):
         return
+    if args.singles_only and not args.setting.startswith("singles_"):
+        raise ValueError("--singles-only requires a singles_* CV setting")
     args.scheme = SETTING_SCHEMES[args.setting]
     if args.command == "cv" and args.fold_workers < 1:
         raise ValueError("--fold-workers must be a positive integer")

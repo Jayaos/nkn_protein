@@ -1,12 +1,13 @@
 """Training-only restart selection, checkpointing, and label-free prediction."""
 
 from dataclasses import dataclass, replace
+import json
 import math
 from pathlib import Path
 
 import torch
 
-from config import ModelConfig, TrainingConfig
+from config import ModelConfig, TrainingConfig, validate_enabled_branches
 from data_loading.features import FeatureBatch
 from .linalg import NumericalError
 from .model import ExactProteinGP
@@ -50,6 +51,34 @@ def _freeze_batch(batch):
                    local_features={k: frozen(v) for k, v in batch.local_features.items()},
                    owners=frozen(batch.owners), mutation_positions=frozen(batch.mutation_positions),
                    feature_signature=dict(batch.feature_signature))
+
+
+def _migrate_structure_distance_checkpoint(state):
+    """Rename the former physical_distance branch in a loaded state, never on disk."""
+    local = state["train"]["local_features"]
+    if "physical_distance" in local:
+        if "structure_distance" in local:
+            raise ValueError("Checkpoint contains both physical_distance and structure_distance features")
+        local["structure_distance"] = local.pop("physical_distance")
+    signature = state["train"].get("feature_signature", {})
+    for key in tuple(signature):
+        if key.startswith("physical_distance."):
+            canonical = "structure_distance." + key[len("physical_distance."):]
+            if canonical in signature:
+                raise ValueError("Checkpoint contains both distance branch signature aliases")
+            signature[canonical] = signature.pop(key)
+    encoded_branches = signature.get("enabled_branches")
+    if isinstance(encoded_branches, str) and '"physical_distance"' in encoded_branches:
+        branches = validate_enabled_branches(json.loads(encoded_branches))
+        signature["enabled_branches"] = json.dumps(branches, separators=(",", ":"))
+    parameters = state["parameters"]
+    old_prefix = "kernel.branches.physical_distance."
+    for key in tuple(parameters):
+        if key.startswith(old_prefix):
+            canonical = "kernel.branches.structure_distance." + key[len(old_prefix):]
+            if canonical in parameters:
+                raise ValueError("Checkpoint contains both distance branch parameter aliases")
+            parameters[canonical] = parameters.pop(key)
 
 
 @dataclass
@@ -101,6 +130,7 @@ class FittedGP:
         if state.get("format_version") != 1:
             raise ValueError("Unsupported GP checkpoint format")
         model_config, training_config = ModelConfig(**state["model_config"]), TrainingConfig(**state["training_config"])
+        _migrate_structure_distance_checkpoint(state)
         train = FeatureBatch(**state["train"]).to(device)
         # Initialization is overwritten; do not disturb the caller's random state.
         devices = [torch.device(device).index or 0] if torch.device(device).type == "cuda" else []

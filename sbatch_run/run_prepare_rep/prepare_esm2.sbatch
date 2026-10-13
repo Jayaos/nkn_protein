@@ -26,9 +26,10 @@
 # Select a different preset with --config PATH or ESM2_CONFIG=PATH; --config wins.
 # Paths use the repository root. For Kermut's prefix-averaged embeddings, use
 # --config configs/extraction/esm2_650m.json (a separate cache recipe).
-# By default, process every assay in the configured raw_substitutions catalog.
-# An optional Slurm array selects one assay per zero-based task index; derive its
-# size with list_assays.py --config configs/extraction/esm2_650m_centered.json --count.
+# Process only A0A1I9GEU1_NEIME_Kennouche_2019 and FKBP3_HUMAN_Tsuboyama_2023_2KFV.
+# Extract and score only single mutants, saved under data/features/pretrained/singles/.
+# An optional --array=0-1 selects A0A1I9GEU1 at index 0 and FKBP3 at index 1.
+# Without an array, both assays run in this job.
 # Submission from a repository subdirectory is also supported; logs go to the
 # submission directory. Slurm spools this script, so its own path is not used.
 set -eo pipefail
@@ -91,7 +92,14 @@ export PYTHONPATH="$project_root/src${PYTHONPATH:+:$PYTHONPATH}"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 
-selection_args=(--config "$config")
+# Override the selected preset's batching budget; its window length is unchanged.
+max_tokens_per_batch=8192
+
+selection_args=(
+  --config "$config"
+  --assay A0A1I9GEU1_NEIME_Kennouche_2019
+  --assay FKBP3_HUMAN_Tsuboyama_2023_2KFV
+)
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
   selection_args+=(--task-index "$SLURM_ARRAY_TASK_ID")
 fi
@@ -103,6 +111,8 @@ for assay in "${assays[@]}"; do
 done
 printf 'Job: %s\nRepository: %s\nConfig: %s\nSelected assays: %s\n' \
   "${SLURM_JOB_ID:-manual}" "$project_root" "$config" "${#assays[@]}"
+printf '  %s\n' "${assays[@]}"
+printf 'GPU token budget per batch: %s\n' "$max_tokens_per_batch"
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
   printf 'Array task: %s; assay: %s\n' "$SLURM_ARRAY_TASK_ID" "${assays[0]}"
 fi
@@ -132,18 +142,20 @@ printf '[1/3] Downloading/verifying ESM2 checkpoint and tokenizer\n'
 python -u -m feature_generation.cli download \
   --config "$config"
 
-# Extract all variants using the selected recipe (centered sites + full-sequence mean
+# Extract single mutants using the selected recipe (centered sites + full-sequence mean
 # by default); --resume skips only a matching, completed assay cache. Legacy
 # pooled and full-residue caches retain their separate IDs.
 # The pipeline verifies the local checkpoint and validates the output cache.
-# Extraction and scoring use the 650M config's 1024-token batch budget.
+# Extraction and scoring share the job's 8192-token batch budget.
 # Continue across failed assays and still attempt scoring if extraction fails.
 status=0
 printf '[2/3] Extracting ESM2 representations\n'
 if python -u -m feature_generation.cli extract \
   --config "$config" \
   "${assay_args[@]}" \
+  --singles-only \
   --device cuda \
+  --max-tokens-per-batch "$max_tokens_per_batch" \
   --resume \
   --continue-on-error; then
   :
@@ -161,7 +173,9 @@ printf '[3/3] Preparing ESM2 masked-marginal mean_score.csv\n'
 if python -u -m feature_generation.cli score \
   --config "$config" \
   "${assay_args[@]}" \
+  --singles-only \
   --device cuda \
+  --max-tokens-per-batch "$max_tokens_per_batch" \
   --batch-size 8 \
   --resume \
   --continue-on-error; then

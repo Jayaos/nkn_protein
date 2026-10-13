@@ -17,7 +17,8 @@ PREPARATION = Path("sbatch_run/run_prepare_rep")
 CONFIGS = ("esm2_650m.json", "esm2_650m_residue.json", "esm2_650m_centered.json",
            "proteinmpnn_v48_020_kermut.json", "proteinmpnn_v48_020.json")
 SCRIPTS = ("prepare_esm2.sbatch", "prepare_proteinmpnn.sbatch")
-ASSAYS = ["protein_Z_assay_1", "protein_A_assay_1", "protein_Z_assay_2"]
+SELECTED_ASSAYS = ["A0A1I9GEU1_NEIME_Kennouche_2019", "FKBP3_HUMAN_Tsuboyama_2023_2KFV"]
+ASSAYS = [SELECTED_ASSAYS[1], "protein_Z_assay_1", SELECTED_ASSAYS[0], "protein_Z_assay_2"]
 
 
 def available_bash():
@@ -83,7 +84,7 @@ class PreparationTargetTests(PreparationFixture):
         self.assertEqual(result.stdout.splitlines(), ASSAYS)
         result = self.invoke_helper("--count")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "3")
+        self.assertEqual(result.stdout.strip(), str(len(ASSAYS)))
 
     def test_array_selection_is_zero_based_and_rejects_invalid_indices(self):
         for index, assay in enumerate(ASSAYS):
@@ -91,11 +92,40 @@ class PreparationTargetTests(PreparationFixture):
                 result = self.invoke_helper("--task-index", str(index))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.splitlines(), [assay])
-        for index in ("-1", "3", "not-an-index"):
+        for index in ("-1", str(len(ASSAYS)), "not-an-index"):
             with self.subTest(index=index):
                 result = self.invoke_helper("--task-index", index)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, "")
+
+    def test_explicit_targets_preserve_requested_order_and_scope_count_and_array(self):
+        arguments = [value for assay in SELECTED_ASSAYS for value in ("--assay", assay)]
+        result = self.invoke_helper(*arguments)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), SELECTED_ASSAYS)
+        result = self.invoke_helper(*arguments, "--count")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "2")
+        for index, assay in enumerate(SELECTED_ASSAYS):
+            with self.subTest(index=index):
+                result = self.invoke_helper(*arguments, "--task-index", str(index))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), [assay])
+        result = self.invoke_helper(*arguments, "--task-index", "2")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+
+    def test_explicit_unknown_or_duplicate_targets_are_rejected(self):
+        cases = (
+            ("--assay", "missing_assay"),
+            ("--assay", SELECTED_ASSAYS[0], "--assay", SELECTED_ASSAYS[0]),
+        )
+        for arguments in cases:
+            with self.subTest(arguments=arguments):
+                result = self.invoke_helper(*arguments)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("error:", result.stderr)
 
     def test_catalog_rejects_missing_unsafe_duplicate_and_empty_targets(self):
         original = [row.copy() for row in self.rows]
@@ -250,15 +280,16 @@ class PreparationSbatchTests(PreparationFixture):
             selected = [args[index + 1] for index, value in enumerate(args) if value == "--assay"]
             self.assertEqual(selected, expected)
             self.assertIn("--resume", args)
+            self.assertIn("--singles-only", args)
             self.assertIn("--continue-on-error", args)
             self.assertEqual(args[args.index("--device") + 1], "cuda")
 
-    def test_default_dispatches_all_assays_and_preserves_model_recipes(self):
+    def test_default_dispatches_only_requested_assays_and_preserves_model_recipes(self):
         for script in SCRIPTS:
             with self.subTest(script=script):
                 result, records = self.invoke(script)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assert_targets(records, ASSAYS)
+                self.assert_targets(records, SELECTED_ASSAYS)
                 stages = [record["kind"] for record in records if record["kind"] in ("download", "extract", "score")]
                 self.assertEqual(stages, ["download", "extract", "score"])
                 scoring = next(record["args"] for record in records if record["kind"] == "score")
@@ -271,6 +302,10 @@ class PreparationSbatchTests(PreparationFixture):
                     self.assertEqual(scoring[scoring.index("--num-orders") + 1], "1")
                     self.assertEqual(scoring[scoring.index("--config") + 1],
                                      "configs/extraction/proteinmpnn_v48_020.json")
+                    self.assertEqual(
+                        [record["args"][0] for record in records if record["kind"] == "structure-download"],
+                        SELECTED_ASSAYS,
+                    )
                 else:
                     self.assert_esm2_config(records, "configs/extraction/esm2_650m_centered.json")
 
@@ -282,13 +317,16 @@ class PreparationSbatchTests(PreparationFixture):
             self.assertEqual(arguments[arguments.index("--config") + 1], expected)
         self.assertEqual([record["args"] for record in records if record["kind"] == "inline"], [[expected]])
 
-    def test_esm2_config_override_selects_catalog_and_reaches_every_stage(self):
+    def test_esm2_config_override_selects_catalog_without_broadening_requested_assays(self):
         # A distinct catalog exposes any stage that accidentally keeps the default.
         catalog = self.raw / "subset.csv"
         with catalog.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=self.rows[0].keys())
             writer.writeheader()
-            writer.writerow(self.rows[1])
+            writer.writerows(reversed(self.rows))
+        # The default catalog lacks the requested assays, so ignoring the override fails.
+        self.rows = [row for row in self.rows if row["DMS_id"] not in SELECTED_ASSAYS]
+        self.write_catalog()
         config = json.loads((self.root / "configs/extraction/esm2_650m.json").read_text())
         config["assay_index"] = catalog.relative_to(self.root).as_posix()
         selected = "configs/extraction/custom pooled config.json"
@@ -302,8 +340,23 @@ class PreparationSbatchTests(PreparationFixture):
             with self.subTest(environment=environment, arguments=arguments):
                 result, records = self.invoke(SCRIPTS[0], environment, arguments)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assert_targets(records, [ASSAYS[1]])
+                self.assert_targets(records, SELECTED_ASSAYS)
                 self.assert_esm2_config(records, selected)
+
+    def test_esm2_config_override_missing_requested_assay_stops_before_model_work(self):
+        catalog = self.raw / "incomplete.csv"
+        with catalog.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=self.rows[0].keys())
+            writer.writeheader()
+            writer.writerows(row for row in self.rows if row["DMS_id"] != SELECTED_ASSAYS[1])
+        config = json.loads((self.root / "configs/extraction/esm2_650m.json").read_text())
+        config["assay_index"] = catalog.relative_to(self.root).as_posix()
+        selected = "configs/extraction/incomplete.json"
+        (self.root / selected).write_text(json.dumps(config), encoding="utf-8")
+        result, records = self.invoke(SCRIPTS[0], arguments=("--config", selected))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(SELECTED_ASSAYS[1], result.stderr)
+        self.assertEqual(records, [])
 
     def test_esm2_invalid_arguments_stop_before_model_work(self):
         for arguments in (("--config",), ("--config=",), ("--config", ""),
@@ -314,27 +367,38 @@ class PreparationSbatchTests(PreparationFixture):
                 self.assertIn("error:", result.stderr)
                 self.assertEqual(records, [])
 
-    def test_array_task_selects_only_its_catalog_assay(self):
+    def test_array_task_selects_only_its_requested_assay(self):
         for script in SCRIPTS:
-            with self.subTest(script=script):
-                result, records = self.invoke(script, {"SLURM_ARRAY_TASK_ID": "1"})
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assert_targets(records, [ASSAYS[1]])
-                downloads = [record["args"][0] for record in records if record["kind"] == "structure-download"]
-                if "proteinmpnn" in script:
-                    self.assertEqual(downloads, [ASSAYS[1]])
+            for index, assay in enumerate(SELECTED_ASSAYS):
+                with self.subTest(script=script, index=index):
+                    result, records = self.invoke(script, {"SLURM_ARRAY_TASK_ID": str(index)})
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assert_targets(records, [assay])
+                    downloads = [record["args"][0] for record in records if record["kind"] == "structure-download"]
+                    if "proteinmpnn" in script:
+                        self.assertEqual(downloads, [assay])
 
     def test_selection_failure_stops_before_model_or_structure_download(self):
         for script in SCRIPTS:
             with self.subTest(script=script):
-                result, records = self.invoke(script, {"SLURM_ARRAY_TASK_ID": "3"})
+                result, records = self.invoke(script, {"SLURM_ARRAY_TASK_ID": "2"})
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(records, [])
-        (self.raw / self.rows[1]["DMS_filename"]).unlink()
+        (self.raw / f"{SELECTED_ASSAYS[1]}.csv").unlink()
         for script in SCRIPTS:
             with self.subTest(script=script, missing_file=True):
                 result, records = self.invoke(script)
                 self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(records, [])
+
+    def test_missing_requested_catalog_assay_stops_before_model_work(self):
+        self.rows = [row for row in self.rows if row["DMS_id"] != SELECTED_ASSAYS[1]]
+        self.write_catalog()
+        for script in SCRIPTS:
+            with self.subTest(script=script):
+                result, records = self.invoke(script)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(SELECTED_ASSAYS[1], result.stderr)
                 self.assertEqual(records, [])
 
     def test_failed_extraction_still_scores_and_both_stage_failures_reach_exit_status(self):
@@ -343,7 +407,7 @@ class PreparationSbatchTests(PreparationFixture):
                 with self.subTest(script=script, stage=stage):
                     result, records = self.invoke(script, {"TEST_FAIL_STAGE": stage})
                     self.assertNotEqual(result.returncode, 0)
-                    self.assert_targets(records, ASSAYS)
+                    self.assert_targets(records, SELECTED_ASSAYS)
 
     def test_failed_model_download_stops_before_assay_processing(self):
         for script in SCRIPTS:
@@ -357,15 +421,15 @@ class PreparationSbatchTests(PreparationFixture):
     def test_failed_structure_continues_other_assays_and_preserves_registered_manifests(self):
         manifests = self.root / "data/structures/manifests"
         manifests.mkdir(parents=True)
-        (manifests / f"{ASSAYS[0]}.json").write_text("registered fixture", encoding="utf-8")
-        result, records = self.invoke(SCRIPTS[1], {"TEST_FAIL_STRUCTURE_ASSAY": ASSAYS[1]})
+        (manifests / f"{SELECTED_ASSAYS[1]}.json").write_text("registered fixture", encoding="utf-8")
+        result, records = self.invoke(SCRIPTS[1], {"TEST_FAIL_STRUCTURE_ASSAY": SELECTED_ASSAYS[0]})
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn(f"{ASSAYS[1]}: structure failed", result.stderr)
+        self.assertIn(f"{SELECTED_ASSAYS[0]}: structure failed", result.stderr)
         downloads = [record["args"][0] for record in records if record["kind"] == "structure-download"]
-        self.assertEqual(downloads, ASSAYS[1:])
+        self.assertEqual(downloads, [SELECTED_ASSAYS[0]])
         verified = [record["args"][0] for record in records if record["kind"] == "structure-verify"]
-        self.assertEqual(verified, [ASSAYS[0], ASSAYS[2]])
-        self.assert_targets(records, ASSAYS)
+        self.assertEqual(verified, [SELECTED_ASSAYS[1]])
+        self.assert_targets(records, SELECTED_ASSAYS)
 
 
 if __name__ == "__main__":

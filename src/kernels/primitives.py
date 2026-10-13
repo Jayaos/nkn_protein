@@ -15,9 +15,10 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 
-DISTANCE_KERNELS = frozenset({"hellinger_exp", "hellinger_rbf", "rbf", "matern32"})
+DISTANCE_KERNELS = frozenset({"hellinger_exp", "hellinger_rbf", "exp", "rbf", "matern32"})
 IF_KERNELS = frozenset({"hellinger_exp", "hellinger_rbf", "bhattacharyya"})
 VECTOR_KERNELS = frozenset({"cosine", "rbf", "matern32"})
+STRUCTURE_DISTANCE_KERNELS = frozenset({"exp", "rbf", "matern32"})
 
 
 def inverse_softplus(value: Tensor) -> Tensor:
@@ -147,7 +148,7 @@ class FixedPairwiseGeometry:
                 if names & {"hellinger_exp", "hellinger_rbf"}:
                     distance = torch.cdist(left_root, right_root, compute_mode="donot_use_mm_for_euclid_dist")
                     values["hellinger_distance"] = distance / math.sqrt(2.0)
-            if names & {"rbf", "matern32"}:
+            if names & STRUCTURE_DISTANCE_KERNELS:
                 values["euclidean_distance"] = torch.cdist(
                     left, right, compute_mode="donot_use_mm_for_euclid_dist",
                 )
@@ -177,7 +178,7 @@ class PrimitiveKernel(nn.Module):
         *, probability_policy: str = "normalized",
     ):
         super().__init__()
-        if name not in IF_KERNELS | VECTOR_KERNELS:
+        if name not in IF_KERNELS | VECTOR_KERNELS | STRUCTURE_DISTANCE_KERNELS:
             raise ValueError(f"Unknown primitive kernel: {name}")
         _validate_probability_policy(probability_policy)
         self.name = name
@@ -204,7 +205,7 @@ class PrimitiveKernel(nn.Module):
         if self.raw_lengthscale.device != distance.device:
             raise ValueError("Move the kernel and its features to the same device")
         scaled = distance / self.lengthscale
-        if self.name == "hellinger_exp":
+        if self.name in {"hellinger_exp", "exp"}:
             return torch.exp(-scaled)
         if self.name in {"hellinger_rbf", "rbf"}:
             return torch.exp(-0.5 * scaled.square())
@@ -238,6 +239,8 @@ class PrimitiveKernel(nn.Module):
         # consequently have finite lengthscale gradients, including duplicate sites.
         distance = torch.cdist(left, right, compute_mode="donot_use_mm_for_euclid_dist")
         scaled = distance / self.lengthscale
+        if self.name == "exp":
+            return torch.exp(-scaled)
         if self.name == "rbf":
             return torch.exp(-0.5 * scaled.square())
         scaled = math.sqrt(3.0) * scaled

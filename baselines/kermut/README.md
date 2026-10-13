@@ -95,6 +95,15 @@ sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch --config configs/extractio
 sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
 ```
 
+Both jobs prepare only `A0A1I9GEU1_NEIME_Kennouche_2019`, then
+`FKBP3_HUMAN_Tsuboyama_2023_2KFV`. Optional `--array=0-1` selects one of those
+assays per task. They pass `--singles-only` for extraction and scoring and save to
+`data/features/pretrained/singles/<assay>/`, reusing each single mutant's outputs
+across folds. Existing full-assay caches are not moved or modified. For mixed or
+extrapolation experiments, prepare full-variant caches through the CLI with
+`--output-root data/features/pretrained` and omit `--singles-only` consistently
+from extraction and scoring.
+
 The ESM2 config override selects Kermut's pooled prefix cache. Without it, the
 preparation job defaults to the compact centered-site cache used by NKN's `sequence_site`
 branch. Both cache recipes can coexist and share the same downloaded checkpoint.
@@ -107,7 +116,7 @@ outputs cannot satisfy Kermut's cache selection. To extract only the Kermut
 distributions from prepared model and structure assets, run:
 
 ```bash
-PYTHONPATH=src python -m feature_generation.cli extract --config configs/extraction/proteinmpnn_v48_020_kermut.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --resume
+PYTHONPATH=src python -m feature_generation.cli extract --config configs/extraction/proteinmpnn_v48_020_kermut.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --singles-only --device cuda --resume
 ```
 
 From the repository root in PowerShell, activate the existing environment and
@@ -121,7 +130,7 @@ python -m baselines.kermut.cli --help
 For the current assay's five-fold random single-mutant evaluation:
 
 ```powershell
-python -m baselines.kermut.cli cv --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/kermut_esm2_proteinmpnn.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --assay-index data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv --full-assay --output results/A0A1I9GEU1_NEIME_Kennouche_2019/kermut_random
+python -m baselines.kermut.cli cv --features data/features/pretrained/singles/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/kermut_esm2_proteinmpnn.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --assay-index data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv --full-assay --singles-only --output results/A0A1I9GEU1_NEIME_Kennouche_2019/kermut_random
 ```
 
 Output directories must be new or empty. `validate` checks inputs without
@@ -137,7 +146,8 @@ sbatch sbatch_run/run_kermut/run_kermut_A0A1I9GEU1_NEIME_Kennouche_2019.sbatch
 sbatch sbatch_run/run_kermut/run_kermut_FKBP3_HUMAN_Tsuboyama_2023_2KFV.sbatch
 ```
 
-Each fixes its named assay and defaults to `data/features/pretrained/<assay>`.
+Each fixes its named assay and defaults to
+`data/features/pretrained/singles/<assay>` for singles selections.
 Both use ESM2 650M layer-33 embeddings, sequence-conditioned ProteinMPNN
 distributions (ten orders, seed 37), and a GP mean combining ESM2 650M
 masked-marginal scores with ProteinMPNN sequence likelihoods (one order, seed 0).
@@ -161,6 +171,13 @@ singles protocols, for 15 fits. The launcher accepts `ASSAY`, `FEATURES`,
 `MULTIPLES_FOLDS_CSV`. It snapshots published fold files and the resolved JSON.
 Results go under `results/<assay>/kermut_esm2_proteinmpnn_<selection>_<job_id>/`.
 Like the NKN launcher, it activates the cluster's `nkn_protein` Conda environment.
+
+Singles selections use `data/features/pretrained/singles/<assay>` and require
+all indexed singles with `--full-assay --singles-only`. Mixed selections, `all`,
+and `single_to_double` retain `data/features/pretrained/<assay>` and full-assay
+validation. `FEATURES` overrides either default root. Direct `cv` commands accept
+`--singles-only` only with a `singles_*` setting; omitting it retains the original
+full raw-assay coverage check.
 
 The launcher requests **15 CPUs by default**. Add `--parallel` to run all 15
 singles fits concurrently: three setting processes, each with five fold workers

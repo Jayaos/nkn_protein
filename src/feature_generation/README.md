@@ -5,6 +5,87 @@ representations into the project's schema-v2/layout-v1 cache. Models run
 locally with frozen parameters in evaluation/inference mode. DMS labels are
 copied into the assay table but are never supplied to the representation models.
 
+The ESM2 and ProteinMPNN presets write to
+`data/features/pretrained/singles/<assay>/`. Both preparation jobs pass
+`--singles-only` to extraction and scoring; pass it explicitly when using these
+presets through the CLI. Each selected single mutant is prepared once and reused
+across folds and protocols. The raw catalog remains the source of assay metadata
+and variants. Existing full-assay caches are not moved or modified. To prepare
+all variants through the CLI, override `--output-root data/features/pretrained`
+and omit `--singles-only` consistently for extraction and scoring. ProSST,
+ESM-IF1, and notebook defaults retain their existing full-assay locations.
+
+## Data storage on Phoenix
+
+Data stays in the repository's existing `data/` directory by default. Choose
+between the current Xie directory and Wilson storage:
+
+| Choice | Action |
+| --- | --- |
+| Current repository directory (Xie) | Keep `data/` as its existing directory and run the usual preparation commands. |
+| Wilson | Run the optional migration helper below to redirect `data/` to Wilson. |
+| Return from Wilson to Xie | Run `bash sbatch_run/migrate_data_to_xie.sh` after stopping data-using jobs. |
+
+The optional Wilson destination is:
+
+```text
+/storage/home/hcoda1/0/jlee3541/r-cwilson323-0/projects/nkn_protein/data
+```
+
+The migration helper replaces the repository's existing `data` path with a
+symbolic link to this directory. This redirects model checkpoints, feature and score caches, structures, assay
+CSVs, and folds together, preserving the `data/...` paths used by extraction,
+NKN, Kermut, and notebooks. Local Windows data paths do not need to change.
+This is a repository-wide choice; after migration, default `data/...` paths
+resolve to Wilson. Check the current physical location with `readlink -f data`.
+For individual CLI extraction/scoring runs, `--output-root` can select a feature
+destination separately; checkpoint storage is controlled by the extraction
+configuration's `model_dir` field.
+
+After syncing the migration helper to Phoenix, stop jobs and other processes
+using this project's data, then run from the existing cluster repository:
+
+```bash
+cd /storage/home/hcoda1/0/jlee3541/r-yxie77-0/projects/nkn_protein
+bash sbatch_run/migrate_data_to_wilson.sh
+readlink -f data
+```
+
+The helper verifies that the Wilson home-directory alias points to the Wilson
+project allocation, copies the old data with `rsync`, and checks file contents
+before replacing the old path with a symlink. Existing destination files are
+not overwritten; conflicting contents stop the migration. It retains the source
+as a timestamped backup and prints its location. That backup still consumes
+Xie storage until you remove it after validating the migrated data. A completed
+migration can be checked by running the helper again.
+
+The helper requires Linux, Bash, `rsync`, and `flock`. It refuses nested symlinks
+so their targets cannot silently remain on another allocation or break after
+the move. Review custom structure manifests that reference files outside `data`
+before migration; moving this tree does not relocate those external inputs.
+Keep cached JSON files unchanged: their checksums are part of cache validation.
+Restart data-using processes after migration so they resolve the new location.
+
+To return to Xie, sync the reverse helper to Phoenix, stop data-using jobs and
+processes, then run from the same repository:
+
+```bash
+bash sbatch_run/migrate_data_to_xie.sh
+readlink -f data
+```
+
+The reverse helper copies the **current Wilson data**, including files created
+or modified since the first migration, into a new staging directory on Xie.
+After checksum verification, it replaces the `data` symlink with that directory.
+The resolved path will then be under `/storage/project/r-yxie77-0/`.
+This needs enough free Xie quota for a complete copy, in addition to any old
+`data.before-wilson-*` backups still present. Those backups and the Wilson copy
+remain untouched. The helper retains the previous Wilson symlink under a new
+name and restores it if promotion fails while the active `data` path is absent.
+If copying fails, it leaves the active Wilson link in place and prints the
+staging location for inspection. Running it again after a completed return
+reports that Xie is already active. Restart jobs after the switch.
+
 ## Installation
 
 From the repository root:
@@ -88,9 +169,9 @@ Download both checkpoints explicitly, then extract offline:
 ```powershell
 python -m feature_generation.cli download --config configs/extraction/proteinmpnn_v48_020_kermut.json
 python -m feature_generation.cli download --config configs/extraction/esm_if1_142m.json
-python -m feature_generation.cli extract --config configs/extraction/proteinmpnn_v48_020_kermut.json --assay $assay --resume
+python -m feature_generation.cli extract --config configs/extraction/proteinmpnn_v48_020_kermut.json --assay $assay --singles-only --resume
 python -m feature_generation.cli extract --config configs/extraction/esm_if1_142m.json --assay $assay --resume
-python -m feature_generation.cli validate --features "data/features/pretrained/$assay" --feature-type inverse_folding --model-family proteinmpnn --cache-id v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb
+python -m feature_generation.cli validate --features "data/features/pretrained/singles/$assay" --feature-type inverse_folding --model-family proteinmpnn --cache-id v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb
 python -m feature_generation.cli validate --features "data/features/pretrained/$assay" --feature-type inverse_folding --model-family esm_if1
 ```
 
@@ -98,8 +179,8 @@ The optional legacy backbone-only recipe uses the same downloaded checkpoint.
 To prepare it for experiments that still select that cache, run it separately:
 
 ```powershell
-python -m feature_generation.cli extract --config configs/extraction/proteinmpnn_v48_020.json --assay $assay --resume
-python -m feature_generation.cli validate --features "data/features/pretrained/$assay" --feature-type inverse_folding --model-family proteinmpnn --cache-id v_48_020-backbone_only-8907e6671bfb
+python -m feature_generation.cli extract --config configs/extraction/proteinmpnn_v48_020.json --assay $assay --singles-only --resume
+python -m feature_generation.cli validate --features "data/features/pretrained/singles/$assay" --feature-type inverse_folding --model-family proteinmpnn --cache-id v_48_020-backbone_only-8907e6671bfb
 ```
 
 Conditional inference performs one decoder pass per reference position per
@@ -116,15 +197,18 @@ are verified against the pinned artifact manifest before loading. Their provenan
 includes exact source URLs, upstream commits, and file SHA-256 checksums.
 
 Use `--output-root data/features/inverse_smoke --limit 4` on every extraction
-command in an isolated smoke test. `--limit` changes only the shared variant
+command in an isolated smoke test, with the same `--singles-only` selection for
+all models sharing that root. `--limit` changes only the shared variant
 table; inverse-folding inference still covers the complete reference. A full-assay
 cache and a subset cannot occupy the same assay directory. `--resume` checks the
 checkpoint, structure, mapping, extraction settings, and all saved artifact hashes.
 
-Each model saves its own leaf:
+Each model saves its own leaf under its configured output root (the ProteinMPNN
+presets use `data/features/pretrained/singles`; ESM-IF1 uses
+`data/features/pretrained`):
 
 ```text
-data/features/pretrained/<assay>/inverse_folding/<family>/<recipe>/
+<output_root>/<assay>/inverse_folding/<family>/<recipe>/
   features.pt
   config.json
   provenance.json
@@ -203,9 +287,9 @@ select the 650M checkpoint. The 8M preset remains available for smoke tests.
 # Required only if weights/tokenizer are not downloaded yet; valid assets are reused.
 python -m feature_generation.cli download --config configs/extraction/esm2_650m_centered.json
 
-python -m feature_generation.cli score --config configs/extraction/esm2_650m_centered.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --batch-size 8 --resume
+python -m feature_generation.cli score --config configs/extraction/esm2_650m_centered.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --singles-only --device cuda --batch-size 8 --resume
 
-python -m feature_generation.cli validate --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --feature-type scores --model-family esm2 --cache-id esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371-centered1022
+python -m feature_generation.cli validate --features data/features/pretrained/singles/A0A1I9GEU1_NEIME_Kennouche_2019 --feature-type scores --model-family esm2 --cache-id esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371-centered1022
 ```
 
 Use `--device cpu` without a GPU. `--batch-size` caps the number of masked WT
@@ -215,8 +299,10 @@ options apply to ProteinMPNN and are rejected for ESM2. New dependencies are not
 needed: the verified safetensors checkpoint already contains the MLM head.
 
 `prepare_esm2.sbatch` downloads/verifies ESM2 650M and then runs both layer-33
-embedding extraction and scoring for every assay in the configured
-`raw_substitutions/DMS_substitutions.csv` catalog. Its default
+embedding extraction and scoring with `--singles-only` for only
+`A0A1I9GEU1_NEIME_Kennouche_2019` and `FKBP3_HUMAN_Tsuboyama_2023_2KFV`, in that
+order, using the configured `raw_substitutions/DMS_substitutions.csv` catalog.
+Its default
 `configs/extraction/esm2_650m_centered.json` saves centered mutation-site vectors
 and a full-sequence mean from fixed non-overlapping windows for NKN's sequence
 branches, plus centered-window
@@ -225,7 +311,7 @@ ProteinGym assay CSVs must already exist. First-time downloads need outbound
 HTTPS from the compute node; verified completed caches are reused on resubmission.
 
 ```text
-data/features/pretrained/<assay>/
+data/features/pretrained/singles/<assay>/
   scores/esm2/esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371-centered1022/
     mean_score.csv
     config.json
@@ -273,16 +359,18 @@ the normalization); the score is not derived from the canonical 20-way extractio
 cache. There is no WT subtraction, DMS-label input, or finetuning.
 
 ```bash
-python -m feature_generation.cli score --config configs/extraction/proteinmpnn_v48_020.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --device cuda --batch-size 1 --resume
-python -m feature_generation.cli validate --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019 --feature-type scores --model-family proteinmpnn --cache-id v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb
+python -m feature_generation.cli score --config configs/extraction/proteinmpnn_v48_020.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --singles-only --device cuda --batch-size 1 --resume
+python -m feature_generation.cli validate --features data/features/pretrained/singles/A0A1I9GEU1_NEIME_Kennouche_2019 --feature-type scores --model-family proteinmpnn --cache-id v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb
 ```
 
 Use `--device cpu` when no GPU is available. This reuses the existing ProteinMPNN
 checkpoint and structure manifest; no new dependencies or model downloads are
 needed if extraction already ran. Scoring can also run before extraction.
 `prepare_proteinmpnn.sbatch` downloads and verifies the pinned checkpoint/source
-and ProteinGym reference structures for every selected catalog assay, then
-extracts the Kermut sequence-conditioned features and prepares variant scores.
+and ProteinGym reference structures for the same two selected assays, then
+extracts the Kermut sequence-conditioned features and prepares variant scores,
+using `--singles-only` for both stages. The reference distribution still covers
+every residue; the shared variant table and scores contain only single mutants.
 Existing structure manifests, including custom sources, are validated and
 reused. New structures use their sole polymer chain; multichain structures need
 a separately prepared manifest with an explicit chain. These are four
@@ -316,7 +404,7 @@ or use `--all-assays`; `--continue-on-error` records failures with a nonzero exi
 No model inference runs for a matching validated completed score cache.
 
 ```text
-data/features/pretrained/<assay>/
+data/features/pretrained/singles/<assay>/
   assay.json
   variants.csv
   scores/proteinmpnn/v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb/
@@ -351,46 +439,53 @@ descriptors remain readable; all new score artifacts use `mean_score.csv`.
 Official scoring sources: [ProteinMPNN sequence scoring](https://github.com/dauparas/ProteinMPNN/blob/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/protein_mpnn_run.py),
 [ProteinMPNN NLL reduction](https://github.com/dauparas/ProteinMPNN/blob/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/protein_mpnn_utils.py).
 
-## Preparing the full catalog on Slurm
+## Preparing the two selected assays on Slurm
 
-Both preparation scripts select every catalog `DMS_id` by default, preserving
-separate assays for the same protein. `DMS_substitutions.csv` supplies metadata;
-it is not itself a variant assay. Each catalog entry must have its corresponding
-CSV beside the catalog. Outputs remain under `data/features/pretrained/<assay>/`.
+Both preparation scripts select only these assays, in this order:
 
-For the full catalog, use one assay per array task. Run from the repository root
-with Python available (the listing helper needs only the standard library):
+1. `A0A1I9GEU1_NEIME_Kennouche_2019`
+2. `FKBP3_HUMAN_Tsuboyama_2023_2KFV`
+
+`DMS_substitutions.csv` supplies metadata; it is not itself a variant assay.
+Each selected catalog entry must have its corresponding
+CSV beside the catalog. Both scripts filter each assay to single mutants and save
+under `data/features/pretrained/singles/<assay>/`.
+
+Optionally use one assay per array task. Run from the repository root:
 
 ```bash
-esm_count=$(python sbatch_run/run_prepare_rep/list_assays.py \
-  --config configs/extraction/esm2_650m_centered.json --count)
-mpnn_count=$(python sbatch_run/run_prepare_rep/list_assays.py \
-  --config configs/extraction/proteinmpnn_v48_020_kermut.json --count)
-
-esm_job=$(sbatch --parsable --array="0-$((esm_count - 1))%4" \
+esm_job=$(sbatch --parsable --array=0-1 \
   sbatch_run/run_prepare_rep/prepare_esm2.sbatch)
-sbatch --array="0-$((mpnn_count - 1))%4" \
+sbatch --array=0-1 \
   --dependency="afterany:${esm_job%%;*}" \
   sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
 ```
 
-`%4` limits each array to four simultaneous GPU jobs. The dependency waits for
+The array contains two GPU tasks. The dependency waits for
 the ESM2 array to finish, including failed tasks, before starting ProteinMPNN;
 this avoids simultaneous writes to shared assay metadata by the two models.
 These are standard [Slurm array options](https://slurm.schedmd.com/job_array.html).
 Each task retains the script's two-hour time limit and resource request. Increase
 the time limit with `sbatch --time=...` when an individual assay needs longer.
 
-Task indices are zero-based catalog row numbers. Keep the catalog unchanged
-while tasks are queued or running. To identify or rerun one task:
+Task index `0` selects A0A1I9GEU1 and index `1` selects FKBP3; indices refer to
+the selected list, not raw catalog row numbers. The listing helper accepts
+repeatable `--assay` filters to match this selection (and needs only the Python
+standard library). To confirm the count or rerun FKBP3:
 
 ```bash
 python sbatch_run/run_prepare_rep/list_assays.py \
-  --config configs/extraction/esm2_650m_centered.json --task-index 63
-sbatch --array=63 sbatch_run/run_prepare_rep/prepare_esm2.sbatch
+  --config configs/extraction/esm2_650m_centered.json \
+  --assay A0A1I9GEU1_NEIME_Kennouche_2019 \
+  --assay FKBP3_HUMAN_Tsuboyama_2023_2KFV --count
+sbatch --array=1 sbatch_run/run_prepare_rep/prepare_esm2.sbatch
 ```
 
-Submitting either script without `--array` processes the whole selection
+The filtered count is `2`; replace `--count` with `--task-index 1` to print the
+second assay. Without `--assay` filters the helper still lists the entire catalog,
+which is broader than the preparation jobs' selection.
+
+Submitting either script without `--array` processes both selected assays
 sequentially in one GPU allocation; the two-hour default may be insufficient
 for this mode. Logs include the array job/task IDs. Both scripts use `--resume`
 and `--continue-on-error`: failed assays are reported, remaining assays and the
@@ -418,7 +513,7 @@ sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch --config configs/extractio
 ```
 
 `ESM2_CONFIG` can also select the extraction config; `--config` takes precedence.
-Use that same config when listing array indices if its catalog differs. The
+Use that same config and both `--assay` filters when listing array indices. The
 pooled preset averages the first 1,022 residues (the full sequence when shorter)
 and retains its 4 GiB output limit. It can extract embeddings for longer
 references, but its scoring stage still fails the full-reference length check.
@@ -480,7 +575,8 @@ and token checksums. Feature caches record those identities alongside the LM
 checkpoint, layer, and sequence coverage; `--resume` rejects mismatches or corruption.
 The quantizer cache directory can be overridden with `--structure-token-dir`.
 
-ESM-2 and ProSST can coexist within one assay. The first sequence recipe remains
+ESM-2 and ProSST can coexist within one assay when their output root and variant
+selection match. The first sequence recipe remains
 the default. To use ProSST in a GP experiment, select
 `feature_selection["sequence"] = "prosst/ProSST-2048-layer12-fixed-backbone-e94ffee7846d"`.
 The existing loader accepts the same `[N,L,D]` sequence contract. A full GP run still
@@ -495,7 +591,7 @@ This initial ProSST recipe uses float32 inference and output only.
 ## Notebook extraction and inspection
 
 The CLI remains the default workflow. These notebooks call the same extraction
-and validation functions and share its full-assay feature caches:
+and validation functions, retaining their existing full-assay feature caches:
 
 | Notebook | Expected pilot output | Conditioning |
 | --- | --- | --- |
@@ -508,8 +604,8 @@ Select a kernel with the current `env.yaml` or `requirements.txt` dependencies
 and run the cells in order. `ipykernel` is included; each notebook has setup
 instructions and configures imports from the project location automatically.
 
-All notebooks save under `data/features/pretrained/<ASSAY_ID>/`, using the same
-protein-assay directory as the CLI. The assay ID includes the protein identifier
+All notebooks save under `data/features/pretrained/<ASSAY_ID>/`, separate from
+the new ESM2/ProteinMPNN singles CLI outputs. The assay ID includes the protein identifier
 and experiment so distinct variant tables remain separate. Model outputs coexist
 inside that directory:
 
@@ -537,8 +633,8 @@ package. Notebooks contain no separate model implementation.
 
 ```powershell
 python -m feature_generation.cli download --config configs/extraction/esm2_8m.json
-python -m feature_generation.cli extract --config configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019
-python -m feature_generation.cli validate --features data/features/pretrained/A0A1I9GEU1_NEIME_Kennouche_2019
+python -m feature_generation.cli extract --config configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --singles-only
+python -m feature_generation.cli validate --features data/features/pretrained/singles/A0A1I9GEU1_NEIME_Kennouche_2019
 ```
 
 Use `python -m feature_generation.cli` for all extraction commands. For the
@@ -634,13 +730,13 @@ that specific file from the pinned revision and rerun verification.
 
 ```powershell
 # A small real-model development run, separate from the complete assay cache.
-python -m feature_generation.cli extract --config configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --limit 4 --output-root data/features/esm2_smoke
+python -m feature_generation.cli extract --config configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --singles-only --limit 4 --output-root data/features/esm2_smoke
 
 # Reuse only fully verified caches matching the inputs and extraction settings.
-python -m feature_generation.cli extract --config configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --resume
+python -m feature_generation.cli extract --config configs/extraction/esm2_8m.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --singles-only --resume
 
 # Repeat --assay for selected assays, or process the whole catalog explicitly.
-python -m feature_generation.cli extract --config configs/extraction/esm2_8m.json --all-assays --resume --continue-on-error
+python -m feature_generation.cli extract --config configs/extraction/esm2_8m.json --all-assays --singles-only --resume --continue-on-error
 ```
 
 `--limit` selects the first N eligible source rows without using labels.
@@ -705,7 +801,7 @@ output format in this version.
 ## Saved contract and GP integration
 
 ```text
-data/features/pretrained/<assay>/
+data/features/pretrained/singles/<assay>/
   assay.json
   variants.csv
   sequence/esm2/<checkpoint_recipe>/
