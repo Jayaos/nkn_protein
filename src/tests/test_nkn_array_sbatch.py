@@ -120,7 +120,8 @@ class NknArraySbatchTests(unittest.TestCase):
                 self.assertTrue(result.stderr.strip())
 
     def test_environment_config_and_all_cli_arguments_are_preserved(self):
-        arguments = ("singles_random", "--parallel", "--config", "configs/custom config.json")
+        arguments = ("singles_random", "--parallel", "--config", "configs/custom config.json",
+                     "--held-out-interval", "100")
         result, record = self.invoke(1, *arguments, config="configs/environment config.json")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(record, {"assay": ASSAYS[1], "config": "configs/environment config.json",

@@ -9,6 +9,7 @@ import torch
 
 from config import ModelConfig, TrainingConfig, validate_enabled_branches
 from data_loading.features import FeatureBatch
+from evaluation import spearman
 from .linalg import NumericalError
 from .model import ExactProteinGP
 from .preprocessing import FoldTransform
@@ -143,13 +144,28 @@ class FittedGP:
                    state["selected_seed"], state["best_nll_per_variant"], state["history"], state["restart_summaries"])
 
 
-def fit_gp(batch, model_config=None, training_config=None, progress=None):
+def fit_gp(batch, model_config=None, training_config=None, progress=None, *, held_out=None):
     model_config, cfg = model_config or ModelConfig(), training_config or TrainingConfig()
     if cfg.max_train_variants is not None and batch.num_variants > cfg.max_train_variants:
         raise ValueError(f"{batch.num_variants} training variants exceed configured dense-GP limit {cfg.max_train_variants}")
     batch = _freeze_batch(batch.to(batch.scores.device))
     transform = FoldTransform.fit(batch)
     train, y = transform.apply(batch), transform.standardize_targets(batch.targets)
+    diagnostic_batch = None
+    if cfg.held_out_interval:
+        if held_out is None or held_out.targets is None:
+            raise ValueError("held_out_interval requires a held-out batch with observed targets")
+        if (held_out.assay_id != train.assay_id
+                or held_out.reference_sequence != train.reference_sequence
+                or tuple(held_out.score_names) != tuple(train.score_names)
+                or held_out.feature_signature != train.feature_signature):
+            raise ValueError("Held-out assay, reference, scorers, and feature sources must match training")
+        if set(held_out.variant_ids) & set(train.variant_ids):
+            raise ValueError("Held-out diagnostic variants must not overlap training variants")
+        if not torch.isfinite(held_out.targets).all():
+            raise ValueError("Held-out diagnostic targets must be finite")
+        diagnostic_targets = held_out.targets.detach().clone()
+        diagnostic_batch = transform.apply(_freeze_batch(replace(held_out, targets=None).to(batch.scores.device)))
     history, summaries, winner = [], [], None
     device = batch.scores.device
     devices = [device.index or 0] if device.type == "cuda" else []
@@ -179,11 +195,28 @@ def fit_gp(batch, model_config=None, training_config=None, progress=None):
                     best_loss, best_state, best_step, best_jitter = value, _parameter_state(model), step, jitter
                 row = {"seed": seed, "step": step, "nll": float(total.detach()), "nll_per_variant": value,
                        "best_nll_per_variant": best_loss, "jitter": jitter}
+                running_best.append(best_loss)
+                early_stop = (step >= cfg.min_steps and step >= cfg.patience
+                              and running_best[step - cfg.patience] - best_loss < cfg.tolerance)
+                if diagnostic_batch is not None and (step % cfg.held_out_interval == 0
+                                                      or early_stop or step == cfg.max_steps):
+                    row.update(held_out_spearman=None, n_held_out=diagnostic_batch.num_variants,
+                               held_out_error=None)
+                    # Diagnostic labels never enter the objective, optimizer, or selection rule.
+                    # Preserve the model's mode and avoid building any evaluation graph.
+                    try:
+                        with torch.no_grad():
+                            if diagnostic_batch.num_variants:
+                                mean = model.posterior_mean(train, y, diagnostic_batch)
+                                if not torch.isfinite(mean).all():
+                                    raise NumericalError("Nonfinite held-out predictive mean")
+                                row["held_out_spearman"] = spearman(diagnostic_targets, mean)
+                    except NumericalError as error:
+                        row["held_out_error"] = str(error)
                 history.append(row)
                 if progress is not None:
                     progress(dict(row))
-                running_best.append(best_loss)
-                if step >= cfg.min_steps and step >= cfg.patience and running_best[step - cfg.patience] - best_loss < cfg.tolerance:
+                if early_stop:
                     status = "early_stopped"
                     break
                 if step == cfg.max_steps:

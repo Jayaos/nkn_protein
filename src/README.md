@@ -423,6 +423,40 @@ recorded in the batch manifest; neither changes published CV folds. Relative pat
 root. The former positional `cv`/`fit` modes and `FOLDS_CSV` variable are rejected.
 Existing pretrained features and scores are reused without extraction.
 
+### Optional held-out Spearman diagnostics
+
+Add `--held-out-interval 100` after either NKN sbatch script name to record
+held-out Spearman every 100 optimizer updates:
+
+```bash
+sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch singles --parallel --held-out-interval 100
+# Or for the assay selected by ASSAY:
+sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles --held-out-interval 100
+```
+
+The flag overrides `training.held_out_interval` in the JSON. Diagnostics are
+disabled by default; use `--held-out-interval 0` to disable them explicitly.
+The direct NKN `experiments.cli cv` and `fit` commands accept the same option.
+
+Each initialization records step 0, every interval, and its final stopping step.
+Rows contain `seed`, `step`, training `nll` and `nll_per_variant`,
+`held_out_spearman`, `n_held_out`, and `held_out_error`. They are flushed as training
+runs to `cv/<setting>/fold_<n>/held_out_spearman.csv`, or
+`fit/single_to_double/held_out_spearman.csv` for extrapolation, under the run
+directory. The same diagnostic fields appear in `history.json` and the checkpoint
+history. Progress logs also show Spearman, including when settings/folds run in
+parallel; `--quiet` suppresses console progress but still records the CSV.
+
+Diagnostics evaluate the current model using the existing held-out fold (doubles
+for single-to-double extrapolation). Mixed settings evaluate the requested
+single- or double-mutant domain. Empty, one-variant, or constant-rank samples
+have undefined Spearman, saved as an empty CSV cell / JSON `null`. Numerical
+diagnostic failures are recorded in `held_out_error` without rejecting the fit.
+Only predictive means are computed for diagnostics, but enabling them adds
+prediction time. Held-out scores never change gradients, early stopping,
+checkpoint selection, or restart selection; those continue to use training NLL.
+The final selected checkpoint may differ from the last diagnostic step.
+
 ### Parallel CPU folds
 
 The optional `--parallel` batch flag runs settings concurrently and uses separate
@@ -476,6 +510,7 @@ training, enabled-kernel, and evaluation hyperparameters:
 | `training.learning_rate`, `training.betas`, `training.epsilon` | Adam optimizer settings |
 | `training.max_steps` | Maximum optimizer updates per initialization |
 | `training.min_steps`, `training.patience`, `training.tolerance` | Earliest stopping step, improvement window, and minimum improvement in NLL per variant |
+| `training.held_out_interval` | NKN diagnostic Spearman interval in optimizer steps; `0` disables it (default) |
 | `training.seeds`, `training.lengthscale_multipliers` | Paired initialization settings; keep `[0]` and `[1.0]` for one initialization |
 | `training.noise_initial`, `training.noise_floor` | Initial observation-noise variance and its positive lower bound |
 | `training.jitter_initial`, `training.jitter_max` | Numerical stabilization range for Cholesky factorization |

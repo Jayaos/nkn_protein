@@ -38,6 +38,10 @@ def _parser(prog="python -m experiments.cli") -> argparse.ArgumentParser:
             sub.set_defaults(singles_only=False)
         if command in ("fit", "cv"):
             sub.add_argument(
+                "--held-out-interval", type=int, default=None,
+                help="NKN only: record diagnostic held-out Spearman every N steps; 0 disables it (default)",
+            )
+            sub.add_argument(
                 "--setting", required=True, choices=CV_SETTINGS if command == "cv" else ("single_to_double",),
                 help="Kermut domain setting for all CV folds" if command == "cv" else "Fixed single-to-double extrapolation setting",
             )
@@ -68,6 +72,11 @@ def _load_config(args, config_type=ExperimentConfig):
         if adjacent.is_file():
             path = adjacent
     config = config_type.load(path) if path is not None else config_type()
+    interval = getattr(args, "held_out_interval", None)
+    if interval is not None:
+        if not isinstance(config, ExperimentConfig):
+            raise ValueError("--held-out-interval is supported only for NKN")
+        config = replace(config, training=replace(config.training, held_out_interval=interval))
     return replace(config, device=args.device) if args.device is not None else config
 
 
@@ -99,9 +108,15 @@ def _progress(event):
         print(f"Fold {event['fold']}: {event['n_train']} training, {event['n_test']} held-out variants", file=sys.stderr)
     elif event.get("event") == "fold_complete":
         print(f"Fold {event['fold']}: completed", file=sys.stderr)
-    elif "step" in event and (event["step"] == 0 or event["step"] % 100 == 0):
+    elif "step" in event and (event["step"] == 0 or event["step"] % 100 == 0 or "held_out_spearman" in event):
         fold = f"fold {event['fold']} " if "fold" in event else ""
-        print(f"{fold}seed {event['seed']} step {event['step']}: NLL/variant={event['nll_per_variant']:.6g}", file=sys.stderr)
+        diagnostic = ""
+        if "held_out_spearman" in event:
+            value = event["held_out_spearman"]
+            diagnostic = f" held-out Spearman={value:.6g}" if value is not None else " held-out Spearman=undefined"
+            if event.get("held_out_error"):
+                diagnostic += f" ({event['held_out_error']})"
+        print(f"{fold}seed {event['seed']} step {event['step']}: NLL/variant={event['nll_per_variant']:.6g}{diagnostic}", file=sys.stderr)
 
 
 def _input_manifest(args, batch, excluded_variant_ids=()):

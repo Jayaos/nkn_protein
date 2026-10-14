@@ -18,7 +18,8 @@
 # [4, 2, 1] two-score preset and caches under data/features/pretrained/singles.
 # Resources above are per assay task. The array parallelizes assays; --parallel
 # additionally divides each task's CPUs between its settings and folds.
-# Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel]
+# Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]
+# Add --held-out-interval 100 to record diagnostic Spearman every 100 updates.
 # Limit assay concurrency: sbatch --array=0-4%2 sbatch_run/run_nkn/run_nkn_assays.sbatch
 # Logs: nkn_assays-<array-job-id>_<task-index>.out in the submission directory.
 # Results: results/<assay>/nkn_esm2_proteinmpnn_<selection>_<task-job-id>/
@@ -34,7 +35,7 @@ assays=(
 )
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-  printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel]\n'
+  printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n'
   printf 'Default array: 0-4; each task runs one assay with both GP mean scores.\n'
   for index in "${!assays[@]}"; do
     printf '  %s: %s\n' "$index" "${assays[$index]}"

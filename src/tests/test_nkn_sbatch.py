@@ -245,6 +245,40 @@ class NknSbatchTests(unittest.TestCase):
         self.assertIsNone(plan)
         self.assertIn('positive integer', result.stderr)
 
+    def test_nkn_held_out_interval_overrides_config_and_reaches_parallel_settings(self):
+        if self.cli_module != 'experiments.cli':
+            self.skipTest('Held-out diagnostics are NKN-only')
+        result, records, _ = self.invoke(15, 'singles', '--parallel', '--held-out-interval', '100')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(records), 3)
+        runtime = next((self.root / 'results').rglob('config.json'))
+        self.assertEqual(json.loads(runtime.read_text())['training']['held_out_interval'], 100)
+
+    def test_nkn_held_out_interval_can_disable_configured_diagnostics(self):
+        if self.cli_module != 'experiments.cli':
+            self.skipTest('Held-out diagnostics are NKN-only')
+        path = self.root / self.config_file
+        config = json.loads(path.read_text())
+        config['training']['held_out_interval'] = 100
+        path.write_text(json.dumps(config))
+        result, _, _ = self.invoke(1, 'single_to_double', '--held-out-interval=0')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        runtime = next((self.root / 'results').rglob('config.json'))
+        self.assertEqual(json.loads(runtime.read_text())['training']['held_out_interval'], 0)
+
+    def test_nkn_invalid_diagnostic_intervals_fail_before_workers(self):
+        if self.cli_module != 'experiments.cli':
+            self.skipTest('Held-out diagnostics are NKN-only')
+        for arguments in (('--held-out-interval',), ('--held-out-interval', '-1'),
+                          ('--held-out-interval=1.5',), ('--held-out-interval=',),
+                          ('--held-out-interval', 'abc')):
+            with self.subTest(arguments=arguments):
+                result, records, plan = self.invoke(1, *arguments)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('nonnegative integer', result.stderr)
+                self.assertEqual(records, [])
+                self.assertIsNone(plan)
+
 
 if __name__ == '__main__':
     unittest.main()

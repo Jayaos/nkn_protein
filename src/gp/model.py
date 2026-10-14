@@ -48,3 +48,9 @@ class ExactProteinGP(nn.Module):
         latent = (latent + latent.T) * 0.5
         observation = latent + self.noise * torch.eye(test.num_variants, device=latent.device, dtype=latent.dtype)
         return mean, latent, observation, jitter
+
+    def posterior_mean(self, train, standardized_targets, test):
+        """Predict means only, without allocating a held-out covariance matrix."""
+        factor, _ = self.training_factor(train)
+        alpha = torch.cholesky_solve((standardized_targets - self.mean(train)).unsqueeze(-1), factor)
+        return self.mean(test) + (self.kernel(train, test).T @ alpha).squeeze(-1)

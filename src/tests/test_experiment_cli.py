@@ -120,6 +120,28 @@ class ExperimentSettingCLITests(unittest.TestCase):
         self.assertEqual({key for key, value in partitions.items() if value == "unused_single"}, {"variant_0", "variant_1", "variant_6"})
         self.assertEqual({row["variant_id"] for row in read_predictions(output / "predictions.csv")}, {"variant_4", "variant_7"})
 
+    def test_held_out_interval_override_records_diagnostics_even_when_quiet(self):
+        for interval in (0, 1, -1):
+            with self.subTest(interval=interval), patch("experiments.cli.load_feature_bundle", return_value=self.batch):
+                output = self.root / f'diagnostic_{interval}'
+                status, _, errors = self.invoke('cv', output, [
+                    '--setting', 'singles_random', '--folds', self.folds,
+                    '--held-out-interval', interval,
+                ])
+                if interval < 0:
+                    self.assertEqual(status, 2)
+                    self.assertIn('held_out_interval', errors)
+                    self.assertFalse(output.exists())
+                    continue
+                self.assertEqual(status, 0, errors)
+                config = json.loads((output / 'resolved_config.json').read_text())
+                self.assertEqual(config['training']['held_out_interval'], interval)
+                for fold in range(3):
+                    diagnostic = output / f'fold_{fold}/held_out_spearman.csv'
+                    self.assertEqual(diagnostic.exists(), bool(interval))
+                    if interval:
+                        self.assertEqual([int(row['step']) for row in read_predictions(diagnostic)], [0, 1, 2])
+
     def test_too_small_training_sample_fails_without_creating_outputs(self):
         output = self.root / "too_few_training_singles"
         with patch("experiments.cli.load_feature_bundle", return_value=self.batch):

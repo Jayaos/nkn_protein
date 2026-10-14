@@ -23,7 +23,9 @@
 # joins separate structure fragments; the other selected branches remain active.
 #
 # From the repository root (or a subdirectory):
-#   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch [singles|all|SETTING] [--config PATH] [--parallel]
+#   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch [singles|all|SETTING] [--config PATH] [--parallel] [--held-out-interval N]
+# Add --held-out-interval 100 to record held-out Spearman every 100 updates.
+# Diagnostics are off by default; 0 disables them. Training selection remains NLL-only.
 # To run all 15 singles folds concurrently, with one CPU thread per fold:
 #   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles --parallel
 # Without --parallel, settings and folds run sequentially using all allocated CPUs.
@@ -57,11 +59,26 @@ cd -- "$project_root"
 selection="singles"
 selection_given=false
 parallel=false
+held_out_interval=""
 config_template="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn.json}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --parallel)
       parallel=true
+      shift ;;
+    --held-out-interval)
+      if [[ $# -lt 2 || ! "$2" =~ ^(0|[1-9][0-9]*)$ ]]; then
+        echo "error: --held-out-interval requires a nonnegative integer (0 disables diagnostics)." >&2
+        exit 1
+      fi
+      held_out_interval="$2"
+      shift 2 ;;
+    --held-out-interval=*)
+      held_out_interval="${1#--held-out-interval=}"
+      if [[ ! "$held_out_interval" =~ ^(0|[1-9][0-9]*)$ ]]; then
+        echo "error: --held-out-interval requires a nonnegative integer (0 disables diagnostics)." >&2
+        exit 1
+      fi
       shift ;;
     --config)
       if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
@@ -78,7 +95,8 @@ while [[ $# -gt 0 ]]; do
       fi
       shift ;;
     -h|--help)
-      printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH] [--parallel]\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
+      printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
+      printf 'Diagnostic example: --held-out-interval 100 (0 disables; overrides training.held_out_interval in JSON)\n'
       printf 'Config precedence: --config, NKN_CONFIG, configs/esm2_proteinmpnn_nkn.json\n'
       printf 'Parallel example: sbatch %s singles --parallel\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
       exit 0 ;;
@@ -199,7 +217,7 @@ printf 'Job: %s\nRepository: %s\nAssay: %s\nSettings: %s\nConfig: %s\nResults: %
 
 # Record the worker thread budget and execution plan for sbatch CPU overrides.
 python -u - "$config_template" "$runtime_config" "$features" "$assay" \
-  "$parallel" "$cpu_count" "$setting_workers" "$fold_workers" "${settings[@]}" <<'PY'
+  "$parallel" "$cpu_count" "$setting_workers" "$fold_workers" "$held_out_interval" "${settings[@]}" <<'PY'
 from dataclasses import replace
 import json
 import os
@@ -215,6 +233,8 @@ try:
         device="cpu",
         num_threads=int(os.environ["OMP_NUM_THREADS"]),
     )
+    if sys.argv[9]:
+        config = replace(config, training=replace(config.training, held_out_interval=int(sys.argv[9])))
 except (OSError, ValueError, TypeError) as error:
     raise SystemExit(f"error: Invalid NKN JSON configuration {sys.argv[1]}: {error}") from error
 if config.evaluation.n_folds != 5:
@@ -236,7 +256,7 @@ execution_plan = {
     "settings": {
         setting: {"fits": 1 if setting == "single_to_double" else 5,
                   "fold_workers": 1 if setting == "single_to_double" else int(sys.argv[8])}
-        for setting in sys.argv[9:]
+        for setting in sys.argv[10:]
     },
 }
 Path(sys.argv[2]).with_name("execution_plan.json").write_text(
@@ -255,6 +275,7 @@ print(f"ProteinMPNN input policy: {config.inverse_folding_policy}")
 print(f"Mean score caches: {config.score_sources}")
 print(f"GP mean score sources: {len(config.score_sources) if config.score_sources is not None else 'cache defaults'}")
 print(f"Training: up to {config.training.max_steps} steps per initialization; seeds {config.training.seeds}")
+print(f"Held-out Spearman diagnostic interval: {config.training.held_out_interval} (0 = disabled)")
 PY
 
 printf '[1/3] Validating shared features, scores, and %s coverage\n' "$coverage"

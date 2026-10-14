@@ -120,8 +120,11 @@ class TrainingConfig:
     jitter_initial: float = 1e-6
     jitter_max: float = 1e-3
     max_train_variants: int | None = None
+    held_out_interval: int = 0
 
     def __post_init__(self):
+        if type(self.held_out_interval) is not int or self.held_out_interval < 0:
+            raise ValueError("held_out_interval must be a nonnegative integer (0 disables diagnostics)")
         for name in ("max_steps", "min_steps", "patience"):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")

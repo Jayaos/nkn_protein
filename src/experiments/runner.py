@@ -134,14 +134,37 @@ def _save_fit(fitted: FittedGP, output: Path, n_train: int) -> dict[str, Any]:
     return summary
 
 
-def _fit_with_failure_artifacts(training: FeatureBatch, config: ExperimentConfig, output: Path, progress, fit_function=None):
+def _fit_with_failure_artifacts(training: FeatureBatch, config: ExperimentConfig, output: Path,
+                                progress, fit_function=None, held_out=None):
+    diagnostic_handle = None
     try:
-        return (fit_function or fit_gp)(training, config.model, config.training, progress=progress)
+        kwargs = {}
+        callback = progress
+        if isinstance(config, ExperimentConfig) and config.training.held_out_interval:
+            kwargs["held_out"] = held_out
+            diagnostic_handle = (output / "held_out_spearman.csv").open("w", newline="", encoding="utf-8")
+            columns = ("seed", "step", "nll", "nll_per_variant", "held_out_spearman",
+                       "n_held_out", "held_out_error")
+            writer = csv.DictWriter(diagnostic_handle, fieldnames=columns)
+            writer.writeheader()
+            diagnostic_handle.flush()
+
+            def callback(event):
+                if "held_out_spearman" in event:
+                    writer.writerow({name: event[name] for name in columns})
+                    diagnostic_handle.flush()
+                if progress is not None:
+                    progress(event)
+
+        return (fit_function or fit_gp)(training, config.model, config.training, progress=callback, **kwargs)
     except NumericalError as error:
         _write_json(output / "history.json", getattr(error, "history", []))
         _write_json(output / "restart_summaries.json", getattr(error, "restart_summaries", []))
         _write_json(output / "failure.json", {"phase": "training", "error": str(error)})
         raise
+    finally:
+        if diagnostic_handle is not None:
+            diagnostic_handle.close()
 
 
 def _prediction_rows(
@@ -318,7 +341,12 @@ def _run_fold(
         if progress is not None:
             callback = lambda event: progress({**event, "fold": fold})
             callback({"event": "fold_start", "n_train": training.num_variants, "n_test": test.num_variants})
-        fitted = _fit_with_failure_artifacts(training, config, fold_output, callback, fit_function)
+        held_out = test
+        if setting in _MIXED_DEPTHS and isinstance(config, ExperimentConfig) and config.training.held_out_interval:
+            held_out = test.select(torch.nonzero(_mutation_counts(test) == _MIXED_DEPTHS[setting],
+                                                as_tuple=False).flatten())
+        fitted = _fit_with_failure_artifacts(training, config, fold_output, callback, fit_function,
+                                             held_out=held_out)
         if cancelled is not None and cancelled.is_set():
             raise CancelledError("Fold cancelled after another fold failed or the parent stopped")
         phase = "checkpoint"
@@ -665,7 +693,7 @@ def run_extrapolation(
         output / "partition_assignments.csv",
         [{"variant_id": variant_id, "partition": partition} for variant_id, partition in zip(batch.variant_ids, partitions)],
     )
-    fitted = _fit_with_failure_artifacts(training, config, output, progress, fit_function)
+    fitted = _fit_with_failure_artifacts(training, config, output, progress, fit_function, held_out=test)
     summary = _save_fit(fitted, output, training.num_variants)
     summary.update(
         {
