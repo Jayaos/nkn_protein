@@ -16,11 +16,11 @@ SCRIPT = Path("sbatch_run/run_nkn/run_nkn_assays.sbatch")
 SHARED_RUNNER = Path("sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch")
 DEFAULT_CONFIG = "configs/esm2_proteinmpnn_nkn_two_scores.json"
 ASSAYS = (
-    "TPMT_HUMAN_Matreyek_2018",
-    "RASK_HUMAN_Weng_2022_binding-DARPin_K55",
-    "FKBP3_HUMAN_Tsuboyama_2023_2KFV",
-    "DYR_ECOLI_Thompson_2019",
+    "PIN1_HUMAN_Tsuboyama_2023_1I6C",
+    "VKOR1_HUMAN_Chiasson_2020_activity",
+    "BLAT_ECOLX_Jacquier_2013",
     "A0A1I9GEU1_NEIME_Kennouche_2019",
+    "FKBP3_HUMAN_Tsuboyama_2023_2KFV",
 )
 
 
@@ -39,6 +39,7 @@ BASH = available_bash()
 
 @unittest.skipUnless(BASH, "Bash is required for Slurm array orchestration tests")
 class NknArraySbatchTests(unittest.TestCase):
+    assays = ASSAYS
     script_path = SCRIPT
     shared_runner = SHARED_RUNNER
     config_variable = "NKN_CONFIG"
@@ -104,7 +105,7 @@ class NknArraySbatchTests(unittest.TestCase):
 
     def test_all_five_tasks_select_the_requested_assay_and_default_config(self):
         self.assertIn("#SBATCH --array=0-4", self.script.read_text())
-        for index, assay in enumerate(ASSAYS):
+        for index, assay in enumerate(self.assays):
             with self.subTest(index=index):
                 result, record = self.invoke(index)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -124,7 +125,7 @@ class NknArraySbatchTests(unittest.TestCase):
                      "--held-out-interval", "100")
         result, record = self.invoke(1, *arguments, config="configs/environment config.json")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(record, {"assay": ASSAYS[1], "config": "configs/environment config.json",
+        self.assertEqual(record, {"assay": self.assays[1], "config": "configs/environment config.json",
                                   "arguments": list(arguments)})
 
     def test_empty_config_environment_uses_two_score_default(self):
@@ -137,19 +138,19 @@ class NknArraySbatchTests(unittest.TestCase):
         nested.mkdir()
         result, record = self.invoke(3, "singles", "--parallel", submit_directory=nested)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(record["assay"], ASSAYS[3])
+        self.assertEqual(record["assay"], self.assays[3])
         self.assertEqual(record["arguments"], ["singles", "--parallel"])
 
     def test_manual_execution_uses_working_directory_when_submit_directory_is_unset(self):
         result, record = self.invoke(4, submit_directory=self.root / self.script_path.parent,
                                      use_submit_directory=False)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(record["assay"], ASSAYS[4])
+        self.assertEqual(record["assay"], self.assays[4])
 
     def test_shared_runner_failure_is_propagated(self):
         result, record = self.invoke(2, runner_exit=9)
         self.assertEqual(result.returncode, 9, result.stderr)
-        self.assertEqual(record["assay"], ASSAYS[2])
+        self.assertEqual(record["assay"], self.assays[2])
 
 
 if __name__ == "__main__":

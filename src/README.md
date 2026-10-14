@@ -319,11 +319,11 @@ To run five assays as one Slurm array, submit from the repository root on the cl
 sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch
 
 # Run only FKBP3 or NEIME:
-sbatch --array=2 sbatch_run/run_nkn/run_nkn_assays.sbatch
 sbatch --array=4 sbatch_run/run_nkn/run_nkn_assays.sbatch
+sbatch --array=3 sbatch_run/run_nkn/run_nkn_assays.sbatch
 
 # Run both FKBP3 and NEIME:
-sbatch --array=2,4 sbatch_run/run_nkn/run_nkn_assays.sbatch
+sbatch --array=3,4 sbatch_run/run_nkn/run_nkn_assays.sbatch
 
 # Optionally run the 15 folds within each assay concurrently as well:
 sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch singles --parallel
@@ -336,11 +336,11 @@ The array has a fixed mapping:
 
 | Array index | Assay |
 | --- | --- |
-| 0 | `TPMT_HUMAN_Matreyek_2018` |
-| 1 | `RASK_HUMAN_Weng_2022_binding-DARPin_K55` |
-| 2 | `FKBP3_HUMAN_Tsuboyama_2023_2KFV` |
-| 3 | `DYR_ECOLI_Thompson_2019` |
-| 4 | `A0A1I9GEU1_NEIME_Kennouche_2019` |
+| 0 | `PIN1_HUMAN_Tsuboyama_2023_1I6C` |
+| 1 | `VKOR1_HUMAN_Chiasson_2020_activity` |
+| 2 | `BLAT_ECOLX_Jacquier_2013` |
+| 3 | `A0A1I9GEU1_NEIME_Kennouche_2019` |
+| 4 | `FKBP3_HUMAN_Tsuboyama_2023_2KFV` |
 
 Each task defaults to `data/features/pretrained/singles/<assay>` and
 [`configs/esm2_proteinmpnn_nkn_two_scores.json`](../configs/esm2_proteinmpnn_nkn_two_scores.json).

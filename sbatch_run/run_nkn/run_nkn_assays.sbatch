@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=nkn_assays
 #SBATCH --account=gts-yxie77-paid
-#SBATCH --array=2,4
+#SBATCH --array=0-4
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=15
@@ -27,11 +27,11 @@
 set -eo pipefail
 
 assays=(
-  "TPMT_HUMAN_Matreyek_2018"
-  "RASK_HUMAN_Weng_2022_binding-DARPin_K55"
-  "FKBP3_HUMAN_Tsuboyama_2023_2KFV"
-  "DYR_ECOLI_Thompson_2019"
+  "PIN1_HUMAN_Tsuboyama_2023_1I6C"
+  "VKOR1_HUMAN_Chiasson_2020_activity"
+  "BLAT_ECOLX_Jacquier_2013"
   "A0A1I9GEU1_NEIME_Kennouche_2019"
+  "FKBP3_HUMAN_Tsuboyama_2023_2KFV"
 )
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
