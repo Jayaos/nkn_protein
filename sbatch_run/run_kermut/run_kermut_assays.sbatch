@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=kermut_assays
 #SBATCH --account=gts-yxie77-paid
-#SBATCH --array=0-56
+#SBATCH --array=0-57
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=15
@@ -20,14 +20,15 @@
 # Resources above are per assay task. The array parallelizes assays; --parallel
 # additionally divides each task's CPUs between its settings and folds.
 # Usage: sbatch sbatch_run/run_kermut/run_kermut_assays.sbatch [singles|all|SETTING] [--config PATH] [--parallel]
-# Limit assay concurrency: sbatch --array=0-56%2 sbatch_run/run_kermut/run_kermut_assays.sbatch
+# Limit assay concurrency: sbatch --array=0-57%2 sbatch_run/run_kermut/run_kermut_assays.sbatch
 # Logs: kermut_assays-<array-job-id>_<task-index>.out in the submission directory.
 # Results: results/<assay>/kermut_esm2_proteinmpnn_<selection>_<task-job-id>/
 # Config precedence: --config PATH, KERMUT_CONFIG, then the default preset.
 set -eo pipefail
 
 # 57 assays with DMS_number_single_mutants < 1000, in catalog order,
-# matching prepare_esm2.sbatch and prepare_proteinmpnn.sbatch.
+# matching prepare_esm2.sbatch and prepare_proteinmpnn.sbatch at indices 0-56.
+# FKBP3_HUMAN_Tsuboyama_2023_2KFV is appended at index 57.
 assays=(
   "A0A1I9GEU1_NEIME_Kennouche_2019"
   "A4_HUMAN_Seuma_2022"
@@ -86,11 +87,12 @@ assays=(
   "YAIA_ECOLI_Tsuboyama_2023_2KVT"
   "YAP1_HUMAN_Araya_2012"
   "YNZC_BACSU_Tsuboyama_2023_2JVD"
+  "FKBP3_HUMAN_Tsuboyama_2023_2KFV"
 )
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'Usage: sbatch sbatch_run/run_kermut/run_kermut_assays.sbatch [singles|all|SETTING] [--config PATH] [--parallel]\n'
-  printf 'Default array: 0-56; each task runs one assay with both GP mean scores.\n'
+  printf 'Default array: 0-57; each task runs one assay with both GP mean scores.\n'
   for index in "${!assays[@]}"; do
     printf '  %s: %s\n' "$index" "${assays[$index]}"
   done
@@ -99,9 +101,9 @@ fi
 
 task_index="${SLURM_ARRAY_TASK_ID:-}"
 case "$task_index" in
-  [0-9]|[1-4][0-9]|5[0-6]) ;;
+  [0-9]|[1-4][0-9]|5[0-7]) ;;
   *)
-    printf 'error: SLURM_ARRAY_TASK_ID must be 0-56 (got "%s"). Submit this script with sbatch; its default array is 0-56.\n' "$task_index" >&2
+    printf 'error: SLURM_ARRAY_TASK_ID must be 0-57 (got "%s"). Submit this script with sbatch; its default array is 0-57.\n' "$task_index" >&2
     exit 1 ;;
 esac
 
