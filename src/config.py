@@ -108,7 +108,7 @@ class ModelConfig:
 class TrainingConfig:
     max_steps: int = 5000
     min_steps: int = 1000
-    patience: int = 500
+    patience: int = 100
     tolerance: float = 1e-4
     learning_rate: float = 1e-3
     betas: tuple = (0.9, 0.999)

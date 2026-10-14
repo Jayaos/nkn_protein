@@ -60,7 +60,7 @@ synthetic, while its labels are real. The pipeline tests use small synthetic
 inputs and explicit fold assignments for integration checks.
 
 Without `--config`, training uses the project's 5,000-step maximum, 1,000-step
-minimum before early stopping, 500-step comparison window, and one initialization
+minimum before early stopping, 100-step comparison window, and one initialization
 per training split.
 Device defaults to CPU. Use `--device cuda` with a suitable PyTorch installation.
 The experiment CLI consumes saved features. The separate feature-generation

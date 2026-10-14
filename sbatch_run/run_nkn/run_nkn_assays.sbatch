@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=nkn_assays
 #SBATCH --account=gts-yxie77-paid
-#SBATCH --array=0-4
+#SBATCH --array=2,4
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=15
