@@ -28,7 +28,7 @@
 # Diagnostics are off by default; 0 disables them. They never select checkpoints.
 # Add --stopping-criterion validation_spearman for three train / one validation /
 # one test folds (singles CV only). Default remains training_nll.
-# --validation-interval 100 --patience 100 --min-steps 0 are the defaults.
+# --validation-interval 100 --patience 100 --min-steps 1000 are the defaults.
 # To run all 15 singles folds concurrently, with one CPU thread per fold:
 #   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles --parallel
 # Without --parallel, settings and folds run sequentially using all allocated CPUs.
@@ -131,7 +131,7 @@ while [[ $# -gt 0 ]]; do
       printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
       printf 'Diagnostic example: --held-out-interval 100 (0 disables; overrides training.held_out_interval in JSON)\n'
       printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'
-      printf 'NKN overrides: --validation-interval 100 --patience 100 --min-steps 0 (optimizer steps)\n'
+      printf 'NKN overrides: --validation-interval 100 --patience 100 --min-steps 1000 (optimizer steps)\n'
       printf 'Config precedence: --config, NKN_CONFIG, configs/esm2_proteinmpnn_nkn.json\n'
       printf 'Parallel example: sbatch %s singles --parallel\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
       exit 0 ;;

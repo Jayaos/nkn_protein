@@ -21,7 +21,7 @@
 # Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]
 # Add --held-out-interval 100 to record diagnostic Spearman every 100 updates.
 # Add --stopping-criterion validation_spearman for three train / one validation /
-# one test folds. --validation-interval 100 --patience 100 --min-steps 0 are defaults.
+# one test folds. --validation-interval 100 --patience 100 --min-steps 1000 are defaults.
 # Limit assay concurrency: sbatch --array=0-4%2 sbatch_run/run_nkn/run_nkn_assays.sbatch
 # Logs: nkn_assays-<array-job-id>_<task-index>.out in the submission directory.
 # Results: results/<assay>/nkn_esm2_proteinmpnn_<selection>_<task-job-id>/
@@ -40,7 +40,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n'
   printf 'Default array: 0-4; each task runs one assay with both GP mean scores.\n'
   printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'
-  printf 'Overrides: --validation-interval 100 --patience 100 --min-steps 0 (optimizer steps)\n'
+  printf 'Overrides: --validation-interval 100 --patience 100 --min-steps 1000 (optimizer steps)\n'
   for index in "${!assays[@]}"; do
     printf '  %s: %s\n' "$index" "${assays[$index]}"
   done
