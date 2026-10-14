@@ -24,11 +24,11 @@
 # Other assays require complete structures; long inputs still need sufficient GPU memory.
 # Variant scoring uses one sequence per batch to reduce peak GPU memory.
 # Submit: sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
-# Process only PIN1_HUMAN_Tsuboyama_2023_1I6C, VKOR1_HUMAN_Chiasson_2020_activity, and
-# BLAT_ECOLX_Jacquier_2013, in that order.
+# Process the 57 assays with DMS_number_single_mutants < 1000 in
+# raw_substitutions/DMS_substitutions.csv, in catalog order (listed below).
 # Select single mutants only, saved under data/features/pretrained/singles/.
-# An optional --array=0-2 selects PIN1 at index 0, VKOR1 at 1, and BLAT at 2.
-# Without an array, all three assays run in this job.
+# An optional --array=0-56 selects one assay per task in the order below.
+# Without an array, all 57 assays run in this job.
 # Failed assays are reported without stopping the remaining assays or stages.
 # Submission from a repository subdirectory is also supported; logs go to the
 # submission directory. Slurm spools this script, so its own path is not used.
@@ -66,9 +66,63 @@ feature_config="configs/extraction/proteinmpnn_v48_020_kermut.json"
 score_config="configs/extraction/proteinmpnn_v48_020.json"
 selection_args=(
   --config "$feature_config"
-  --assay PIN1_HUMAN_Tsuboyama_2023_1I6C
-  --assay VKOR1_HUMAN_Chiasson_2020_activity
+  --assay A0A1I9GEU1_NEIME_Kennouche_2019
+  --assay A4_HUMAN_Seuma_2022
+  --assay AICDA_HUMAN_Gajula_2014_3cycles
+  --assay AMFR_HUMAN_Tsuboyama_2023_4G3O
+  --assay B2L11_HUMAN_Dutta_2010_binding-Mcl-1
+  --assay BCHB_CHLTE_Tsuboyama_2023_2KRU
   --assay BLAT_ECOLX_Jacquier_2013
+  --assay BRCA2_HUMAN_Erwood_2022_HEK293T
+  --assay CAPSD_AAV2S_Sinai_2021
+  --assay CBX4_HUMAN_Tsuboyama_2023_2K28
+  --assay CUE1_YEAST_Tsuboyama_2023_2MYX
+  --assay ENV_HV1B9_DuenasDecamp_2016
+  --assay ERBB2_HUMAN_Elazar_2016
+  --assay F7YBW8_MESOW_Ding_2023
+  --assay F7YBW8_MESOW_Aakre_2015
+  --assay GCN4_YEAST_Staller_2018
+  --assay GLPA_HUMAN_Elazar_2016
+  --assay HIS7_YEAST_Pokusaeva_2019
+  --assay ISDH_STAAW_Tsuboyama_2023_2LHR
+  --assay KCNH2_HUMAN_Kozek_2020
+  --assay LYAM1_HUMAN_Elazar_2016
+  --assay MAFG_MOUSE_Tsuboyama_2023_1K1V
+  --assay MYO3_YEAST_Tsuboyama_2023_2BTT
+  --assay NPC1_HUMAN_Erwood_2022_HEK293T
+  --assay NPC1_HUMAN_Erwood_2022_RPE1
+  --assay NRAM_I33A0_Jiang_2016
+  --assay ODP2_GEOSE_Tsuboyama_2023_1W4G
+  --assay OPSD_HUMAN_Wan_2019
+  --assay OTU7A_HUMAN_Tsuboyama_2023_2L2D
+  --assay PIN1_HUMAN_Tsuboyama_2023_1I6C
+  --assay PITX2_HUMAN_Tsuboyama_2023_2L7M
+  --assay POLG_PESV_Tsuboyama_2023_2MXD
+  --assay Q837P4_ENTFA_Meier_2023
+  --assay Q837P5_ENTFA_Meier_2023
+  --assay RAD_ANTMA_Tsuboyama_2023_2CJJ
+  --assay RAF1_HUMAN_Zinkus-Boltz_2019
+  --assay RBP1_HUMAN_Tsuboyama_2023_2KWH
+  --assay RCD1_ARATH_Tsuboyama_2023_5OAO
+  --assay RD23A_HUMAN_Tsuboyama_2023_1IFY
+  --assay RFAH_ECOLI_Tsuboyama_2023_2LCL
+  --assay RPC1_LAMBD_Li_2019_high-expression
+  --assay RPC1_LAMBD_Li_2019_low-expression
+  --assay SAV1_MOUSE_Tsuboyama_2023_2YSB
+  --assay SCN5A_HUMAN_Glazer_2019
+  --assay SDA_BACSU_Tsuboyama_2023_1PV0
+  --assay SPG1_STRSG_Wu_2016
+  --assay SQSTM_MOUSE_Tsuboyama_2023_2RRU
+  --assay SR43C_ARATH_Tsuboyama_2023_2N88
+  --assay TCRG1_MOUSE_Tsuboyama_2023_1E0L
+  --assay THO1_YEAST_Tsuboyama_2023_2WQG
+  --assay TPOR_HUMAN_Bridgford_2020
+  --assay UBE4B_MOUSE_Starita_2013
+  --assay VG08_BPP22_Tsuboyama_2023_2GP8
+  --assay VKOR1_HUMAN_Chiasson_2020_activity
+  --assay YAIA_ECOLI_Tsuboyama_2023_2KVT
+  --assay YAP1_HUMAN_Araya_2012
+  --assay YNZC_BACSU_Tsuboyama_2023_2JVD
 )
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
   selection_args+=(--task-index "$SLURM_ARRAY_TASK_ID")
