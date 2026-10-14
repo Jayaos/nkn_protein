@@ -98,8 +98,8 @@ sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch
 sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
 ```
 
-Both jobs prepare only `DYR_ECOLI_Thompson_2019`,
-`TPMT_HUMAN_Matreyek_2018`, then `RASK_HUMAN_Weng_2022_binding-DARPin_K55`.
+Both jobs prepare only `PIN1_HUMAN_Tsuboyama_2023_1I6C`,
+`VKOR1_HUMAN_Chiasson_2020_activity`, then `BLAT_ECOLX_Jacquier_2013`.
 Optional `--array=0-2` selects one of those
 assays per task. They pass `--singles-only` for extraction and scoring and save to
 `data/features/pretrained/singles/<assay>/`, reusing each single mutant's outputs

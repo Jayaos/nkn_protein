@@ -26,10 +26,10 @@
 # Select a different preset with --config PATH or ESM2_CONFIG=PATH; --config wins.
 # Paths use the repository root. For Kermut's prefix-averaged embeddings, use
 # --config configs/extraction/esm2_650m.json (a separate cache recipe).
-# Process only DYR_ECOLI_Thompson_2019, TPMT_HUMAN_Matreyek_2018, and
-# RASK_HUMAN_Weng_2022_binding-DARPin_K55, in that order.
+# Process only PIN1_HUMAN_Tsuboyama_2023_1I6C, VKOR1_HUMAN_Chiasson_2020_activity, and
+# BLAT_ECOLX_Jacquier_2013, in that order.
 # Extract and score only single mutants, saved under data/features/pretrained/singles/.
-# An optional --array=0-2 selects DYR at index 0, TPMT at 1, and RASK at 2.
+# An optional --array=0-2 selects PIN1 at index 0, VKOR1 at 1, and BLAT at 2.
 # Without an array, all three assays run in this job.
 # Submission from a repository subdirectory is also supported; logs go to the
 # submission directory. Slurm spools this script, so its own path is not used.
@@ -98,9 +98,9 @@ max_tokens_per_batch=8192
 
 selection_args=(
   --config "$config"
-  --assay DYR_ECOLI_Thompson_2019
-  --assay TPMT_HUMAN_Matreyek_2018
-  --assay RASK_HUMAN_Weng_2022_binding-DARPin_K55
+  --assay PIN1_HUMAN_Tsuboyama_2023_1I6C
+  --assay VKOR1_HUMAN_Chiasson_2020_activity
+  --assay BLAT_ECOLX_Jacquier_2013
 )
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
   selection_args+=(--task-index "$SLURM_ARRAY_TASK_ID")

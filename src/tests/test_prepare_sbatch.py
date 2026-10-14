@@ -17,8 +17,8 @@ PREPARATION = Path("sbatch_run/run_prepare_rep")
 CONFIGS = ("esm2_650m.json", "esm2_650m_residue.json", "esm2_650m_centered.json",
            "proteinmpnn_v48_020_kermut.json", "proteinmpnn_v48_020.json")
 SCRIPTS = ("prepare_esm2.sbatch", "prepare_proteinmpnn.sbatch")
-SELECTED_ASSAYS = ["DYR_ECOLI_Thompson_2019", "TPMT_HUMAN_Matreyek_2018",
-                   "RASK_HUMAN_Weng_2022_binding-DARPin_K55"]
+SELECTED_ASSAYS = ["PIN1_HUMAN_Tsuboyama_2023_1I6C", "VKOR1_HUMAN_Chiasson_2020_activity",
+                   "BLAT_ECOLX_Jacquier_2013"]
 ASSAYS = [SELECTED_ASSAYS[1], "protein_Z_assay_1", SELECTED_ASSAYS[2],
           SELECTED_ASSAYS[0], "protein_Z_assay_2"]
 

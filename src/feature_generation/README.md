@@ -344,8 +344,8 @@ needed: the verified safetensors checkpoint already contains the MLM head.
 
 `prepare_esm2.sbatch` downloads/verifies ESM2 650M and then runs both layer-33
 embedding extraction and scoring with `--singles-only` for only
-`DYR_ECOLI_Thompson_2019`, `TPMT_HUMAN_Matreyek_2018`, and
-`RASK_HUMAN_Weng_2022_binding-DARPin_K55`, in that order, using the configured
+`PIN1_HUMAN_Tsuboyama_2023_1I6C`, `VKOR1_HUMAN_Chiasson_2020_activity`, and
+`BLAT_ECOLX_Jacquier_2013`, in that order, using the configured
 `raw_substitutions/DMS_substitutions.csv` catalog.
 Its default
 `configs/extraction/esm2_650m_centered.json` saves centered mutation-site vectors
@@ -490,9 +490,9 @@ Official scoring sources: [ProteinMPNN sequence scoring](https://github.com/daup
 
 Both preparation scripts select only these assays, in this order:
 
-1. `DYR_ECOLI_Thompson_2019`
-2. `TPMT_HUMAN_Matreyek_2018`
-3. `RASK_HUMAN_Weng_2022_binding-DARPin_K55`
+1. `PIN1_HUMAN_Tsuboyama_2023_1I6C`
+2. `VKOR1_HUMAN_Chiasson_2020_activity`
+3. `BLAT_ECOLX_Jacquier_2013`
 
 `DMS_substitutions.csv` supplies metadata; it is not itself a variant assay.
 Each selected catalog entry must have its corresponding
@@ -516,17 +516,17 @@ These are standard [Slurm array options](https://slurm.schedmd.com/job_array.htm
 Each task retains the script's one-hour time limit and resource request. Increase
 the time limit with `sbatch --time=...` when an individual assay needs longer.
 
-Task indices `0`, `1`, and `2` select DYR, TPMT, and RASK, respectively; indices refer to
+Task indices `0`, `1`, and `2` select PIN1, VKOR1, and BLAT, respectively; indices refer to
 the selected list, not raw catalog row numbers. The listing helper accepts
 repeatable `--assay` filters to match this selection (and needs only the Python
-standard library). To confirm the count or rerun TPMT:
+standard library). To confirm the count or rerun VKOR1:
 
 ```bash
 python sbatch_run/run_prepare_rep/list_assays.py \
   --config configs/extraction/esm2_650m_centered.json \
-  --assay DYR_ECOLI_Thompson_2019 \
-  --assay TPMT_HUMAN_Matreyek_2018 \
-  --assay RASK_HUMAN_Weng_2022_binding-DARPin_K55 --count
+  --assay PIN1_HUMAN_Tsuboyama_2023_1I6C \
+  --assay VKOR1_HUMAN_Chiasson_2020_activity \
+  --assay BLAT_ECOLX_Jacquier_2013 --count
 sbatch --array=1 sbatch_run/run_prepare_rep/prepare_esm2.sbatch
 ```
 
