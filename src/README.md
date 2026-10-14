@@ -59,7 +59,7 @@ The validation example's cached representations and zero-shot scores are
 synthetic, while its labels are real. The pipeline tests use small synthetic
 inputs and explicit fold assignments for integration checks.
 
-Without `--config`, training uses the project's 5,000-step maximum, 1,000-step
+Without `--config`, training uses the project's 5,000-step maximum, zero-step
 minimum before early stopping, 100-step comparison window, and one initialization
 per training split.
 Device defaults to CPU. Use `--device cuda` with a suitable PyTorch installation.
@@ -423,6 +423,57 @@ recorded in the batch manifest; neither changes published CV folds. Relative pat
 root. The former positional `cv`/`fit` modes and `FOLDS_CSV` variable are rejected.
 Existing pretrained features and scores are reused without extraction.
 
+### Optional validation-Spearman stopping
+
+The default `training_nll` mode trains on four folds and selects checkpoints and
+restarts by training marginal NLL. To use three training folds, one validation
+fold, and one outer test fold, submit:
+
+```bash
+sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch singles --parallel --stopping-criterion validation_spearman
+```
+
+The same flags work with `run_nkn_esm2_proteinmpnn.sbatch` and the direct NKN
+`experiments.cli cv` command. This option supports five-fold `singles_random`,
+`singles_modulo`, and `singles_contiguous` CV. For outer test fold `k`, validation
+uses fold `(k + 1) % 5`; the other three folds train the model. Supplied fold
+assignments are preserved, so a position never crosses partitions in positional
+schemes. This trains on about 60% of variants, validates on 20%, and tests on 20%.
+
+Training still optimizes marginal NLL. Target/score standardization and kernel
+initialization use only the three training folds. Validation labels select the
+checkpoint and restart with the highest validation Spearman; outer test labels
+never select models. No refit on the validation fold is performed.
+
+Defaults are `--validation-interval 100 --patience 100 --min-steps 0`.
+Validation evaluates step 0, every interval, and the final maximum step if it
+falls between intervals. Step 0 is eligible for selection. Patience counts
+**optimizer steps**, not checks: with both interval and patience set to 100,
+one evaluation without a strictly higher score stops training. Ties keep the
+earlier checkpoint and do not reset patience. Stopping is checked only at
+validation evaluations, after `min_steps`; checkpoint selection starts at step 0
+even with a later minimum. The highest-scoring checkpoint is restored. The NLL
+`tolerance` setting is unused in validation mode. Constant validation targets or
+runs with no defined validation score fail explicitly rather than reverting to NLL.
+
+These CLI flags override the corresponding `training` JSON fields:
+`stopping_criterion`, `validation_interval`, `patience`, and `min_steps`.
+The default minimum is now 0 in both modes and both NKN presets. To reproduce
+the previous four-fold training scheme with its 1,000-step minimum:
+
+```bash
+sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch singles --parallel --stopping-criterion training_nll --min-steps 1000
+```
+
+Each validation-mode fold records `partition_assignments.csv`,
+`partition_summary.json`, and a streamed `validation_spearman.csv`.
+`fit_summary.json`, restart summaries, and checkpoints record the selected step,
+best validation Spearman, and training NLL at the selected checkpoint.
+`best_nll_per_variant` remains the lowest training NLL reached by the selected
+restart and can differ from `selected_nll_per_variant` in validation mode.
+Validation scores are also saved in `history.json` and shown in progress logs.
+Serial and parallel folds use the same partition and selection rules.
+
 ### Optional held-out Spearman diagnostics
 
 Add `--held-out-interval 100` after either NKN sbatch script name to record
@@ -454,7 +505,8 @@ have undefined Spearman, saved as an empty CSV cell / JSON `null`. Numerical
 diagnostic failures are recorded in `held_out_error` without rejecting the fit.
 Only predictive means are computed for diagnostics, but enabling them adds
 prediction time. Held-out scores never change gradients, early stopping,
-checkpoint selection, or restart selection; those continue to use training NLL.
+checkpoint selection, or restart selection. Those use training NLL by default,
+or the separate validation partition in `validation_spearman` mode.
 The final selected checkpoint may differ from the last diagnostic step.
 
 ### Parallel CPU folds
@@ -509,7 +561,10 @@ training, enabled-kernel, and evaluation hyperparameters:
 | `structure_manifest_dir` | Directory of `<assay_id>.json` reference structure manifests for `structure_distance`; relative paths resolve from the repository root |
 | `training.learning_rate`, `training.betas`, `training.epsilon` | Adam optimizer settings |
 | `training.max_steps` | Maximum optimizer updates per initialization |
-| `training.min_steps`, `training.patience`, `training.tolerance` | Earliest stopping step, improvement window, and minimum improvement in NLL per variant |
+| `training.stopping_criterion` | `training_nll` (default) or `validation_spearman` (five-fold singles CV) |
+| `training.min_steps`, `training.patience` | Earliest stopping step (default `0`) and patience in optimizer steps (default `100`) |
+| `training.tolerance` | Minimum improvement in NLL per variant over the patience window; used only by `training_nll` |
+| `training.validation_interval` | Validation-Spearman evaluation interval in optimizer steps (default `100`) |
 | `training.held_out_interval` | NKN diagnostic Spearman interval in optimizer steps; `0` disables it (default) |
 | `training.seeds`, `training.lengthscale_multipliers` | Paired initialization settings; keep `[0]` and `[1.0]` for one initialization |
 | `training.noise_initial`, `training.noise_floor` | Initial observation-noise variance and its positive lower bound |

@@ -75,6 +75,10 @@ def _mutation_counts(batch: FeatureBatch) -> Tensor:
     return torch.bincount(batch.owners, minlength=batch.num_variants)
 
 
+def _uses_validation(config):
+    return isinstance(config, ExperimentConfig) and config.training.stopping_criterion == "validation_spearman"
+
+
 def _validate_fold_assignments(batch: FeatureBatch, folds: Tensor, config: ExperimentConfig, scheme: str) -> Tensor:
     if scheme not in ("random", "modulo", "contiguous", "random_multiples"):
         raise ValueError(f"Unknown splitting scheme: {scheme}")
@@ -96,6 +100,16 @@ def _validate_fold_assignments(batch: FeatureBatch, folds: Tensor, config: Exper
         for position in positions.unique():
             if result[positions == position].unique().numel() != 1:
                 raise ValueError("A mutation position occurs in multiple positional folds")
+    if _uses_validation(config):
+        if config.evaluation.n_folds != 5 or scheme == "random_multiples" or not bool((_mutation_counts(batch) == 1).all()):
+            raise ValueError("validation_spearman requires five-fold single-substitution CV (three train, one validation, one test)")
+        for fold in expected:
+            validation_fold = (fold + 1) % 5
+            if int(((result != fold) & (result != validation_fold)).sum()) < 2:
+                raise ValueError("Every three-fold training partition must contain at least two variants")
+            labels = None if batch.targets is None else batch.targets[result.to(batch.targets.device) == validation_fold]
+            if labels is None or len(labels) < 2 or not torch.isfinite(labels).all() or labels.unique().numel() < 2:
+                raise ValueError(f"Validation fold {validation_fold} requires at least two finite, nonconstant targets")
     return result
 
 
@@ -135,36 +149,46 @@ def _save_fit(fitted: FittedGP, output: Path, n_train: int) -> dict[str, Any]:
 
 
 def _fit_with_failure_artifacts(training: FeatureBatch, config: ExperimentConfig, output: Path,
-                                progress, fit_function=None, held_out=None):
-    diagnostic_handle = None
+                                progress, fit_function=None, held_out=None, validation=None):
+    diagnostic_handles = []
     try:
         kwargs = {}
-        callback = progress
+        streams = []
         if isinstance(config, ExperimentConfig) and config.training.held_out_interval:
             kwargs["held_out"] = held_out
-            diagnostic_handle = (output / "held_out_spearman.csv").open("w", newline="", encoding="utf-8")
-            columns = ("seed", "step", "nll", "nll_per_variant", "held_out_spearman",
-                       "n_held_out", "held_out_error")
-            writer = csv.DictWriter(diagnostic_handle, fieldnames=columns)
+            streams.append(("held_out_spearman", ("seed", "step", "nll", "nll_per_variant",
+                                                 "held_out_spearman", "n_held_out", "held_out_error")))
+        if _uses_validation(config):
+            kwargs["validation"] = validation
+            streams.append(("validation_spearman", ("seed", "step", "nll", "nll_per_variant",
+                                                   "validation_spearman", "best_validation_spearman", "n_validation")))
+        writers = []
+        for metric, columns in streams:
+            handle = (output / f"{metric}.csv").open("w", newline="", encoding="utf-8")
+            diagnostic_handles.append(handle)
+            writer = csv.DictWriter(handle, fieldnames=columns)
             writer.writeheader()
-            diagnostic_handle.flush()
+            handle.flush()
+            writers.append((metric, columns, writer, handle))
 
-            def callback(event):
-                if "held_out_spearman" in event:
+        def callback(event):
+            for metric, columns, writer, handle in writers:
+                if metric in event:
                     writer.writerow({name: event[name] for name in columns})
-                    diagnostic_handle.flush()
-                if progress is not None:
-                    progress(event)
+                    handle.flush()
+            if progress is not None:
+                progress(event)
 
-        return (fit_function or fit_gp)(training, config.model, config.training, progress=callback, **kwargs)
+        return (fit_function or fit_gp)(training, config.model, config.training,
+                                       progress=callback if writers else progress, **kwargs)
     except NumericalError as error:
         _write_json(output / "history.json", getattr(error, "history", []))
         _write_json(output / "restart_summaries.json", getattr(error, "restart_summaries", []))
         _write_json(output / "failure.json", {"phase": "training", "error": str(error)})
         raise
     finally:
-        if diagnostic_handle is not None:
-            diagnostic_handle.close()
+        for handle in diagnostic_handles:
+            handle.close()
 
 
 def _prediction_rows(
@@ -332,21 +356,39 @@ def _run_fold(
     cancelled=None,
 ):
     """Fit and evaluate one fold without exporting its model or covariances."""
-    training = batch.select(torch.nonzero(folds != fold, as_tuple=False).flatten())
+    training_mask = folds != fold
+    validation, validation_fold = None, None
+    if _uses_validation(config):
+        validation_fold = (fold + 1) % config.evaluation.n_folds
+        training_mask &= folds != validation_fold
+        validation = batch.select(torch.nonzero(folds == validation_fold, as_tuple=False).flatten())
+    training = batch.select(torch.nonzero(training_mask, as_tuple=False).flatten())
     test = batch.select(torch.nonzero(folds == fold, as_tuple=False).flatten())
     fold_output = prepare_output(output / f"fold_{fold}", config)
+    if validation is not None:
+        _write_csv(fold_output / "partition_assignments.csv", [
+            {"variant_id": variant_id, "fold": assigned,
+             "partition": "test" if assigned == fold else "validation" if assigned == validation_fold else "train"}
+            for variant_id, assigned in zip(batch.variant_ids, folds.tolist())
+        ])
+        _write_json(fold_output / "partition_summary.json", {
+            "test_fold": fold, "validation_fold": validation_fold,
+            "training_folds": [i for i in range(config.evaluation.n_folds) if i not in (fold, validation_fold)],
+            "n_train": training.num_variants, "n_validation": validation.num_variants, "n_test": test.num_variants,
+        })
     phase = "training"
     try:
         callback = None
         if progress is not None:
             callback = lambda event: progress({**event, "fold": fold})
-            callback({"event": "fold_start", "n_train": training.num_variants, "n_test": test.num_variants})
+            callback({"event": "fold_start", "n_train": training.num_variants, "n_test": test.num_variants,
+                      "n_validation": 0 if validation is None else validation.num_variants})
         held_out = test
         if setting in _MIXED_DEPTHS and isinstance(config, ExperimentConfig) and config.training.held_out_interval:
             held_out = test.select(torch.nonzero(_mutation_counts(test) == _MIXED_DEPTHS[setting],
                                                 as_tuple=False).flatten())
         fitted = _fit_with_failure_artifacts(training, config, fold_output, callback, fit_function,
-                                             held_out=held_out)
+                                             held_out=held_out, validation=validation)
         if cancelled is not None and cancelled.is_set():
             raise CancelledError("Fold cancelled after another fold failed or the parent stopped")
         phase = "checkpoint"
@@ -660,6 +702,8 @@ def run_extrapolation(
     """
     config = _resolve_assay_config(batch, config)
     _require_targets(batch)
+    if _uses_validation(config):
+        raise ValueError("validation_spearman requires five-fold singles CV; single_to_double is not supported")
     if (
         isinstance(sample_ratio, bool) or not isinstance(sample_ratio, (int, float))
         or not math.isfinite(sample_ratio) or not 0 < sample_ratio <= 1

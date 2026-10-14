@@ -1,4 +1,4 @@
-"""Training-only restart selection, checkpointing, and label-free prediction."""
+"""Configurable checkpoint selection and label-free prediction."""
 
 from dataclasses import dataclass, replace
 import json
@@ -94,6 +94,19 @@ class FittedGP:
     best_nll_per_variant: float
     history: list
     restart_summaries: list
+    best_validation_spearman: float | None = None
+    selected_step: int | None = None
+    selected_nll_per_variant: float | None = None
+
+    def fit_summary(self, n_train):
+        return {
+            "n_train": n_train, "selected_seed": self.selected_seed,
+            "stopping_criterion": self.training_config.stopping_criterion,
+            "best_nll_per_variant": self.best_nll_per_variant,
+            "best_validation_spearman": self.best_validation_spearman,
+            "selected_step": self.selected_step,
+            "selected_nll_per_variant": self.selected_nll_per_variant,
+        }
 
     @torch.no_grad()
     def predict(self, test):
@@ -123,7 +136,10 @@ class FittedGP:
                     "train": _batch_state(self.train), "standardized_targets": self.standardized_targets.detach().cpu(),
                     "transform": self.transform.state_dict(), "selected_seed": self.selected_seed,
                     "best_nll_per_variant": self.best_nll_per_variant, "history": self.history,
-                    "restart_summaries": self.restart_summaries}, path)
+                    "restart_summaries": self.restart_summaries,
+                    "best_validation_spearman": self.best_validation_spearman,
+                    "selected_step": self.selected_step,
+                    "selected_nll_per_variant": self.selected_nll_per_variant}, path)
 
     @classmethod
     def load(cls, path, device="cpu"):
@@ -141,16 +157,35 @@ class FittedGP:
         model.eval()
         return cls(model, train, state["standardized_targets"].to(device=device, dtype=torch.float64),
                    FoldTransform.from_state_dict(state["transform"], device), model_config, training_config,
-                   state["selected_seed"], state["best_nll_per_variant"], state["history"], state["restart_summaries"])
+                   state["selected_seed"], state["best_nll_per_variant"], state["history"], state["restart_summaries"],
+                   state.get("best_validation_spearman"), state.get("selected_step"),
+                   state.get("selected_nll_per_variant"))
 
 
-def fit_gp(batch, model_config=None, training_config=None, progress=None, *, held_out=None):
+def fit_gp(batch, model_config=None, training_config=None, progress=None, *, held_out=None, validation=None):
     model_config, cfg = model_config or ModelConfig(), training_config or TrainingConfig()
     if cfg.max_train_variants is not None and batch.num_variants > cfg.max_train_variants:
         raise ValueError(f"{batch.num_variants} training variants exceed configured dense-GP limit {cfg.max_train_variants}")
     batch = _freeze_batch(batch.to(batch.scores.device))
     transform = FoldTransform.fit(batch)
     train, y = transform.apply(batch), transform.standardize_targets(batch.targets)
+    use_validation = cfg.stopping_criterion == "validation_spearman"
+    validation_batch = None
+    if use_validation:
+        if validation is None or validation.targets is None:
+            raise ValueError("validation_spearman requires a separate validation batch with observed targets")
+        if (validation.assay_id != train.assay_id
+                or validation.reference_sequence != train.reference_sequence
+                or tuple(validation.score_names) != tuple(train.score_names)
+                or validation.feature_signature != train.feature_signature):
+            raise ValueError("Validation assay, reference, scorers, and feature sources must match training")
+        if set(validation.variant_ids) & set(train.variant_ids):
+            raise ValueError("Validation variants must not overlap training variants")
+        if (validation.num_variants < 2 or not torch.isfinite(validation.targets).all()
+                or validation.targets.unique().numel() < 2):
+            raise ValueError("Validation Spearman requires at least two finite, nonconstant targets")
+        validation_targets = validation.targets.detach().clone()
+        validation_batch = transform.apply(_freeze_batch(replace(validation, targets=None).to(batch.scores.device)))
     diagnostic_batch = None
     if cfg.held_out_interval:
         if held_out is None or held_out.targets is None:
@@ -162,6 +197,8 @@ def fit_gp(batch, model_config=None, training_config=None, progress=None, *, hel
             raise ValueError("Held-out assay, reference, scorers, and feature sources must match training")
         if set(held_out.variant_ids) & set(train.variant_ids):
             raise ValueError("Held-out diagnostic variants must not overlap training variants")
+        if use_validation and set(held_out.variant_ids) & set(validation.variant_ids):
+            raise ValueError("Held-out diagnostic variants must not overlap validation variants")
         if not torch.isfinite(held_out.targets).all():
             raise ValueError("Held-out diagnostic targets must be finite")
         diagnostic_targets = held_out.targets.detach().clone()
@@ -171,6 +208,7 @@ def fit_gp(batch, model_config=None, training_config=None, progress=None, *, hel
     devices = [device.index or 0] if device.type == "cuda" else []
     for seed, multiplier in zip(cfg.seeds, cfg.lengthscale_multipliers):
         best_loss, best_state, best_step, best_jitter = math.inf, None, None, None
+        best_validation, selected_loss, last_validation_improvement = None, None, 0
         running_best, status, failure = [], "complete", None
         try:
             with torch.random.fork_rng(devices=devices):
@@ -192,12 +230,27 @@ def fit_gp(batch, model_config=None, training_config=None, progress=None, *, hel
                 if not math.isfinite(value):
                     raise NumericalError("Nonfinite training marginal likelihood")
                 if value < best_loss:
-                    best_loss, best_state, best_step, best_jitter = value, _parameter_state(model), step, jitter
+                    best_loss = value
+                    if not use_validation:
+                        best_state, best_step, best_jitter, selected_loss = _parameter_state(model), step, jitter, value
                 row = {"seed": seed, "step": step, "nll": float(total.detach()), "nll_per_variant": value,
                        "best_nll_per_variant": best_loss, "jitter": jitter}
                 running_best.append(best_loss)
-                early_stop = (step >= cfg.min_steps and step >= cfg.patience
+                early_stop = (not use_validation and step >= cfg.min_steps and step >= cfg.patience
                               and running_best[step - cfg.patience] - best_loss < cfg.tolerance)
+                if use_validation and (step % cfg.validation_interval == 0 or step == cfg.max_steps):
+                    with torch.no_grad():
+                        mean = model.posterior_mean(train, y, validation_batch)
+                        if not torch.isfinite(mean).all():
+                            raise NumericalError("Nonfinite validation predictive mean")
+                        score = spearman(validation_targets, mean)
+                    if score is not None and (best_validation is None or score > best_validation):
+                        best_validation, last_validation_improvement = score, step
+                        best_state, best_step, best_jitter, selected_loss = _parameter_state(model), step, jitter, value
+                    row.update(validation_spearman=score, best_validation_spearman=best_validation,
+                               n_validation=validation_batch.num_variants)
+                    early_stop = (step >= cfg.min_steps and step > 0
+                                  and step - last_validation_improvement >= cfg.patience)
                 if diagnostic_batch is not None and (step % cfg.held_out_interval == 0
                                                       or early_stop or step == cfg.max_steps):
                     row.update(held_out_spearman=None, n_held_out=diagnostic_batch.num_variants,
@@ -225,21 +278,28 @@ def fit_gp(batch, model_config=None, training_config=None, progress=None, *, hel
                 if any(p.grad is not None and not torch.isfinite(p.grad).all() for p in model.parameters()):
                     raise NumericalError("Nonfinite parameter gradients")
                 optimizer.step()
+            if use_validation and best_state is None:
+                raise NumericalError("No defined validation Spearman was observed; no checkpoint can be selected")
         except NumericalError as error:
             status, failure = "failed", str(error)
         summary = {"seed": seed, "lengthscale_multiplier": multiplier, "status": status,
                    "best_step": best_step, "best_nll_per_variant": best_loss if math.isfinite(best_loss) else None,
+                   "stopping_criterion": cfg.stopping_criterion,
+                   "best_validation_spearman": best_validation,
+                   "selected_nll_per_variant": selected_loss,
                    "jitter_at_best": best_jitter, "failure": failure}
         summaries.append(summary)
         # A failed run is unsuccessful even when an earlier checkpoint was finite.
-        if status != "failed" and best_state is not None and (winner is None or best_loss < winner[0]):
-            winner = (best_loss, best_state, seed, model)
+        selection_loss = -best_validation if use_validation and best_validation is not None else best_loss
+        if status != "failed" and best_state is not None and (winner is None or selection_loss < winner[0]):
+            winner = (selection_loss, best_loss, best_state, seed, model, best_validation, best_step, selected_loss)
     if winner is None:
         error = NumericalError("All initialization runs failed: " + "; ".join(f"seed {s['seed']}: {s['failure']}" for s in summaries))
         error.restart_summaries = summaries
         error.history = history
         raise error
-    best_loss, state, seed, model = winner
+    _, best_loss, state, seed, model, best_validation, best_step, selected_loss = winner
     model.load_state_dict(state)
     model.eval()
-    return FittedGP(model, train, y, transform, model_config, cfg, seed, best_loss, history, summaries)
+    return FittedGP(model, train, y, transform, model_config, cfg, seed, best_loss, history, summaries,
+                    best_validation, best_step, selected_loss)

@@ -32,8 +32,10 @@
   ],
   "training": {
     "max_steps": 10000,
-    "min_steps": 1000,
+    "min_steps": 0,
     "patience": 100,
+    "stopping_criterion": "training_nll",
+    "validation_interval": 100,
     "tolerance": 0.0001,
     "learning_rate": 0.001,
     "betas": [0.9, 0.999],

@@ -25,7 +25,10 @@
 # From the repository root (or a subdirectory):
 #   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch [singles|all|SETTING] [--config PATH] [--parallel] [--held-out-interval N]
 # Add --held-out-interval 100 to record held-out Spearman every 100 updates.
-# Diagnostics are off by default; 0 disables them. Training selection remains NLL-only.
+# Diagnostics are off by default; 0 disables them. They never select checkpoints.
+# Add --stopping-criterion validation_spearman for three train / one validation /
+# one test folds (singles CV only). Default remains training_nll.
+# --validation-interval 100 --patience 100 --min-steps 0 are the defaults.
 # To run all 15 singles folds concurrently, with one CPU thread per fold:
 #   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles --parallel
 # Without --parallel, settings and folds run sequentially using all allocated CPUs.
@@ -60,9 +63,39 @@ selection="singles"
 selection_given=false
 parallel=false
 held_out_interval=""
+stopping_criterion=""
+validation_interval=""
+patience=""
+min_steps=""
 config_template="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn.json}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --stopping-criterion|--validation-interval|--patience|--min-steps)
+      if [[ $# -lt 2 ]]; then
+        echo "error: $1 requires a value." >&2
+        exit 1
+      fi
+      case "$1" in
+        --stopping-criterion)
+          if [[ "$2" != training_nll && "$2" != validation_spearman ]]; then
+            echo "error: --stopping-criterion must be training_nll or validation_spearman." >&2
+            exit 1
+          fi
+          stopping_criterion="$2" ;;
+        *)
+          if [[ ! "$2" =~ ^(0|[1-9][0-9]*)$ || ( "$1" != --min-steps && "$2" == 0 ) ]]; then
+            echo "error: $1 requires a positive integer (--min-steps also accepts 0)." >&2
+            exit 1
+          fi
+          case "$1" in
+            --validation-interval) validation_interval="$2" ;;
+            --patience) patience="$2" ;;
+            --min-steps) min_steps="$2" ;;
+          esac ;;
+      esac
+      shift 2 ;;
+    --stopping-criterion=*|--validation-interval=*|--patience=*|--min-steps=*)
+      set -- "${1%%=*}" "${1#*=}" "${@:2}" ;;
     --parallel)
       parallel=true
       shift ;;
@@ -97,6 +130,8 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
       printf 'Diagnostic example: --held-out-interval 100 (0 disables; overrides training.held_out_interval in JSON)\n'
+      printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'
+      printf 'NKN overrides: --validation-interval 100 --patience 100 --min-steps 0 (optimizer steps)\n'
       printf 'Config precedence: --config, NKN_CONFIG, configs/esm2_proteinmpnn_nkn.json\n'
       printf 'Parallel example: sbatch %s singles --parallel\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
       exit 0 ;;
@@ -217,7 +252,8 @@ printf 'Job: %s\nRepository: %s\nAssay: %s\nSettings: %s\nConfig: %s\nResults: %
 
 # Record the worker thread budget and execution plan for sbatch CPU overrides.
 python -u - "$config_template" "$runtime_config" "$features" "$assay" \
-  "$parallel" "$cpu_count" "$setting_workers" "$fold_workers" "$held_out_interval" "${settings[@]}" <<'PY'
+  "$parallel" "$cpu_count" "$setting_workers" "$fold_workers" "$held_out_interval" \
+  "$stopping_criterion" "$validation_interval" "$patience" "$min_steps" "${settings[@]}" <<'PY'
 from dataclasses import replace
 import json
 import os
@@ -233,12 +269,17 @@ try:
         device="cpu",
         num_threads=int(os.environ["OMP_NUM_THREADS"]),
     )
-    if sys.argv[9]:
-        config = replace(config, training=replace(config.training, held_out_interval=int(sys.argv[9])))
+    overrides = {}
+    for name, value in zip(("held_out_interval", "stopping_criterion", "validation_interval", "patience", "min_steps"), sys.argv[9:14]):
+        if value:
+            overrides[name] = value if name == "stopping_criterion" else int(value)
+    config = replace(config, training=replace(config.training, **overrides))
 except (OSError, ValueError, TypeError) as error:
     raise SystemExit(f"error: Invalid NKN JSON configuration {sys.argv[1]}: {error}") from error
 if config.evaluation.n_folds != 5:
     raise SystemExit("error: Published ProteinGym protocols require five folds.")
+if config.training.stopping_criterion == "validation_spearman" and any(not s.startswith("singles_") for s in sys.argv[14:]):
+    raise SystemExit("error: validation_spearman supports singles CV only; choose singles or a singles_* setting.")
 metadata = json.loads((Path(sys.argv[3]) / "assay.json").read_text(encoding="utf-8"))
 if metadata.get("assay_id") != sys.argv[4] or metadata.get("synthetic") is not False:
     raise SystemExit("error: Expected real pretrained features for the selected assay.")
@@ -256,7 +297,7 @@ execution_plan = {
     "settings": {
         setting: {"fits": 1 if setting == "single_to_double" else 5,
                   "fold_workers": 1 if setting == "single_to_double" else int(sys.argv[8])}
-        for setting in sys.argv[10:]
+        for setting in sys.argv[14:]
     },
 }
 Path(sys.argv[2]).with_name("execution_plan.json").write_text(
@@ -275,6 +316,8 @@ print(f"ProteinMPNN input policy: {config.inverse_folding_policy}")
 print(f"Mean score caches: {config.score_sources}")
 print(f"GP mean score sources: {len(config.score_sources) if config.score_sources is not None else 'cache defaults'}")
 print(f"Training: up to {config.training.max_steps} steps per initialization; seeds {config.training.seeds}")
+print(f"Stopping: {config.training.stopping_criterion}; patience {config.training.patience} optimizer steps; "
+      f"min_steps {config.training.min_steps}; validation interval {config.training.validation_interval}")
 print(f"Held-out Spearman diagnostic interval: {config.training.held_out_interval} (0 = disabled)")
 PY
 

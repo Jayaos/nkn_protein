@@ -107,7 +107,7 @@ class ModelConfig:
 @dataclass
 class TrainingConfig:
     max_steps: int = 5000
-    min_steps: int = 1000
+    min_steps: int = 0
     patience: int = 100
     tolerance: float = 1e-4
     learning_rate: float = 1e-3
@@ -121,11 +121,17 @@ class TrainingConfig:
     jitter_max: float = 1e-3
     max_train_variants: int | None = None
     held_out_interval: int = 0
+    stopping_criterion: str = "training_nll"
+    validation_interval: int = 100
 
     def __post_init__(self):
         if type(self.held_out_interval) is not int or self.held_out_interval < 0:
             raise ValueError("held_out_interval must be a nonnegative integer (0 disables diagnostics)")
-        for name in ("max_steps", "min_steps", "patience"):
+        if self.stopping_criterion not in ("training_nll", "validation_spearman"):
+            raise ValueError("stopping_criterion must be training_nll or validation_spearman")
+        if type(self.min_steps) is not int or self.min_steps < 0:
+            raise ValueError("min_steps must be a nonnegative integer")
+        for name in ("max_steps", "patience", "validation_interval"):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")
         for name in ("learning_rate", "epsilon", "noise_floor", "jitter_initial", "jitter_max"):

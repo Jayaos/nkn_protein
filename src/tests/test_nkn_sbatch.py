@@ -254,6 +254,56 @@ class NknSbatchTests(unittest.TestCase):
         runtime = next((self.root / 'results').rglob('config.json'))
         self.assertEqual(json.loads(runtime.read_text())['training']['held_out_interval'], 100)
 
+    def test_nkn_validation_stopping_overrides_reach_parallel_settings(self):
+        if self.cli_module != 'experiments.cli':
+            self.skipTest('Validation stopping is NKN-only')
+        result, records, _ = self.invoke(15, 'singles', '--parallel',
+                                        '--stopping-criterion=validation_spearman',
+                                        '--validation-interval', '50', '--patience=200', '--min-steps', '0')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(records), 3)
+        runtime = next((self.root / 'results').rglob('config.json'))
+        cfg = json.loads(runtime.read_text())['training']
+        self.assertEqual((cfg['stopping_criterion'], cfg['validation_interval'], cfg['patience'], cfg['min_steps']),
+                         ('validation_spearman', 50, 200, 0))
+
+    def test_nkn_can_switch_back_to_nll_with_original_warmup(self):
+        if self.cli_module != 'experiments.cli':
+            self.skipTest('Validation stopping is NKN-only')
+        path = self.root / self.config_file
+        config = json.loads(path.read_text())
+        config['training']['stopping_criterion'] = 'validation_spearman'
+        path.write_text(json.dumps(config))
+        result, records, _ = self.invoke(1, 'single_to_double', '--stopping-criterion', 'training_nll',
+                                        '--min-steps=1000')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        runtime = next((self.root / 'results').rglob('config.json'))
+        cfg = json.loads(runtime.read_text())['training']
+        self.assertEqual((cfg['stopping_criterion'], cfg['min_steps']), ('training_nll', 1000))
+        self.assertEqual(len(records), 1)
+
+    def test_nkn_validation_stopping_rejects_extrapolation_before_workers(self):
+        if self.cli_module != 'experiments.cli':
+            self.skipTest('Validation stopping is NKN-only')
+        result, records, plan = self.invoke(1, 'single_to_double', '--stopping-criterion', 'validation_spearman')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('singles CV only', result.stderr)
+        self.assertEqual(records, [])
+        self.assertIsNone(plan)
+
+    def test_nkn_invalid_stopping_options_fail_before_workers(self):
+        if self.cli_module != 'experiments.cli':
+            self.skipTest('Validation stopping is NKN-only')
+        for arguments in (('--stopping-criterion',), ('--stopping-criterion=test_spearman',),
+                          ('--validation-interval', '0'), ('--patience=-1',),
+                          ('--min-steps', '-1'), ('--min-steps=',)):
+            with self.subTest(arguments=arguments):
+                result, records, plan = self.invoke(1, *arguments)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('error:', result.stderr)
+                self.assertEqual(records, [])
+                self.assertIsNone(plan)
+
     def test_nkn_held_out_interval_can_disable_configured_diagnostics(self):
         if self.cli_module != 'experiments.cli':
             self.skipTest('Held-out diagnostics are NKN-only')

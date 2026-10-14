@@ -37,6 +37,14 @@ def _parser(prog="python -m experiments.cli") -> argparse.ArgumentParser:
         else:
             sub.set_defaults(singles_only=False)
         if command in ("fit", "cv"):
+            sub.add_argument("--stopping-criterion", choices=("training_nll", "validation_spearman"),
+                             help="NKN checkpoint selection; validation_spearman uses three train folds and one validation fold in singles CV")
+            sub.add_argument("--validation-interval", type=int,
+                             help="NKN validation Spearman interval in optimizer steps (default 100)")
+            sub.add_argument("--patience", type=int,
+                             help="NKN stopping patience in optimizer steps (default 100)")
+            sub.add_argument("--min-steps", type=int,
+                             help="NKN earliest stopping step (default 0)")
             sub.add_argument(
                 "--held-out-interval", type=int, default=None,
                 help="NKN only: record diagnostic held-out Spearman every N steps; 0 disables it (default)",
@@ -72,11 +80,14 @@ def _load_config(args, config_type=ExperimentConfig):
         if adjacent.is_file():
             path = adjacent
     config = config_type.load(path) if path is not None else config_type()
-    interval = getattr(args, "held_out_interval", None)
-    if interval is not None:
+    overrides = {name: getattr(args, name) for name in
+                 ("held_out_interval", "stopping_criterion", "validation_interval", "patience", "min_steps")
+                 if getattr(args, name, None) is not None}
+    if overrides:
         if not isinstance(config, ExperimentConfig):
-            raise ValueError("--held-out-interval is supported only for NKN")
-        config = replace(config, training=replace(config.training, held_out_interval=interval))
+            names = ", ".join("--" + name.replace("_", "-") for name in overrides)
+            raise ValueError(f"{names} supported only for NKN")
+        config = replace(config, training=replace(config.training, **overrides))
     return replace(config, device=args.device) if args.device is not None else config
 
 
@@ -105,10 +116,12 @@ def _load_batch(args, config, feature_loader=None):
 
 def _progress(event):
     if event.get("event") == "fold_start":
-        print(f"Fold {event['fold']}: {event['n_train']} training, {event['n_test']} held-out variants", file=sys.stderr)
+        print(f"Fold {event['fold']}: {event['n_train']} training, {event.get('n_validation', 0)} validation, "
+              f"{event['n_test']} held-out variants", file=sys.stderr)
     elif event.get("event") == "fold_complete":
         print(f"Fold {event['fold']}: completed", file=sys.stderr)
-    elif "step" in event and (event["step"] == 0 or event["step"] % 100 == 0 or "held_out_spearman" in event):
+    elif "step" in event and (event["step"] == 0 or event["step"] % 100 == 0
+                              or "held_out_spearman" in event or "validation_spearman" in event):
         fold = f"fold {event['fold']} " if "fold" in event else ""
         diagnostic = ""
         if "held_out_spearman" in event:
@@ -116,6 +129,9 @@ def _progress(event):
             diagnostic = f" held-out Spearman={value:.6g}" if value is not None else " held-out Spearman=undefined"
             if event.get("held_out_error"):
                 diagnostic += f" ({event['held_out_error']})"
+        if "validation_spearman" in event:
+            value = event["validation_spearman"]
+            diagnostic += f" validation Spearman={value:.6g}" if value is not None else " validation Spearman=undefined"
         print(f"{fold}seed {event['seed']} step {event['step']}: NLL/variant={event['nll_per_variant']:.6g}{diagnostic}", file=sys.stderr)
 
 
@@ -165,6 +181,10 @@ def main(
     try:
         _validate_setting_arguments(args)
         config = _load_config(args, config_type)
+        if (isinstance(config, ExperimentConfig) and config.training.stopping_criterion == "validation_spearman"
+                and args.command in ("fit", "cv")
+                and (args.command != "cv" or not args.setting.startswith("singles_") or config.evaluation.n_folds != 5)):
+            raise ValueError("validation_spearman requires five-fold singles CV (three train, one validation, one test)")
         if args.command == "cv":
             if args.fold_workers > config.evaluation.n_folds:
                 raise ValueError("--fold-workers cannot exceed the number of folds")
