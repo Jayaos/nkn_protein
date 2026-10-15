@@ -14,7 +14,7 @@ import unittest
 REPOSITORY = Path(__file__).resolve().parents[2]
 SCRIPT = Path("sbatch_run/run_nkn/run_nkn_assays.sbatch")
 SHARED_RUNNER = Path("sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch")
-DEFAULT_CONFIG = "configs/esm2_proteinmpnn_nkn_two_scores_additive_branches_noise_prior.json"
+DEFAULT_CONFIG = "configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json"
 ASSAYS = (
     "PIN1_HUMAN_Tsuboyama_2023_1I6C",
     "VKOR1_HUMAN_Chiasson_2020_activity",

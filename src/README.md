@@ -18,9 +18,11 @@ removing `X` without renormalization. The ProteinMPNN preparation job generates
 this sequence-conditioned cache and the separate variant likelihood scores.
 The generic NKN batch preset uses only ESM2 650M scores in its GP mean.
 The assay array launcher defaults to
-`configs/esm2_proteinmpnn_nkn_two_scores_additive_branches_noise_prior.json`,
+`configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json`,
 which includes both ESM2 and ProteinMPNN mean scores, additive branches, a deeper
-final NKN, `min_steps=0`, and a Half-Cauchy observation-noise prior with scale `0.1`.
+final NKN, `min_steps=1000`, and no observation-noise prior.
+Its enabled branches are `sequence_site`, `sequence_global`, `inverse_folding`,
+`structure_distance`, and `inverse_folding_site`.
 
 ## Installation and first run
 
@@ -346,9 +348,9 @@ The array has a fixed mapping:
 | 4 | `FKBP3_HUMAN_Tsuboyama_2023_2KFV` |
 
 Each task defaults to `data/features/pretrained/singles/<assay>` and
-[`configs/esm2_proteinmpnn_nkn_two_scores_additive_branches_noise_prior.json`](../configs/esm2_proteinmpnn_nkn_two_scores_additive_branches_noise_prior.json).
+[`configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json`](../configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json).
 The preset uses `[1]` in every enabled branch and `[8, 4, 4, 2, 1]` in the final
-NKN, with `min_steps=0` and a Half-Cauchy noise prior of scale `0.1`. It includes
+NKN, with `min_steps=1000` and no noise prior. It includes
 both ESM2 650M masked-marginal and ProteinMPNN sequence-likelihood scores in the GP
 mean. Each score is standardized using training variants and has its own learned
 coefficient. Tasks default to all three singles protocols (15 fits per assay).
@@ -644,7 +646,7 @@ above; those are separate from model initialization seeds.
 
 NKN always fits a homoscedastic Gaussian observation-noise variance. By default
 `training.noise_prior` is `"none"`, preserving the existing likelihood objective.
-The assay array launcher's default preset enables `"half_cauchy"` at scale `0.1`.
+The assay array launcher's default preset also uses `"none"`.
 To use Kermut's Half-Cauchy prior on that variance, set these fields inside the
 `training` object of any NKN configuration:
 
@@ -736,6 +738,10 @@ sum with a positive constant bias, or `[4, 2, 1]` for NKN composition. The
 additive-branch and standard NKN presets select these modes respectively, using
 one copy of each primitive. Remove `inverse_folding_site` from
 `model.enabled_branches` to reproduce the earlier preset's branch selection.
+The alternative `additive_four_branches` preset makes this exclusion; select it
+with `--config configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches.json`.
+The five-branch noise-prior preset remains available
+through `--config configs/esm2_proteinmpnn_nkn_two_scores_additive_branches_noise_prior.json`.
 
 `structure_distance` uses its own NKN with exponential (`exp`), RBF (`rbf`),
 and Matérn-3/2 (`matern32`) primitives on Euclidean Cα distances. Each primitive
