@@ -12,13 +12,13 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
-# Default array: all 58 assays (indices 0-57), four branches and initial noise variance 0.5.
+# Default array: all 58 assays (indices 0-57), four branches and initial noise variance 1.0.
 # One assay per array task, in the order below. Submit from the repository or
 # a subdirectory; each task delegates to the shared NKN runner.
 # Default: singles (random, modulo, contiguous; five folds each), with the
 # additive two-score preset and caches under data/features/pretrained/singles.
 # Branches: [1]; final NKN: [8, 4, 4, 2, 1]. Minimum optimizer steps: 1000.
-# Observation-noise variance prior: none. Initial noise variance: 0.5.
+# Observation-noise variance prior: none. Initial noise variance: 1.0.
 # Enabled: sequence_site, sequence_global, inverse_folding, structure_distance.
 # The shared runner disables structure_distance for BRCA2's separate reference fragments.
 # Resources above are per assay task. The array parallelizes assays; --parallel
@@ -32,7 +32,7 @@
 # Results: results/<assay>/nkn_esm2_proteinmpnn_<selection>_<task-job-id>/
 # Add --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) to insert NAME under results/.
 # Config precedence: --config PATH, NKN_CONFIG, then the four-branch additive
-# noise_initial_0p5 preset for every assay.
+# noise_initial_1p0 preset for every assay.
 # Four-branch alternative with the original noise_initial=0.01:
 #   --config configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches.json
 # Optional: --noise-prior half_cauchy --noise-prior-scale 0.1.
@@ -106,8 +106,8 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
   printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n'
   printf 'Default array: 0-57 (58 assays); four additive branches and both GP mean scores.\n'
-  printf 'Default config for every assay: configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json\n'
-  printf 'Initial noise variance: 0.5 (explicit --config or NKN_CONFIG overrides the default).\n'
+  printf 'Default config for every assay: configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_1p0.json\n'
+  printf 'Initial noise variance: 1.0 (explicit --config or NKN_CONFIG overrides the default).\n'
   printf 'Branches: sequence_site, sequence_global, inverse_folding, structure_distance\n'
   printf "BRCA2_HUMAN_Erwood_2022_HEK293T disables structure_distance for separate reference fragments.\n"
   printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'
@@ -137,7 +137,7 @@ while [[ ! -f "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
 done
 
 export ASSAY="${assays[$task_index]}"
-default_config="configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json"
+default_config="configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_1p0.json"
 export NKN_CONFIG="${NKN_CONFIG:-$default_config}"
 printf 'Array task: %s_%s; assay: %s\n' "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$ASSAY"
 exec bash "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch" "$@"
