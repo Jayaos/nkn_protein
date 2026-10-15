@@ -45,6 +45,8 @@
 # SAMPLE_RATIO (default 0.8), or SPLIT_SEED (default 2024) before sbatch.
 # SAMPLE_RATIO=1.0 trains on all singles. Relative paths use the repository root.
 # Logs go to the submission directory. Every job creates a new results directory.
+# --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) groups results under
+# results/NAME/<assay>/<model-run>/. Without it, existing paths are preserved.
 set -eo pipefail
 
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
@@ -60,9 +62,19 @@ cd -- "$project_root"
 selection="singles"
 selection_given=false
 parallel=false
+experiment_suffix="${EXPERIMENT_SUFFIX:-}"
 config_template="${KERMUT_CONFIG:-configs/kermut_esm2_proteinmpnn.json}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --experiment-suffix)
+      if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+        echo "error: --experiment-suffix requires a folder name." >&2
+        exit 1
+      fi
+      experiment_suffix="$2"
+      shift 2 ;;
+    --experiment-suffix=*)
+      set -- --experiment-suffix "${1#*=}" "${@:2}" ;;
     --parallel)
       parallel=true
       shift ;;
@@ -81,6 +93,7 @@ while [[ $# -gt 0 ]]; do
       fi
       shift ;;
     -h|--help)
+      printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
       printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH] [--parallel]\n' "sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch"
       printf 'Config precedence: --config, KERMUT_CONFIG, configs/kermut_esm2_proteinmpnn.json\n'
       printf 'Parallel example: sbatch %s singles --parallel\n' "sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch"
@@ -98,6 +111,10 @@ while [[ $# -gt 0 ]]; do
       shift ;;
   esac
 done
+if [[ "$experiment_suffix" == *[/\\]* || "$experiment_suffix" == "." || "$experiment_suffix" == ".." ]]; then
+  echo "error: Experiment suffix must be a single folder name, not a path." >&2
+  exit 1
+fi
 case "$selection" in
   singles) settings=(singles_random singles_modulo singles_contiguous) ;;
   all) settings=(singles_random singles_modulo singles_contiguous mixed_random_singles single_to_double) ;;
@@ -191,7 +208,7 @@ export CUDA_VISIBLE_DEVICES=""
 
 assay_index="data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv"
 run_id="${SLURM_JOB_ID:-manual_$(date -u +%Y%m%dT%H%M%SZ)}"
-run_root="results/$assay/kermut_esm2_proteinmpnn_${selection}_${run_id}"
+run_root="results/${experiment_suffix:+$experiment_suffix/}$assay/kermut_esm2_proteinmpnn_${selection}_${run_id}"
 runtime_config="$run_root/config.json"
 
 # Refuse to reuse a previous run's directory or overwrite its results.

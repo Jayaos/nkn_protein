@@ -23,6 +23,7 @@
 # Limit assay concurrency: sbatch --array=0-57%2 sbatch_run/run_kermut/run_kermut_assays.sbatch
 # Logs: kermut_assays-<array-job-id>_<task-index>.out in the submission directory.
 # Results: results/<assay>/kermut_esm2_proteinmpnn_<selection>_<task-job-id>/
+# Add --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) to insert NAME under results/.
 # Config precedence: --config PATH, KERMUT_CONFIG, then the default preset.
 set -eo pipefail
 
@@ -91,6 +92,7 @@ assays=(
 )
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
   printf 'Usage: sbatch sbatch_run/run_kermut/run_kermut_assays.sbatch [singles|all|SETTING] [--config PATH] [--parallel]\n'
   printf 'Default array: 0-57; each task runs one assay with both GP mean scores.\n'
   for index in "${!assays[@]}"; do

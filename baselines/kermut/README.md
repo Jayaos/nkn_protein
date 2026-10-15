@@ -209,6 +209,11 @@ singles protocols, for 15 fits. The launcher accepts `ASSAY`, `FEATURES`,
 `KERMUT_CONFIG` (overridden by `--config`), `SINGLES_FOLDS_CSV`, and
 `MULTIPLES_FOLDS_CSV`. It snapshots published fold files and the resolved JSON.
 Results go under `results/<assay>/kermut_esm2_proteinmpnn_<selection>_<job_id>/`.
+Add `--experiment-suffix NAME` to either sbatch script to save under
+`results/NAME/<assay>/<model-run>/`. This overrides `EXPERIMENT_SUFFIX=NAME`
+if set when submitting. The suffix must be one folder name; omitting it preserves
+the existing paths. Use the same suffix across related NKN and Kermut submissions,
+then aggregate with `PYTHONPATH=src python -m reporting --results results/NAME --output results/NAME/aggregate`.
 Like the NKN launcher, it activates the cluster's `nkn_protein` Conda environment.
 
 Singles selections use `data/features/pretrained/singles/<assay>` and require

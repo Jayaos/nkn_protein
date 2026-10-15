@@ -25,7 +25,10 @@
 # Limit assay concurrency: sbatch --array=0-57%2 sbatch_run/run_nkn/run_nkn_assays.sbatch
 # Logs: nkn_assays-<array-job-id>_<task-index>.out in the submission directory.
 # Results: results/<assay>/nkn_esm2_proteinmpnn_<selection>_<task-job-id>/
+# Add --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) to insert NAME under results/.
 # Config precedence: --config PATH, NKN_CONFIG, then the two-score preset.
+# Additive branches [1] with final NKN [8, 4, 4, 2, 1]:
+#   --config configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json
 set -eo pipefail
 
 # 57 assays with DMS_number_single_mutants < 1000, in catalog order,
@@ -93,6 +96,7 @@ assays=(
 )
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
   printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n'
   printf 'Default array: 0-57; each task runs one assay with both GP mean scores.\n'
   printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'

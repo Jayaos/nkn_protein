@@ -400,6 +400,18 @@ the repository root. See the hyperparameter fields below.
 
 Each submission creates
 `results/<assay>/nkn_esm2_proteinmpnn_<selection>_<job-id>/`.
+Add `--experiment-suffix NAME` to either the single-assay or array sbatch script
+to save under `results/NAME/<assay>/<model-run>/` instead. Alternatively, set
+`EXPERIMENT_SUFFIX=NAME` when submitting; the command-line option takes precedence.
+The suffix must be one folder name. Omitting it preserves the existing paths.
+Use the same suffix for NKN and Kermut submissions belonging to one experiment:
+
+```bash
+sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch singles --experiment-suffix comparison_v1
+sbatch sbatch_run/run_kermut/run_kermut_assays.sbatch singles --experiment-suffix comparison_v1
+PYTHONPATH=src python -m reporting --results results/comparison_v1 --output results/comparison_v1/aggregate
+```
+
 CV results are saved under `cv/<setting>/`; extrapolation is under
 `fit/single_to_double/`. For `all`, both mixed-domain results are in
 `cv/mixed_random_singles/metrics.json` under `setting_metrics`.
@@ -585,6 +597,34 @@ be half the preceding even linear width, as in `[4, 2, 1]`.
 Both `esm2_proteinmpnn_nkn.json` and `esm2_proteinmpnn_nkn_two_scores.json`
 use `[4, 2, 1]` for every enabled branch and the final NKN, with one copy of
 each selected primitive kernel.
+
+For additive information branches followed by a deeper final NKN, select
+[`esm2_proteinmpnn_nkn_two_scores_additive_branches.json`](../configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json):
+
+| Component | Widths | Operation |
+| --- | --- | --- |
+| Each of the four enabled branches | `[1]` | One learned nonnegative weighted sum of primitive kernels, plus a positive bias |
+| Final NKN | `[8, 4, 4, 2, 1]` | Linear(8), Product(4), Linear(4), Product(2), Linear(1) |
+
+The branch and final widths are independently configurable through
+`model.branches.<branch>.widths` and `model.final_widths`. A single width `[1]`
+creates an additive branch with no product layer. The two product layers in
+the final NKN allow terms up to degree four in the branch kernels, including
+three-way interactions and powers of individual branches. Additive branches
+do not prohibit such powers in the final NKN. All layers and primitive
+parameters are still trained jointly.
+
+This preset retains the two-score preset's features, mean scores, training,
+and evaluation settings. Submit the assay array with:
+
+```bash
+sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch singles --parallel \
+  --config configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json
+```
+
+The same `--config` option works with the single-assay launcher. Use
+`configs/esm2_proteinmpnn_nkn_two_scores.json` to select the original
+`[4, 2, 1]` branches and final NKN. Stopping overrides work with either preset.
 
 The CPU batch job sets `device` to `"cpu"` and `num_threads` to the Slurm CPU
 allocation in serial mode, or the computed per-worker thread count with
