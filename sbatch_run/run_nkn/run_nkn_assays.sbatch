@@ -12,7 +12,7 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
-# Default array: NEIME only (index 0), four branches and initial noise variance 0.1.
+# Default array: NEIME only (index 0), four branches and initial noise variance 0.5.
 # One assay per array task, in the order below. Submit from the repository or
 # a subdirectory; each task delegates to the shared NKN runner.
 # Default: singles (random, modulo, contiguous; five folds each), with the
@@ -32,7 +32,7 @@
 # Results: results/<assay>/nkn_esm2_proteinmpnn_<selection>_<task-job-id>/
 # Add --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) to insert NAME under results/.
 # Config precedence: --config PATH, NKN_CONFIG, then the assay-specific default.
-# NEIME uses the four-branch additive noise_initial_0p1 preset; other assays use
+# NEIME uses the four-branch additive noise_initial_0p5 preset; other assays use
 # the original five-branch additive preset.
 # Four-branch alternative with the original noise_initial=0.01:
 #   --config configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches.json
@@ -107,9 +107,9 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
   printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n'
   printf 'Default array: 0 (NEIME only); four additive branches and both GP mean scores.\n'
-  printf 'NEIME default config: configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p1.json\n'
+  printf 'NEIME default config: configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json\n'
   printf 'Other assay indices require an explicit --array override and retain configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json.\n'
-  printf 'Initial noise variance: NEIME 0.1; other assays 0.01 (explicit --config or NKN_CONFIG overrides these defaults).\n'
+  printf 'Initial noise variance: NEIME 0.5; other assays 0.01 (explicit --config or NKN_CONFIG overrides these defaults).\n'
   printf 'NEIME branches: sequence_site, sequence_global, inverse_folding, structure_distance\n'
   printf 'Other assays additionally enable inverse_folding_site.\n'
   printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'
@@ -141,7 +141,7 @@ done
 export ASSAY="${assays[$task_index]}"
 default_config="configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json"
 if [[ "$ASSAY" == "A0A1I9GEU1_NEIME_Kennouche_2019" ]]; then
-  default_config="configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p1.json"
+  default_config="configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json"
 fi
 export NKN_CONFIG="${NKN_CONFIG:-$default_config}"
 printf 'Array task: %s_%s; assay: %s\n' "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$ASSAY"
