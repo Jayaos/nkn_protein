@@ -20,6 +20,8 @@ class ExactProteinGP(nn.Module):
         value = torch.tensor(training_config.noise_initial - training_config.noise_floor, dtype=torch.float64, device=device)
         self.raw_noise = nn.Parameter(value + torch.log(-torch.expm1(-value)))
         self.noise_floor = training_config.noise_floor
+        self.noise_prior = training_config.noise_prior
+        self.noise_prior_scale = training_config.noise_prior_scale
         self.jitter_initial, self.jitter_max = training_config.jitter_initial, training_config.jitter_max
         self.to(device=device, dtype=torch.float64)
 
@@ -33,10 +35,19 @@ class ExactProteinGP(nn.Module):
     def training_factor(self, train):
         return factor_covariance(self.kernel(train), self.noise, self.jitter_initial, self.jitter_max)
 
-    def objective(self, train, standardized_targets):
+    def objective_components(self, train, standardized_targets):
+        """Return raw NLL, log prior on observation variance, and numerical jitter."""
         factor, jitter = self.training_factor(train)
-        total = negative_log_likelihood(standardized_targets - self.mean(train), factor)
-        return total, jitter
+        nll = negative_log_likelihood(standardized_targets - self.mean(train), factor)
+        log_prior = nll.new_zeros(())
+        if self.noise_prior == "half_cauchy":
+            scale = nll.new_tensor(self.noise_prior_scale)
+            log_prior = torch.distributions.HalfCauchy(scale).log_prob(self.noise)
+        return nll, log_prior, jitter
+
+    def objective(self, train, standardized_targets):
+        nll, log_prior, jitter = self.objective_components(train, standardized_targets)
+        return nll - log_prior, jitter
 
     def posterior(self, train, standardized_targets, test):
         factor, jitter = self.training_factor(train)

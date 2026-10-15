@@ -1,6 +1,6 @@
 {
   "model": {
-    "enabled_branches": ["sequence_site", "sequence_global", "inverse_folding", "structure_distance"],
+    "enabled_branches": ["sequence_site", "sequence_global", "inverse_folding", "structure_distance", "inverse_folding_site"],
     "branches": {
       "sequence_site": {
         "copies": {"cosine": 1, "rbf": 1, "matern32": 1},
@@ -15,6 +15,10 @@
         "widths": [4, 2, 1]
       },
       "structure_distance": {
+        "copies": {"exp": 1, "rbf": 1, "matern32": 1},
+        "widths": [4, 2, 1]
+      },
+      "inverse_folding_site": {
         "copies": {"exp": 1, "rbf": 1, "matern32": 1},
         "widths": [4, 2, 1]
       }
@@ -44,6 +48,8 @@
     "lengthscale_multipliers": [1.0],
     "noise_initial": 0.01,
     "noise_floor": 0.0001,
+    "noise_prior": "none",
+    "noise_prior_scale": 0.1,
     "jitter_initial": 1e-6,
     "jitter_max": 0.001,
     "max_train_variants": null

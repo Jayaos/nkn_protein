@@ -257,7 +257,8 @@ up to 1,022 residues, weighted by each window's residue count.
 ProteinMPNN sequence-conditioned distributions
 provide the third branch, `inverse_folding`. Reference Cα coordinates supply
 the fourth branch, `structure_distance`, using the existing assay manifests in
-`data/structures/manifests`. The GP mean uses only ESM2 650M
+`data/structures/manifests`. A fifth branch, `inverse_folding_site`, uses the
+cached ProteinMPNN log probability of each substituted amino acid. The GP mean uses only ESM2 650M
 masked-marginal scores. The inverse-folding cache uses ten
 orders with seed 37 and retains the stored 20 amino-acid values without
 renormalization through `inverse_folding_policy: "sequence_conditional"`.
@@ -452,7 +453,8 @@ uses fold `(k + 1) % 5`; the other three folds train the model. Supplied fold
 assignments are preserved, so a position never crosses partitions in positional
 schemes. This trains on about 60% of variants, validates on 20%, and tests on 20%.
 
-Training still optimizes marginal NLL. Target/score standardization and kernel
+Training still optimizes marginal NLL (minus the noise log prior when enabled).
+Target/score standardization and kernel
 initialization use only the three training folds. Validation labels select the
 checkpoint and restart with the highest validation Spearman; outer test labels
 never select models. No refit on the validation fold is performed.
@@ -482,7 +484,8 @@ Each validation-mode fold records `partition_assignments.csv`,
 `fit_summary.json`, restart summaries, and checkpoints record the selected step,
 best validation Spearman, and training NLL at the selected checkpoint.
 `best_nll_per_variant` remains the lowest training NLL reached by the selected
-restart and can differ from `selected_nll_per_variant` in validation mode.
+restart and can differ from `selected_nll_per_variant` in validation mode or
+when the noise-prior-adjusted objective selects the checkpoint.
 Validation scores are also saved in `history.json` and shown in progress logs.
 Serial and parallel folds use the same partition and selection rules.
 
@@ -561,7 +564,7 @@ supported only in serial execution.
 
 JSON configurations define `ExperimentConfig` fields. Unspecified fields use the
 validated defaults in `config.py`; a custom JSON is not merged with the ESM2 +
-ProteinMPNN preset. Copy that preset before editing to retain its four selected
+ProteinMPNN preset. Copy that preset before editing to retain its five selected
 branches, feature caches, and ESM2 score source.
 
 The [batch preset](../configs/esm2_proteinmpnn_nkn.json) explicitly lists the current
@@ -575,11 +578,13 @@ training, enabled-kernel, and evaluation hyperparameters:
 | `training.max_steps` | Maximum optimizer updates per initialization |
 | `training.stopping_criterion` | `training_nll` (default) or `validation_spearman` (five-fold singles CV) |
 | `training.min_steps`, `training.patience` | Earliest stopping step (default `0`) and patience in optimizer steps (default `100`) |
-| `training.tolerance` | Minimum improvement in NLL per variant over the patience window; used only by `training_nll` |
+| `training.tolerance` | Minimum improvement in objective per variant over the patience window; used only by `training_nll` (objective equals NLL when no noise prior is enabled) |
 | `training.validation_interval` | Validation-Spearman evaluation interval in optimizer steps (default `100`) |
 | `training.held_out_interval` | NKN diagnostic Spearman interval in optimizer steps; `0` disables it (default) |
 | `training.seeds`, `training.lengthscale_multipliers` | Paired initialization settings; keep `[0]` and `[1.0]` for one initialization |
 | `training.noise_initial`, `training.noise_floor` | Initial observation-noise variance and its positive lower bound |
+| `training.noise_prior` | `none` (default) or `half_cauchy`; prior on the standardized observation-noise variance |
+| `training.noise_prior_scale` | Positive finite Half-Cauchy scale (default `0.1`); ignored when `noise_prior` is `none` |
 | `training.jitter_initial`, `training.jitter_max` | Numerical stabilization range for Cholesky factorization |
 | `training.max_train_variants` | Optional training-set size guard; `null` disables the guard |
 | `model.branches.<branch>.copies` | Number of copies of each primitive kernel in that branch |
@@ -603,7 +608,7 @@ For additive information branches followed by a deeper final NKN, select
 
 | Component | Widths | Operation |
 | --- | --- | --- |
-| Each of the four enabled branches | `[1]` | One learned nonnegative weighted sum of primitive kernels, plus a positive bias |
+| Each of the five enabled branches | `[1]` | One learned nonnegative weighted sum of primitive kernels, plus a positive bias |
 | Final NKN | `[8, 4, 4, 2, 1]` | Linear(8), Product(4), Linear(4), Product(2), Linear(1) |
 
 The branch and final widths are independently configurable through
@@ -632,6 +637,47 @@ allocation in serial mode, or the computed per-worker thread count with
 controlled by the `SAMPLE_RATIO` and `SPLIT_SEED` environment variables described
 above; those are separate from model initialization seeds.
 
+### Optional observation-noise prior
+
+NKN always fits a homoscedastic Gaussian observation-noise variance. By default
+`training.noise_prior` is `"none"`, preserving the existing likelihood objective.
+To use Kermut's Half-Cauchy prior on that variance, set these fields inside the
+`training` object of any NKN configuration:
+
+```json
+"noise_prior": "half_cauchy",
+"noise_prior_scale": 0.1
+```
+
+The scale is in standardized-target **variance** units. This is a prior on the
+learned observation variance, not its square root, unconstrained raw parameter,
+or numerical jitter. Changing the scale alone does not enable the prior.
+
+Both NKN sbatch launchers and direct `experiments.cli fit`/`cv` accept overrides:
+
+```bash
+sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch singles --parallel \
+  --config configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json \
+  --noise-prior half_cauchy --noise-prior-scale 0.1
+```
+
+Use `--noise-prior none` to disable a prior selected in JSON. These options work
+with either architecture and either stopping criterion. With a prior, the
+optimized objective is `(NLL - log_prior) / n_train`, applying the prior once
+per fit rather than once per observation. In `training_nll` mode, checkpoint
+selection, restart selection, and the patience/tolerance check use this
+prior-adjusted objective. Validation-Spearman mode continues to select by
+validation Spearman.
+
+`history.json` records raw `nll`/`nll_per_variant`, `noise_log_prior`,
+`objective`/`objective_per_variant`, `best_objective_per_variant`, and
+`noise_variance_standardized`. Fit and restart summaries also report
+`best_objective_per_variant` and `selected_objective_per_variant`; the existing
+NLL fields retain their raw marginal-likelihood meaning. Fit summaries record
+the prior settings and the selected model's noise variance. Resolved configs
+and checkpoints preserve the choice; old checkpoints without these settings
+load with no prior. Diagnostic Spearman CSVs continue to report raw NLL.
+
 ### Selecting NKN branches
 
 Set `model.enabled_branches` to any nonempty combination of these names:
@@ -639,17 +685,18 @@ Set `model.enabled_branches` to any nonempty combination of these names:
 | Branch | Required input | Representation |
 | --- | --- | --- |
 | `inverse_folding` | `inverse_folding` | Reference amino-acid distributions at mutation positions |
+| `inverse_folding_site` | The same `inverse_folding` cache | Scalar log probability of the substituted amino acid at its reference position |
 | `structure` | `structure` | Reference structural embeddings at mutation positions |
 | `sequence_site` | `sequence` | Variant residue embeddings at mutation positions |
 | `sequence_global` | `sequence` | Mean-pooled variant residue embeddings |
 | `structure_distance` | Reference structure manifest and PDB/mmCIF | Reference Cα coordinates at mutation positions, in angstroms |
 
-The ESM2 + ProteinMPNN NKN preset enables four branches:
+The ESM2 + ProteinMPNN NKN presets enable five branches:
 
 ```json
 {
   "model": {
-    "enabled_branches": ["sequence_site", "sequence_global", "inverse_folding", "structure_distance"]
+    "enabled_branches": ["sequence_site", "sequence_global", "inverse_folding", "structure_distance", "inverse_folding_site"]
   }
 }
 ```
@@ -666,6 +713,26 @@ caches and default descriptors are not required. Any remaining enabled branch
 still requires its actual features. Empty, duplicate and unknown branch selections
 are rejected. Omit the setting to retain the original four-branch model.
 
+`inverse_folding_site` computes `log p_i(a)` in float64 from the chosen cached
+probability for each mutation `(i, a)`, matching Kermut's lookup. The
+`sequence_conditional` policy preserves the ProteinMPNN recipe without
+renormalization; the `normalized` policy requires normalized cache rows.
+The selected probabilities must be positive. No additional ProteinMPNN
+inference or score cache is needed.
+This differs from `inverse_folding`, which compares full site distributions and
+therefore assigns the same inputs to different substitutions at the same site.
+
+Its primitive family is exponential (`exp`), RBF (`rbf`), and Matérn-3/2
+(`matern32`) on the absolute difference between scalar log probabilities; each
+primitive copy learns an independent positive lengthscale. The branch combines
+these primitives before summing mutation-pair covariances into variant pairs,
+then contributes one candidate kernel to the final NKN. Set
+`model.branches.inverse_folding_site.widths` to `[1]` for an additive weighted
+sum with a positive constant bias, or `[4, 2, 1]` for NKN composition. The
+additive-branch and standard NKN presets select these modes respectively, using
+one copy of each primitive. Remove `inverse_folding_site` from
+`model.enabled_branches` to reproduce the earlier preset's branch selection.
+
 `structure_distance` uses its own NKN with exponential (`exp`), RBF (`rbf`),
 and Matérn-3/2 (`matern32`) primitives on Euclidean Cα distances. Each primitive
 copy has an independent positive lengthscale in angstroms. These kernels are
@@ -679,10 +746,11 @@ The loader validates full reference coverage, residue mapping, structure checksu
 and any selected structure-conditioned cache provenance. The structure identity
 is saved in the feature signature and checked during prediction. This branch
 does not require a learned `structure` embedding cache. The separate `structure`
-branch continues to represent learned embeddings; enabling it as well gives
-the five-branch architecture described in the method. Existing configurations
+branch continues to represent learned embeddings; enabling it as well adds a
+sixth branch to the current presets. Existing configurations
 and checkpoints keep their previous branch selections. To run the previous
-three-branch ESM2 + ProteinMPNN preset, remove `structure_distance` from
+three-branch ESM2 + ProteinMPNN preset, remove `structure_distance` and
+`inverse_folding_site` from
 `model.enabled_branches`.
 Older configs and checkpoints using `physical_distance` are accepted on load;
 new configurations and checkpoints use the name `structure_distance`.
@@ -755,7 +823,8 @@ just the branches/settings being changed; omitted settings use defaults. For exa
       "structure": {"copies": {"cosine": 1, "rbf": 2, "matern32": 2}, "widths": [8, 4, 4, 2, 1]},
       "sequence_site": {"copies": {"cosine": 1, "rbf": 2, "matern32": 2}, "widths": [8, 4, 4, 2, 1]},
       "sequence_global": {"copies": {"cosine": 1, "rbf": 2, "matern32": 2}, "widths": [8, 4, 4, 2, 1]},
-      "structure_distance": {"copies": {"exp": 1, "rbf": 2, "matern32": 2}, "widths": [8, 4, 4, 2, 1]}
+      "structure_distance": {"copies": {"exp": 1, "rbf": 2, "matern32": 2}, "widths": [8, 4, 4, 2, 1]},
+      "inverse_folding_site": {"copies": {"exp": 1, "rbf": 1, "matern32": 1}, "widths": [4, 2, 1]}
     },
     "final_widths": [8, 4, 4, 2, 1]
   },
@@ -768,10 +837,12 @@ just the branches/settings being changed; omitted settings use defaults. For exa
 Local primitive kernels are composed by their NKN before mutation-pair sums.
 Cosine values retain their sign. Primitive amplitudes are one; every affine NKN
 layer has positive softplus weights and constant-kernel biases. Copies have
-independent lengthscales. No pretrained features, extra scale parameter,
-weight-decay penalty, or parameter priors are optimized.
+independent lengthscales. Pretrained features remain frozen; Adam uses no weight
+decay. The optional observation-variance prior is described above; no other
+parameter priors are applied.
 
-Training minimizes negative marginal likelihood per training variant. Adam uses
+Training minimizes negative marginal likelihood per training variant, or the
+prior-adjusted objective when `noise_prior` is `half_cauchy`. Adam uses
 learning rate `1e-3`, betas `(0.9,0.999)`, epsilon `1e-8`, and no weight decay.
 Target and score scales use population standard deviations (`ddof=0`). Constant
 score columns become zero after centering with scale one; constant training

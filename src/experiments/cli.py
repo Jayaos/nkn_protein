@@ -37,6 +37,10 @@ def _parser(prog="python -m experiments.cli") -> argparse.ArgumentParser:
         else:
             sub.set_defaults(singles_only=False)
         if command in ("fit", "cv"):
+            sub.add_argument("--noise-prior", choices=("none", "half_cauchy"),
+                             help="NKN observation-variance prior (default none); overrides JSON")
+            sub.add_argument("--noise-prior-scale", type=float,
+                             help="NKN Half-Cauchy scale on standardized noise variance (default 0.1)")
             sub.add_argument("--stopping-criterion", choices=("training_nll", "validation_spearman"),
                              help="NKN checkpoint selection; validation_spearman uses three train folds and one validation fold in singles CV")
             sub.add_argument("--validation-interval", type=int,
@@ -81,7 +85,8 @@ def _load_config(args, config_type=ExperimentConfig):
             path = adjacent
     config = config_type.load(path) if path is not None else config_type()
     overrides = {name: getattr(args, name) for name in
-                 ("held_out_interval", "stopping_criterion", "validation_interval", "patience", "min_steps")
+                 ("held_out_interval", "stopping_criterion", "validation_interval", "patience", "min_steps",
+                  "noise_prior", "noise_prior_scale")
                  if getattr(args, name, None) is not None}
     if overrides:
         if not isinstance(config, ExperimentConfig):
@@ -132,6 +137,8 @@ def _progress(event):
         if "validation_spearman" in event:
             value = event["validation_spearman"]
             diagnostic += f" validation Spearman={value:.6g}" if value is not None else " validation Spearman=undefined"
+        if event.get("noise_log_prior", 0) != 0:
+            diagnostic += f" objective/variant={event['objective_per_variant']:.6g}"
         print(f"{fold}seed {event['seed']} step {event['step']}: NLL/variant={event['nll_per_variant']:.6g}{diagnostic}", file=sys.stderr)
 
 

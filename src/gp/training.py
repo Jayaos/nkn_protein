@@ -97,6 +97,8 @@ class FittedGP:
     best_validation_spearman: float | None = None
     selected_step: int | None = None
     selected_nll_per_variant: float | None = None
+    best_objective_per_variant: float | None = None
+    selected_objective_per_variant: float | None = None
 
     def fit_summary(self, n_train):
         return {
@@ -106,6 +108,11 @@ class FittedGP:
             "best_validation_spearman": self.best_validation_spearman,
             "selected_step": self.selected_step,
             "selected_nll_per_variant": self.selected_nll_per_variant,
+            "best_objective_per_variant": self.best_objective_per_variant,
+            "selected_objective_per_variant": self.selected_objective_per_variant,
+            "noise_prior": self.training_config.noise_prior,
+            "noise_prior_scale": self.training_config.noise_prior_scale,
+            "noise_variance_standardized": float(self.model.noise.detach()),
         }
 
     @torch.no_grad()
@@ -139,7 +146,9 @@ class FittedGP:
                     "restart_summaries": self.restart_summaries,
                     "best_validation_spearman": self.best_validation_spearman,
                     "selected_step": self.selected_step,
-                    "selected_nll_per_variant": self.selected_nll_per_variant}, path)
+                    "selected_nll_per_variant": self.selected_nll_per_variant,
+                    "best_objective_per_variant": self.best_objective_per_variant,
+                    "selected_objective_per_variant": self.selected_objective_per_variant}, path)
 
     @classmethod
     def load(cls, path, device="cpu"):
@@ -159,7 +168,9 @@ class FittedGP:
                    FoldTransform.from_state_dict(state["transform"], device), model_config, training_config,
                    state["selected_seed"], state["best_nll_per_variant"], state["history"], state["restart_summaries"],
                    state.get("best_validation_spearman"), state.get("selected_step"),
-                   state.get("selected_nll_per_variant"))
+                   state.get("selected_nll_per_variant"),
+                   state.get("best_objective_per_variant", state["best_nll_per_variant"]),
+                   state.get("selected_objective_per_variant", state.get("selected_nll_per_variant")))
 
 
 def fit_gp(batch, model_config=None, training_config=None, progress=None, *, held_out=None, validation=None):
@@ -209,6 +220,7 @@ def fit_gp(batch, model_config=None, training_config=None, progress=None, *, hel
     for seed, multiplier in zip(cfg.seeds, cfg.lengthscale_multipliers):
         best_loss, best_state, best_step, best_jitter = math.inf, None, None, None
         best_validation, selected_loss, last_validation_improvement = None, None, 0
+        best_objective, selected_objective = math.inf, None
         running_best, status, failure = [], "complete", None
         try:
             with torch.random.fork_rng(devices=devices):
@@ -224,20 +236,27 @@ def fit_gp(batch, model_config=None, training_config=None, progress=None, *, hel
             # Evaluate the initial state and every state after an optimizer update.
             for step in range(cfg.max_steps + 1):
                 optimizer.zero_grad(set_to_none=True)
-                total, jitter = model.objective(train, y)
+                nll, log_prior, jitter = model.objective_components(train, y)
+                total = nll - log_prior
                 loss = total / train.num_variants
                 value = float(loss.detach())
-                if not math.isfinite(value):
-                    raise NumericalError("Nonfinite training marginal likelihood")
-                if value < best_loss:
-                    best_loss = value
+                nll_value = float(nll.detach()) / train.num_variants
+                if not math.isfinite(value) or not math.isfinite(nll_value):
+                    raise NumericalError("Nonfinite training objective or marginal likelihood")
+                best_loss = min(best_loss, nll_value)
+                if value < best_objective:
+                    best_objective = value
                     if not use_validation:
-                        best_state, best_step, best_jitter, selected_loss = _parameter_state(model), step, jitter, value
-                row = {"seed": seed, "step": step, "nll": float(total.detach()), "nll_per_variant": value,
-                       "best_nll_per_variant": best_loss, "jitter": jitter}
-                running_best.append(best_loss)
+                        best_state, best_step, best_jitter = _parameter_state(model), step, jitter
+                        selected_loss, selected_objective = nll_value, value
+                row = {"seed": seed, "step": step, "nll": float(nll.detach()), "nll_per_variant": nll_value,
+                       "best_nll_per_variant": best_loss, "jitter": jitter,
+                       "noise_log_prior": float(log_prior.detach()), "objective": float(total.detach()),
+                       "objective_per_variant": value, "best_objective_per_variant": best_objective,
+                       "noise_variance_standardized": float(model.noise.detach())}
+                running_best.append(best_objective)
                 early_stop = (not use_validation and step >= cfg.min_steps and step >= cfg.patience
-                              and running_best[step - cfg.patience] - best_loss < cfg.tolerance)
+                              and running_best[step - cfg.patience] - best_objective < cfg.tolerance)
                 if use_validation and (step % cfg.validation_interval == 0 or step == cfg.max_steps):
                     with torch.no_grad():
                         mean = model.posterior_mean(train, y, validation_batch)
@@ -246,7 +265,8 @@ def fit_gp(batch, model_config=None, training_config=None, progress=None, *, hel
                         score = spearman(validation_targets, mean)
                     if score is not None and (best_validation is None or score > best_validation):
                         best_validation, last_validation_improvement = score, step
-                        best_state, best_step, best_jitter, selected_loss = _parameter_state(model), step, jitter, value
+                        best_state, best_step, best_jitter = _parameter_state(model), step, jitter
+                        selected_loss, selected_objective = nll_value, value
                     row.update(validation_spearman=score, best_validation_spearman=best_validation,
                                n_validation=validation_batch.num_variants)
                     early_stop = (step >= cfg.min_steps and step > 0
@@ -287,19 +307,22 @@ def fit_gp(batch, model_config=None, training_config=None, progress=None, *, hel
                    "stopping_criterion": cfg.stopping_criterion,
                    "best_validation_spearman": best_validation,
                    "selected_nll_per_variant": selected_loss,
+                   "best_objective_per_variant": best_objective if math.isfinite(best_objective) else None,
+                   "selected_objective_per_variant": selected_objective,
                    "jitter_at_best": best_jitter, "failure": failure}
         summaries.append(summary)
         # A failed run is unsuccessful even when an earlier checkpoint was finite.
-        selection_loss = -best_validation if use_validation and best_validation is not None else best_loss
+        selection_loss = -best_validation if use_validation and best_validation is not None else best_objective
         if status != "failed" and best_state is not None and (winner is None or selection_loss < winner[0]):
-            winner = (selection_loss, best_loss, best_state, seed, model, best_validation, best_step, selected_loss)
+            winner = (selection_loss, best_loss, best_state, seed, model, best_validation, best_step,
+                      selected_loss, best_objective, selected_objective)
     if winner is None:
         error = NumericalError("All initialization runs failed: " + "; ".join(f"seed {s['seed']}: {s['failure']}" for s in summaries))
         error.restart_summaries = summaries
         error.history = history
         raise error
-    _, best_loss, state, seed, model, best_validation, best_step, selected_loss = winner
+    _, best_loss, state, seed, model, best_validation, best_step, selected_loss, best_objective, selected_objective = winner
     model.load_state_dict(state)
     model.eval()
     return FittedGP(model, train, y, transform, model_config, cfg, seed, best_loss, history, summaries,
-                    best_validation, best_step, selected_loss)
+                    best_validation, best_step, selected_loss, best_objective, selected_objective)

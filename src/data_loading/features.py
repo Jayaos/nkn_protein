@@ -23,7 +23,7 @@ from .sequence_windows import (
 
 ALPHABET = "ACDEFGHIKLMNPQRSTVWY"
 FEATURE_TYPES = ("sequence", "structure", "inverse_folding")
-LOCAL_FEATURES = ("inverse_folding", "structure", "sequence_site", "structure_distance")
+LOCAL_FEATURES = ("inverse_folding", "structure", "sequence_site", "structure_distance", "inverse_folding_site")
 
 
 def read_csv(path: str | Path) -> list[dict[str, str]]:
@@ -111,6 +111,8 @@ class FeatureBatch:
                 raise ValueError(f"Invalid packed local feature shape: {name}")
             if name == "structure_distance" and values.shape[1] != 3:
                 raise ValueError("Physical-distance features must contain three-dimensional CA coordinates")
+            if name == "inverse_folding_site" and values.shape[1] != 1:
+                raise ValueError("Inverse-folding site features must contain one mutant log probability per occurrence")
         if self.sequences and len(self.sequences) != n:
             raise ValueError("Sequence count must match variant count")
         if self.score_names and (len(self.score_names) != self.num_scores or len(set(self.score_names)) != self.num_scores):
@@ -342,6 +344,9 @@ def load_feature_bundle(
     Opt into ``inverse_folding_policy="sequence_conditional"`` to preserve
     declared geometric-mean ProteinMPNN probabilities without rescaling.
     The ``"kermut"`` policy remains an alias for the Kermut consumer.
+    The optional inverse-folding-site branch selects each substituted amino
+    acid's log probability from that same cache, without renormalization or
+    another model evaluation. It does not require the distribution branch.
     The optional physical-distance branch reads CA coordinates directly from
     verified structure manifests; relative manifest directories resolve from
     the project root. It adds no representation cache or mean score source.
@@ -350,7 +355,8 @@ def load_feature_bundle(
     if inverse_folding_policy not in ("normalized", "sequence_conditional", "kermut"):
         raise ValueError("inverse_folding_policy must be 'normalized', 'sequence_conditional', or 'kermut'")
     branches = DEFAULT_BRANCHES if enabled_branches is None else validate_enabled_branches(enabled_branches)
-    needed_types = {"sequence" if name.startswith("sequence_") else name
+    needed_types = {"sequence" if name.startswith("sequence_") else
+                    "inverse_folding" if name == "inverse_folding_site" else name
                     for name in branches if name != "structure_distance"}
     root = Path(feature_dir).resolve()
     metadata = json.loads((root / "assay.json").read_text(encoding="utf-8"))
@@ -520,7 +526,22 @@ def load_feature_bundle(
         if (inverse_rows < 0).any():
             missing = positions[inverse_rows < 0].unique().tolist()
             raise ValueError(f"Inverse-folding structures do not cover mutation positions: {missing}")
-        local_features["inverse_folding"] = inverse[inverse_rows]
+        packed_inverse = inverse[inverse_rows]
+        if "inverse_folding" in branches:
+            local_features["inverse_folding"] = packed_inverse
+        if "inverse_folding_site" in branches:
+            # Match Kermut's mutation-probability factor: select the substituted
+            # amino acid, not the WT residue or a sequence-level mean score.
+            # Keep the declared conditional/geometric-mean weights unchanged.
+            amino_acids = torch.tensor([
+                ALPHABET.index(row["mutated_sequence"][position - 1])
+                for row, mutation_positions in zip(rows, mutations)
+                for position in mutation_positions
+            ], dtype=torch.long)
+            selected = packed_inverse.gather(1, amino_acids[:, None])
+            if (selected <= 0).any():
+                raise ValueError("Inverse-folding site features require positive probabilities for substituted amino acids")
+            local_features["inverse_folding_site"] = selected.log()
     geometry_signature = {}
     if "structure_distance" in branches:
         coordinates, geometry_signature = _structure_distance_features(
@@ -534,6 +555,8 @@ def load_feature_bundle(
     signature = {"schema_version": "2", "layout_version": "1", "pooling": pooling, **sources, **geometry_signature}
     if probability_recipe is not None:
         signature["inverse_folding.probability_recipe"] = json.dumps(probability_recipe, sort_keys=True, separators=(",", ":"))
+    if "inverse_folding_site" in branches:
+        signature["inverse_folding_site.feature"] = "mutant_log_probability"
     if branches != DEFAULT_BRANCHES:
         signature["enabled_branches"] = json.dumps(branches, separators=(",", ":"))
     for name, config in configs.items():

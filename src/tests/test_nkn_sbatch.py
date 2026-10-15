@@ -267,6 +267,45 @@ class NknSbatchTests(unittest.TestCase):
         self.assertEqual((cfg['stopping_criterion'], cfg['validation_interval'], cfg['patience'], cfg['min_steps']),
                          ('validation_spearman', 50, 200, 0))
 
+    def test_nkn_noise_prior_overrides_reach_parallel_settings(self):
+        if self.cli_module != 'experiments.cli':
+            self.skipTest('Optional noise priors are NKN-only')
+        result, records, plan = self.invoke(15, 'singles', '--parallel',
+                                          '--noise-prior=half_cauchy', '--noise-prior-scale', '2e-1')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(records), 3)
+        self.assertEqual(set(plan['settings']), {'singles_random', 'singles_modulo', 'singles_contiguous'})
+        runtime = next((self.root / 'results').rglob('config.json'))
+        cfg = json.loads(runtime.read_text())['training']
+        self.assertEqual((cfg['noise_prior'], cfg['noise_prior_scale']), ('half_cauchy', .2))
+
+    def test_nkn_can_disable_noise_prior_from_config(self):
+        if self.cli_module != 'experiments.cli':
+            self.skipTest('Optional noise priors are NKN-only')
+        path = self.root / self.config_file
+        config = json.loads(path.read_text())
+        config['training']['noise_prior'] = 'half_cauchy'
+        path.write_text(json.dumps(config))
+        result, records, _ = self.invoke(1, 'single_to_double', '--noise-prior', 'none')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(records), 1)
+        runtime = next((self.root / 'results').rglob('config.json'))
+        self.assertEqual(json.loads(runtime.read_text())['training']['noise_prior'], 'none')
+
+    def test_nkn_invalid_noise_prior_options_fail_before_workers(self):
+        if self.cli_module != 'experiments.cli':
+            self.skipTest('Optional noise priors are NKN-only')
+        for index, arguments in enumerate((('--noise-prior',), ('--noise-prior=unknown',),
+                                           ('--noise-prior-scale',), ('--noise-prior-scale=nan',),
+                                           ('--noise-prior-scale=-1',), ('--noise-prior-scale=0',),
+                                           ('--noise-prior-scale=1e999',))):
+            with self.subTest(arguments=arguments):
+                result, records, plan = self.invoke(1, *arguments, '--experiment-suffix', f'invalid_noise_{index}')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('error:', result.stderr)
+                self.assertEqual(records, [])
+                self.assertIsNone(plan)
+
     def test_nkn_can_switch_back_to_nll_with_original_warmup(self):
         if self.cli_module != 'experiments.cli':
             self.skipTest('Validation stopping is NKN-only')

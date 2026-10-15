@@ -85,15 +85,23 @@ class SequenceSitePresetTests(unittest.TestCase):
             self.assertEqual(batch.variant_ids, ids)
             self.assertEqual(batch.owners.tolist(), [1, 2, 3, 3])
             self.assertEqual(batch.mutation_positions.tolist(), [1, 2, 1, 2])
-            self.assertEqual(set(batch.local_features), {"sequence_site", "inverse_folding", "structure_distance"})
+            self.assertEqual(set(batch.local_features), {
+                "sequence_site", "inverse_folding", "structure_distance", "inverse_folding_site",
+            })
             torch.testing.assert_close(batch.local_features["structure_distance"],
                                        structure.coords[batch.mutation_positions - 1, 1].double())
             torch.testing.assert_close(batch.global_features, expected.mean(dim=1))
             torch.testing.assert_close(batch.local_features["sequence_site"], expected[[1, 2, 3, 3], [0, 1, 0, 1]])
             self.assertTrue((batch.local_features["inverse_folding"].sum(-1) < 1).all())
+            alphabet = "ACDEFGHIKLMNPQRSTVWY"
+            mutant_indices = torch.tensor([alphabet.index(aa) for aa in ("V", "D", "V", "D")])
+            expected_site = batch.local_features["inverse_folding"].gather(1, mutant_indices[:, None]).log()
+            torch.testing.assert_close(batch.local_features["inverse_folding_site"], expected_site)
 
             kernel = ProteinKernel(config.model, batch)
-            self.assertEqual(set(kernel.branches), {"sequence_global", "sequence_site", "inverse_folding", "structure_distance"})
+            self.assertEqual(set(kernel.branches), {
+                "sequence_global", "sequence_site", "inverse_folding", "structure_distance", "inverse_folding_site",
+            })
             covariance = kernel(batch)
             self.assertTrue(torch.isfinite(covariance).all())
             torch.testing.assert_close(covariance, covariance.T)

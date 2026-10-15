@@ -8,9 +8,10 @@ from pathlib import Path
 
 VECTOR_PRIMITIVES = ("cosine", "rbf", "matern32")
 IF_PRIMITIVES = ("hellinger_exp", "hellinger_rbf", "bhattacharyya")
+IF_SITE_PRIMITIVES = ("exp", "rbf", "matern32")
 STRUCTURE_DISTANCE_PRIMITIVES = ("exp", "rbf", "matern32")
 DEFAULT_BRANCHES = ("inverse_folding", "structure", "sequence_site", "sequence_global")
-BRANCH_NAMES = (*DEFAULT_BRANCHES, "structure_distance")
+BRANCH_NAMES = (*DEFAULT_BRANCHES, "structure_distance", "inverse_folding_site")
 # This assay's reference joins separate BRCA2 fragments. Their structure
 # coordinates do not define physical distances between all reference sites.
 STRUCTURE_DISTANCE_DISABLED_ASSAYS = frozenset({"BRCA2_HUMAN_Erwood_2022_HEK293T"})
@@ -20,6 +21,8 @@ def branch_primitives(name):
     """Return the permitted primitive family for a representation branch."""
     if name == "inverse_folding":
         return IF_PRIMITIVES
+    if name == "inverse_folding_site":
+        return IF_SITE_PRIMITIVES
     if name == "structure_distance":
         return STRUCTURE_DISTANCE_PRIMITIVES
     if name in DEFAULT_BRANCHES:
@@ -123,8 +126,15 @@ class TrainingConfig:
     held_out_interval: int = 0
     stopping_criterion: str = "training_nll"
     validation_interval: int = 100
+    noise_prior: str = "none"
+    noise_prior_scale: float = 0.1
 
     def __post_init__(self):
+        if self.noise_prior not in ("none", "half_cauchy"):
+            raise ValueError("noise_prior must be none or half_cauchy")
+        if (type(self.noise_prior_scale) not in (int, float)
+                or not math.isfinite(self.noise_prior_scale) or self.noise_prior_scale <= 0):
+            raise ValueError("noise_prior_scale must be positive and finite")
         if type(self.held_out_interval) is not int or self.held_out_interval < 0:
             raise ValueError("held_out_interval must be a nonnegative integer (0 disables diagnostics)")
         if self.stopping_criterion not in ("training_nll", "validation_spearman"):

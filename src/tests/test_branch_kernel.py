@@ -28,6 +28,7 @@ def selected_batch(names, *, empty=False):
         "structure": vectors,
         "sequence_site": vectors + 0.25,
         "structure_distance": torch.tensor([[0., 0., 0.], [3., 4., 0.], [3., 4., 0.], [0., 0., 6.]], dtype=DTYPE),
+        "inverse_folding_site": torch.tensor([[-1.], [-2.], [-3.], [-1.]], dtype=DTYPE),
     }
     return SimpleNamespace(
         num_variants=4,
@@ -125,7 +126,7 @@ class SelectedKernelTests(unittest.TestCase):
                     cross = kernel(inputs, empty_mutations)
                     self.assertTrue(torch.isfinite(cross).all())
                     torch.testing.assert_close(cross, kernel(empty_mutations, inputs).T)
-        self.assertEqual(cases, 31)
+        self.assertEqual(cases, 2 ** len(BRANCH_NAMES) - 1)
 
     def test_missing_enabled_features_fail_at_initialization_and_prediction(self):
         for name in BRANCH_NAMES:

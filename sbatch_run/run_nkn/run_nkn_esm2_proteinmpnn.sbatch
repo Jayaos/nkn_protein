@@ -16,7 +16,8 @@
 # for sequence_site (mutation positions) and fixed non-overlapping windows for
 # sequence_global (a residue-weighted full-sequence mean),
 # plus sequence-conditioned ProteinMPNN features (10 orders, seed 37), preserved
-# without renormalization, and physical-distance kernels on reference CA atoms
+# without renormalization (distribution and mutant log-probability branches),
+# and physical-distance kernels on reference CA atoms
 # loaded from structure_manifest_dir. Only ESM2 650M masked-marginal scores feed the
 # learned GP mean in the default preset. CPU only.
 # BRCA2_HUMAN_Erwood_2022_HEK293T disables structure_distance because its reference
@@ -29,6 +30,8 @@
 # Add --stopping-criterion validation_spearman for three train / one validation /
 # one test folds (singles CV only). Default remains training_nll.
 # --validation-interval 100 --patience 100 --min-steps 1000 are the defaults.
+# Optional noise prior: --noise-prior half_cauchy --noise-prior-scale 0.1.
+# Use --noise-prior none for the original unregularized likelihood objective.
 # To run all 15 singles folds concurrently, with one CPU thread per fold:
 #   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles --parallel
 # Without --parallel, settings and folds run sequentially using all allocated CPUs.
@@ -72,9 +75,32 @@ stopping_criterion=""
 validation_interval=""
 patience=""
 min_steps=""
+noise_prior=""
+noise_prior_scale=""
 config_template="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn.json}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --noise-prior|--noise-prior-scale)
+      if [[ $# -lt 2 ]]; then
+        echo "error: $1 requires a value." >&2
+        exit 1
+      fi
+      if [[ "$1" == --noise-prior ]]; then
+        if [[ "$2" != none && "$2" != half_cauchy ]]; then
+          echo "error: --noise-prior must be none or half_cauchy." >&2
+          exit 1
+        fi
+        noise_prior="$2"
+      else
+        if [[ ! "$2" =~ ^[+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$ ]]; then
+          echo "error: --noise-prior-scale requires a positive finite number." >&2
+          exit 1
+        fi
+        noise_prior_scale="$2"
+      fi
+      shift 2 ;;
+    --noise-prior=*|--noise-prior-scale=*)
+      set -- "${1%%=*}" "${1#*=}" "${@:2}" ;;
     --experiment-suffix)
       if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
         echo "error: --experiment-suffix requires a folder name." >&2
@@ -147,6 +173,7 @@ while [[ $# -gt 0 ]]; do
       printf 'Diagnostic example: --held-out-interval 100 (0 disables; overrides training.held_out_interval in JSON)\n'
       printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'
       printf 'NKN overrides: --validation-interval 100 --patience 100 --min-steps 1000 (optimizer steps)\n'
+      printf 'Noise prior: --noise-prior none|half_cauchy; --noise-prior-scale 0.1 (overrides JSON)\n'
       printf 'Config precedence: --config, NKN_CONFIG, configs/esm2_proteinmpnn_nkn.json\n'
       printf 'Parallel example: sbatch %s singles --parallel\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
       exit 0 ;;
@@ -272,7 +299,8 @@ printf 'Job: %s\nRepository: %s\nAssay: %s\nSettings: %s\nConfig: %s\nResults: %
 # Record the worker thread budget and execution plan for sbatch CPU overrides.
 python -u - "$config_template" "$runtime_config" "$features" "$assay" \
   "$parallel" "$cpu_count" "$setting_workers" "$fold_workers" "$held_out_interval" \
-  "$stopping_criterion" "$validation_interval" "$patience" "$min_steps" "${settings[@]}" <<'PY'
+  "$stopping_criterion" "$validation_interval" "$patience" "$min_steps" \
+  "$noise_prior" "$noise_prior_scale" "${settings[@]}" <<'PY'
 from dataclasses import replace
 import json
 import os
@@ -292,12 +320,16 @@ try:
     for name, value in zip(("held_out_interval", "stopping_criterion", "validation_interval", "patience", "min_steps"), sys.argv[9:14]):
         if value:
             overrides[name] = value if name == "stopping_criterion" else int(value)
+    if sys.argv[14]:
+        overrides["noise_prior"] = sys.argv[14]
+    if sys.argv[15]:
+        overrides["noise_prior_scale"] = float(sys.argv[15])
     config = replace(config, training=replace(config.training, **overrides))
 except (OSError, ValueError, TypeError) as error:
     raise SystemExit(f"error: Invalid NKN JSON configuration {sys.argv[1]}: {error}") from error
 if config.evaluation.n_folds != 5:
     raise SystemExit("error: Published ProteinGym protocols require five folds.")
-if config.training.stopping_criterion == "validation_spearman" and any(not s.startswith("singles_") for s in sys.argv[14:]):
+if config.training.stopping_criterion == "validation_spearman" and any(not s.startswith("singles_") for s in sys.argv[16:]):
     raise SystemExit("error: validation_spearman supports singles CV only; choose singles or a singles_* setting.")
 metadata = json.loads((Path(sys.argv[3]) / "assay.json").read_text(encoding="utf-8"))
 if metadata.get("assay_id") != sys.argv[4] or metadata.get("synthetic") is not False:
@@ -316,7 +348,7 @@ execution_plan = {
     "settings": {
         setting: {"fits": 1 if setting == "single_to_double" else 5,
                   "fold_workers": 1 if setting == "single_to_double" else int(sys.argv[8])}
-        for setting in sys.argv[14:]
+        for setting in sys.argv[16:]
     },
 }
 Path(sys.argv[2]).with_name("execution_plan.json").write_text(
@@ -335,6 +367,7 @@ print(f"ProteinMPNN input policy: {config.inverse_folding_policy}")
 print(f"Mean score caches: {config.score_sources}")
 print(f"GP mean score sources: {len(config.score_sources) if config.score_sources is not None else 'cache defaults'}")
 print(f"Training: up to {config.training.max_steps} steps per initialization; seeds {config.training.seeds}")
+print(f"Noise prior: {config.training.noise_prior}; scale {config.training.noise_prior_scale}")
 print(f"Stopping: {config.training.stopping_criterion}; patience {config.training.patience} optimizer steps; "
       f"min_steps {config.training.min_steps}; validation interval {config.training.validation_interval}")
 print(f"Held-out Spearman diagnostic interval: {config.training.held_out_interval} (0 = disabled)")

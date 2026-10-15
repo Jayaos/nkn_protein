@@ -16,6 +16,7 @@
 # a subdirectory; each task delegates to the shared NKN runner.
 # Default: singles (random, modulo, contiguous; five folds each), with the
 # [4, 2, 1] two-score preset and caches under data/features/pretrained/singles.
+# Includes inverse_folding_site (exp, RBF, Matern-3/2 on mutant log probabilities).
 # Resources above are per assay task. The array parallelizes assays; --parallel
 # additionally divides each task's CPUs between its settings and folds.
 # Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]
@@ -29,6 +30,7 @@
 # Config precedence: --config PATH, NKN_CONFIG, then the two-score preset.
 # Additive branches [1] with final NKN [8, 4, 4, 2, 1]:
 #   --config configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json
+# Optional: --noise-prior half_cauchy --noise-prior-scale 0.1 (default: no prior).
 set -eo pipefail
 
 # 57 assays with DMS_number_single_mutants < 1000, in catalog order,
@@ -100,6 +102,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n'
   printf 'Default array: 0-57; each task runs one assay with both GP mean scores.\n'
   printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'
+  printf 'Noise prior: --noise-prior none|half_cauchy; --noise-prior-scale 0.1 (overrides JSON)\n'
   printf 'Overrides: --validation-interval 100 --patience 100 --min-steps 1000 (optimizer steps)\n'
   for index in "${!assays[@]}"; do
     printf '  %s: %s\n' "$index" "${assays[$index]}"

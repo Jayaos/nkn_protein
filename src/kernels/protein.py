@@ -15,7 +15,7 @@ from .primitives import initial_lengthscale
 from .triangle import TrainingTriangle
 
 
-LOCAL_BRANCHES = ("inverse_folding", "structure", "sequence_site", "structure_distance")
+LOCAL_BRANCHES = ("inverse_folding", "structure", "sequence_site", "structure_distance", "inverse_folding_site")
 BRANCHES = BRANCH_NAMES
 
 
@@ -52,7 +52,8 @@ class ProteinKernel(nn.Module):
         if missing:
             raise ValueError(f"Missing enabled branch configurations: {sorted(missing)}")
         self.inverse_folding_recipe = (
-            self._probability_recipe(train) if "inverse_folding" in self.enabled_branches else None
+            self._probability_recipe(train)
+            if {"inverse_folding", "inverse_folding_site"}.intersection(self.enabled_branches) else None
         )
         self.inverse_folding_policy = "sequence_conditional" if self.inverse_folding_recipe is not None else "normalized"
         self._validate_batch(train)
@@ -104,7 +105,8 @@ class ProteinKernel(nn.Module):
         return features
 
     def _validate_batch(self, batch) -> None:
-        if "inverse_folding" in self.enabled_branches and self._probability_recipe(batch) != self.inverse_folding_recipe:
+        if ({"inverse_folding", "inverse_folding_site"}.intersection(self.enabled_branches)
+                and self._probability_recipe(batch) != self.inverse_folding_recipe):
             raise ValueError("Inverse-folding probability recipe differs from its training recipe")
         if isinstance(batch.num_variants, bool) or not isinstance(batch.num_variants, int) or batch.num_variants < 0:
             raise ValueError("FeatureBatch.num_variants must be a nonnegative integer")
@@ -128,6 +130,8 @@ class ProteinKernel(nn.Module):
                 raise ValueError("All enabled feature arrays and mutation owners must use the same device")
             if name == "structure_distance" and (features.shape[1] != 3 or not torch.isfinite(features).all()):
                 raise ValueError("structure_distance features must be finite C-alpha coordinates with shape [occurrences, 3]")
+            if name == "inverse_folding_site" and (features.shape[1] != 1 or not torch.isfinite(features).all()):
+                raise ValueError("inverse_folding_site features must be finite mutant log probabilities with shape [occurrences, 1]")
             expected_rows = batch.num_variants if name == "sequence_global" else batch.owners.numel()
             if features.shape[0] != expected_rows:
                 raise ValueError(f"Feature rows for {name} must align with " + (

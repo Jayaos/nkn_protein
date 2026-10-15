@@ -236,7 +236,7 @@ class TriangleTests(unittest.TestCase):
                     assert_close(left[name], right[name], rtol=1e-9, atol=1e-10)
         for left, right in zip(actual.restart_summaries, reference.restart_summaries):
             for name in left:
-                if name == "best_nll_per_variant":
+                if name.endswith("_per_variant") and left[name] is not None:
                     assert_close(left[name], right[name], rtol=1e-9, atol=1e-10)
                 else:
                     self.assertEqual(left[name], right[name])
