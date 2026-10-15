@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=nkn_assays
 #SBATCH --account=gts-yxie77-paid
-#SBATCH --array=0-57
+#SBATCH --array=0
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=15
@@ -12,12 +12,13 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
+# Default array: NEIME only (index 0), testing initial noise variance 0.7.
 # One assay per array task, in the order below. Submit from the repository or
 # a subdirectory; each task delegates to the shared NKN runner.
 # Default: singles (random, modulo, contiguous; five folds each), with the
 # additive two-score preset and caches under data/features/pretrained/singles.
 # Branches: [1]; final NKN: [8, 4, 4, 2, 1]. Minimum optimizer steps: 1000.
-# Observation-noise variance prior: none.
+# Observation-noise variance prior: none. Other assays retain noise_initial=0.01.
 # Enabled: sequence_site, sequence_global, inverse_folding, structure_distance.
 # Also enables inverse_folding_site (mutant amino-acid log-probability kernels).
 # Resources above are per assay task. The array parallelizes assays; --parallel
@@ -26,11 +27,13 @@
 # Add --held-out-interval 100 to record diagnostic Spearman every 100 updates.
 # Add --stopping-criterion validation_spearman for three train / one validation /
 # one test folds. --validation-interval 100 --patience 100 --min-steps 1000 are defaults.
-# Limit assay concurrency: sbatch --array=0-57%2 sbatch_run/run_nkn/run_nkn_assays.sbatch
+# Explicitly run the full catalog: sbatch --array=0-57%2 sbatch_run/run_nkn/run_nkn_assays.sbatch
 # Logs: nkn_assays-<array-job-id>_<task-index>.out in the submission directory.
 # Results: results/<assay>/nkn_esm2_proteinmpnn_<selection>_<task-job-id>/
 # Add --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) to insert NAME under results/.
-# Config precedence: --config PATH, NKN_CONFIG, then the five-branch additive preset.
+# Config precedence: --config PATH, NKN_CONFIG, then the assay-specific default.
+# NEIME uses the five-branch additive noise_initial_0p7 preset; other assays use
+# the original five-branch additive preset.
 # Four-branch alternative (excludes inverse_folding_site):
 #   --config configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches.json
 # Optional: --noise-prior half_cauchy --noise-prior-scale 0.1.
@@ -103,8 +106,10 @@ assays=(
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
   printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n'
-  printf 'Default array: 0-57; each task uses additive branches and both GP mean scores.\n'
-  printf 'Default config: configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json\n'
+  printf 'Default array: 0 (NEIME only); additive branches and both GP mean scores.\n'
+  printf 'NEIME default config: configs/esm2_proteinmpnn_nkn_two_scores_additive_branches_noise_initial_0p7.json\n'
+  printf 'Other assay indices require an explicit --array override and retain configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json.\n'
+  printf 'Initial noise variance: NEIME 0.7; other assays 0.01 (explicit --config or NKN_CONFIG overrides these defaults).\n'
   printf 'Branches: sequence_site, sequence_global, inverse_folding, structure_distance, inverse_folding_site\n'
   printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'
   printf 'Noise prior: none; override with --noise-prior none|half_cauchy --noise-prior-scale SCALE\n'
@@ -119,7 +124,7 @@ task_index="${SLURM_ARRAY_TASK_ID:-}"
 case "$task_index" in
   [0-9]|[1-4][0-9]|5[0-7]) ;;
   *)
-    printf 'error: SLURM_ARRAY_TASK_ID must be 0-57 (got "%s"). Submit this script with sbatch; its default array is 0-57.\n' "$task_index" >&2
+    printf 'error: SLURM_ARRAY_TASK_ID must be 0-57 (got "%s"). Submit this script with sbatch; its default array is 0 (NEIME only).\n' "$task_index" >&2
     exit 1 ;;
 esac
 
@@ -133,6 +138,10 @@ while [[ ! -f "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
 done
 
 export ASSAY="${assays[$task_index]}"
-export NKN_CONFIG="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json}"
+default_config="configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json"
+if [[ "$ASSAY" == "A0A1I9GEU1_NEIME_Kennouche_2019" ]]; then
+  default_config="configs/esm2_proteinmpnn_nkn_two_scores_additive_branches_noise_initial_0p7.json"
+fi
+export NKN_CONFIG="${NKN_CONFIG:-$default_config}"
 printf 'Array task: %s_%s; assay: %s\n' "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$ASSAY"
 exec bash "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch" "$@"
