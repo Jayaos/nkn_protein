@@ -1,0 +1,125 @@
+"""Collect saved NKN/Kermut metrics without loading checkpoints or predictions."""
+
+import csv
+import json
+from pathlib import Path
+from typing import Any
+
+
+IDENTITY = ("assay_id", "model", "run_id", "stage", "setting")
+METRICS = (
+    "avg_spearman", "std_spearman", "spearman_oof", "spearman_oof_standardized",
+    "spearman", "interval_ece", "pair_ece", "n_variants", "n_pairs", "n_folds",
+    "n_valid_spearman_folds", "n_valid_pair_folds", "n_valid_interval_folds",
+)
+
+
+def _read(path: Path, issues: list[dict]) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(value, dict):
+            raise ValueError("Expected a JSON object")
+        return value
+    except (OSError, ValueError) as error:
+        issues.append({"path": str(path), "error": str(error)})
+        return None
+
+
+def _scalars(metrics: dict) -> dict:
+    return {key: value for key, value in metrics.items()
+            if key not in IDENTITY and (value is None or isinstance(value, (str, int, float, bool)))}
+
+
+def _write_csv(path: Path, rows: list[dict], columns: tuple[str, ...]) -> None:
+    fields = list(dict.fromkeys((*columns, *(key for row in rows for key in row))))
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def aggregate_results(
+    results_dir: str | Path = "results", output_dir: str | Path | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Return ``summary``, ``folds``, and ``issues`` tables for every saved run.
+
+    Scan results/<assay>/{nkn,kermut}_*/{cv,fit}/<setting>/metrics.json.
+    Summary rows retain separate runs, model names, config paths, and stopping
+    criteria. CV metrics are copied from the runner's aggregate, not recomputed
+    from partial folds. Nested mixed singles/doubles metrics become separate rows.
+    Missing aggregate metrics produce incomplete rows; malformed files are also
+    listed in issues. Null/undefined metrics remain None (empty in CSV).
+    Requested but unstarted settings are discovered from fold_manifest.json.
+
+    If output_dir is supplied, write summary.csv, folds.csv, and issues.csv there.
+    Existing report CSVs at that destination are replaced; experiment files are
+    never modified. Uses only the Python standard library.
+    """
+    root = Path(results_dir).resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"Results directory does not exist: {root}")
+    summary, folds, issues = [], [], []
+    for run in sorted(root.glob("*/*")):
+        model = run.name.split("_", 1)[0]
+        if not run.is_dir() or model not in {"nkn", "kermut"}:
+            continue
+        config = _read(run / "config.json", issues) or {}
+        manifest = _read(run / "fold_manifest.json", issues) or {}
+        expected = config.get("evaluation", {}).get("n_folds")
+        settings = {(stage, directory.name)
+                    for stage in ("cv", "fit") for directory in (run / stage).glob("*")
+                    if directory.is_dir()}
+        for setting in manifest.get("requested_settings", []):
+            settings.add(("fit" if setting == "single_to_double" else "cv", setting))
+        if not settings:
+            issues.append({"path": str(run), "error": "No setting directories or requested settings found"})
+        for stage, setting in sorted(settings):
+            directory = run / stage / setting
+            path = directory / "metrics.json"
+            data = _read(path, issues)
+            # The embedded fold records belong to the same snapshot as the
+            # aggregate. Only inspect individual fold files for unfinished CV.
+            fold_data = data.get("fold_metrics", []) if data else []
+            if not data and stage == "cv":
+                fold_data = [value for p in sorted(directory.glob("fold_*/metrics.json"))
+                             if (value := _read(p, issues)) is not None]
+            variants = data.get("setting_metrics", {setting: data}) if data else {setting: None}
+            for label, metrics in sorted(variants.items()):
+                identity = dict(zip(IDENTITY, (run.parent.name, model, run.name, stage, label)))
+                selected_folds = metrics.get("fold_metrics", []) if metrics else fold_data
+                if not metrics and label != setting:
+                    selected_folds = [f.get("setting_metrics", {}).get(label, f) for f in fold_data]
+                status = "complete" if metrics else ("invalid" if path.exists() else "incomplete")
+                if metrics and stage == "cv":
+                    n_folds = expected if expected is not None else metrics.get("n_folds")
+                    ids = [f.get("fold") for f in selected_folds]
+                    if (not isinstance(n_folds, int) or n_folds < 1
+                            or metrics.get("n_folds") != n_folds
+                            or len(ids) != n_folds or set(ids) != set(range(n_folds))):
+                        status = "incomplete"
+                if metrics and (metrics.get("assay_id", run.parent.name) != run.parent.name
+                                or metrics.get("setting", label) != label):
+                    status = "invalid"
+                    issues.append({"path": str(path), "error": "Metric identity disagrees with directory"})
+                row = {
+                    **identity, "status": status, "expected_folds": expected if stage == "cv" else None,
+                    "completed_folds": len(selected_folds) if stage == "cv" else None,
+                    "stopping_criterion": config.get("training", {}).get("stopping_criterion"),
+                    "config_path": str(run / "config.json"), "metrics_path": str(path),
+                }
+                if metrics:
+                    row.update(_scalars(metrics))
+                summary.append(row)
+                for fold in selected_folds:
+                    folds.append({**identity, **_scalars(fold), "metrics_path": str(path) if data
+                                  else str(directory / f"fold_{fold.get('fold')}" / "metrics.json")})
+    tables = {"summary": summary, "folds": folds, "issues": issues}
+    if output_dir is not None:
+        output = Path(output_dir)
+        output.mkdir(parents=True, exist_ok=True)
+        _write_csv(output / "summary.csv", summary, (*IDENTITY, "status", *METRICS))
+        _write_csv(output / "folds.csv", folds, (*IDENTITY, "fold", "spearman", "interval_ece", "pair_ece"))
+        _write_csv(output / "issues.csv", issues, ("path", "error"))
+    return tables
