@@ -15,22 +15,24 @@
 # One assay per array task, in the order below. Submit from the repository or
 # a subdirectory; each task delegates to the shared NKN runner.
 # Default: singles (random, modulo, contiguous; five folds each), with the
-# [4, 2, 1] two-score preset and caches under data/features/pretrained/singles.
+# additive two-score preset and caches under data/features/pretrained/singles.
+# Branches: [1]; final NKN: [8, 4, 4, 2, 1]. Minimum optimizer steps: 0.
+# Observation-noise variance prior: half_cauchy, scale 0.1.
 # Includes inverse_folding_site (exp, RBF, Matern-3/2 on mutant log probabilities).
 # Resources above are per assay task. The array parallelizes assays; --parallel
 # additionally divides each task's CPUs between its settings and folds.
 # Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]
 # Add --held-out-interval 100 to record diagnostic Spearman every 100 updates.
 # Add --stopping-criterion validation_spearman for three train / one validation /
-# one test folds. --validation-interval 100 --patience 100 --min-steps 1000 are defaults.
+# one test folds. --validation-interval 100 --patience 100 --min-steps 0 are defaults.
 # Limit assay concurrency: sbatch --array=0-57%2 sbatch_run/run_nkn/run_nkn_assays.sbatch
 # Logs: nkn_assays-<array-job-id>_<task-index>.out in the submission directory.
 # Results: results/<assay>/nkn_esm2_proteinmpnn_<selection>_<task-job-id>/
 # Add --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) to insert NAME under results/.
-# Config precedence: --config PATH, NKN_CONFIG, then the two-score preset.
-# Additive branches [1] with final NKN [8, 4, 4, 2, 1]:
+# Config precedence: --config PATH, NKN_CONFIG, then the additive noise-prior preset.
+# Previous additive preset (min_steps=1000, no noise prior):
 #   --config configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json
-# Optional: --noise-prior half_cauchy --noise-prior-scale 0.1 (default: no prior).
+# Override the prior with --noise-prior none or --noise-prior-scale SCALE.
 set -eo pipefail
 
 # 57 assays with DMS_number_single_mutants < 1000, in catalog order,
@@ -100,10 +102,11 @@ assays=(
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
   printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n'
-  printf 'Default array: 0-57; each task runs one assay with both GP mean scores.\n'
+  printf 'Default array: 0-57; each task uses additive branches and both GP mean scores.\n'
+  printf 'Default config: configs/esm2_proteinmpnn_nkn_two_scores_additive_branches_noise_prior.json\n'
   printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'
-  printf 'Noise prior: --noise-prior none|half_cauchy; --noise-prior-scale 0.1 (overrides JSON)\n'
-  printf 'Overrides: --validation-interval 100 --patience 100 --min-steps 1000 (optimizer steps)\n'
+  printf 'Noise prior: half_cauchy, scale 0.1; override with --noise-prior none|half_cauchy --noise-prior-scale SCALE\n'
+  printf 'Overrides: --validation-interval 100 --patience 100 --min-steps 0 (optimizer steps)\n'
   for index in "${!assays[@]}"; do
     printf '  %s: %s\n' "$index" "${assays[$index]}"
   done
@@ -128,6 +131,6 @@ while [[ ! -f "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
 done
 
 export ASSAY="${assays[$task_index]}"
-export NKN_CONFIG="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn_two_scores.json}"
+export NKN_CONFIG="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn_two_scores_additive_branches_noise_prior.json}"
 printf 'Array task: %s_%s; assay: %s\n' "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$ASSAY"
 exec bash "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch" "$@"

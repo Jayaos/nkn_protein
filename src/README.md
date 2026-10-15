@@ -17,8 +17,10 @@ sequence-conditioned runs with seed 37, averaging log probabilities and
 removing `X` without renormalization. The ProteinMPNN preparation job generates
 this sequence-conditioned cache and the separate variant likelihood scores.
 The generic NKN batch preset uses only ESM2 650M scores in its GP mean.
-The five-assay array launcher defaults to `configs/esm2_proteinmpnn_nkn_two_scores.json`,
-which includes both ESM2 and ProteinMPNN mean scores.
+The assay array launcher defaults to
+`configs/esm2_proteinmpnn_nkn_two_scores_additive_branches_noise_prior.json`,
+which includes both ESM2 and ProteinMPNN mean scores, additive branches, a deeper
+final NKN, `min_steps=0`, and a Half-Cauchy observation-noise prior with scale `0.1`.
 
 ## Installation and first run
 
@@ -344,8 +346,9 @@ The array has a fixed mapping:
 | 4 | `FKBP3_HUMAN_Tsuboyama_2023_2KFV` |
 
 Each task defaults to `data/features/pretrained/singles/<assay>` and
-[`configs/esm2_proteinmpnn_nkn_two_scores.json`](../configs/esm2_proteinmpnn_nkn_two_scores.json).
-The preset uses `[4, 2, 1]` in every enabled branch and the final NKN, and includes
+[`configs/esm2_proteinmpnn_nkn_two_scores_additive_branches_noise_prior.json`](../configs/esm2_proteinmpnn_nkn_two_scores_additive_branches_noise_prior.json).
+The preset uses `[1]` in every enabled branch and `[8, 4, 4, 2, 1]` in the final
+NKN, with `min_steps=0` and a Half-Cauchy noise prior of scale `0.1`. It includes
 both ESM2 650M masked-marginal and ProteinMPNN sequence-likelihood scores in the GP
 mean. Each score is standardized using training variants and has its own learned
 coefficient. Tasks default to all three singles protocols (15 fits per assay).
@@ -641,6 +644,7 @@ above; those are separate from model initialization seeds.
 
 NKN always fits a homoscedastic Gaussian observation-noise variance. By default
 `training.noise_prior` is `"none"`, preserving the existing likelihood objective.
+The assay array launcher's default preset enables `"half_cauchy"` at scale `0.1`.
 To use Kermut's Half-Cauchy prior on that variance, set these fields inside the
 `training` object of any NKN configuration:
 
