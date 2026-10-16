@@ -255,13 +255,13 @@ python -m feature_generation.cli extract --config configs/extraction/proteinmpnn
 python -m feature_generation.cli validate --features data/features/pretrained/singles/BRCA2_HUMAN_Erwood_2022_HEK293T --feature-type inverse_folding --model-family proteinmpnn --cache-id v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb
 ```
 
-ProteinMPNN processes reference intervals 1â€“1000, 1001â€“2085, and 2086â€“2832 in
+ProteinMPNN processes reference intervals 1Ã¢â‚¬â€œ1000, 1001Ã¢â‚¬â€œ2085, and 2086Ã¢â‚¬â€œ2832 in
 three independent calls, each using the configured seed and order count. Its
 sequence context is local to each fragment. Output rows are concatenated in
 reference-position order without changing probabilities or normalizing them
 again. The cache retains the full 3418-residue reference and contains `[2832,20]`
 probabilities plus their explicit positions. All 265 variants in the current
-assay mutate covered sites. Positions 2833â€“3418 have no structure-derived
+assay mutate covered sites. Positions 2833Ã¢â‚¬â€œ3418 have no structure-derived
 probabilities, and extraction/loading rejects mutations there.
 
 Each fragment must exactly match its declared reference slice. Overlapping or
@@ -313,8 +313,8 @@ the sequence ends. The default NKN preparation preset enables this mode with
 `max_length=1022`. For one-based position `p`, set `W=min(L,max_length)` and
 `start=max(0,min(p-1-W//2,L-W))`; score the slice `WT[start:start+W]`, masking
 its residue at zero-based offset `p-1-start`. BOS/EOS tokens are added afterward.
-For a 3,000-residue reference, positions 1,000 and 2,300 use residues 489â€“1,510
-and 1,789â€“2,810 respectively. Other positions in each window stay wild type,
+For a 3,000-residue reference, positions 1,000 and 2,300 use residues 489Ã¢â‚¬â€œ1,510
+and 1,789Ã¢â‚¬â€œ2,810 respectively. Other positions in each window stay wild type,
 including positions mutated elsewhere in the variant. Distant context outside
 the window does not affect the score.
 
@@ -537,11 +537,17 @@ After preparation finishes, submit the CPU-only readiness check:
 sbatch sbatch_run/run_prepare_rep/validate_prepared.sbatch
 ```
 
-This checks every catalog assay against the NKN four-branch, two-score `0p5`
-preset, including complete single-mutant coverage and required structures.
-The shared BRCA2 resolver excludes its distance branch and ProteinMPNN score.
-Use `--config PATH` to select another NKN experiment preset. This job does not
-perform inference or training, download assets, or modify feature caches.
+This validates the assets selected by `prepare_esm2.sbatch` and
+`prepare_proteinmpnn.sbatch`, without an NKN experiment config: ESM2 embeddings
+and masked-marginal scores, ProteinMPNN sequence-conditioned features and
+seed-0 single-order scores, model/checkpoint files, and registered structures.
+It verifies cache completion markers, checksums, saved recipes, and complete
+single-mutant coverage against the current catalog and assay CSVs. BRCA2's
+ProteinMPNN score is explicitly skipped, matching preparation.
+Use `--esm2-config PATH` (or `ESM2_CONFIG`) if ESM2 was prepared with a different
+extraction preset; the CLI option takes precedence. ProteinMPNN uses the same
+two fixed extraction configs as its preparation job. This job does not perform
+inference, training, downloads, or modify feature caches.
 It requests four CPUs, 64 GiB RAM, and four hours; resource limits can be
 overridden with `sbatch` options.
 
@@ -550,7 +556,7 @@ and final totals print directly to `validate_prepared-<job-id>.out` in the
 submission directory. No report files or directories are created. Failed assays
 do not stop subsequent checks. Any assay failure makes the job exit nonzero;
 a catalog/setup error stops before the final summary is printed.
-This validates inputs for the selected experiment, not CV fold files. Wait for
+This checks preparation assets, not kernel branches or CV fold files. Wait for
 both preparation jobs to finish before running it, or use a Slurm `afterany`
 dependency on their job IDs.
 
