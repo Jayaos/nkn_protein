@@ -40,7 +40,7 @@
 set -eo pipefail
 
 # 57 assays with DMS_number_single_mutants < 1000, in catalog order,
-# matching prepare_esm2.sbatch and prepare_proteinmpnn.sbatch at indices 0-56.
+# This training subset has its own indices; preparation uses the full catalog.
 # FKBP3_HUMAN_Tsuboyama_2023_2KFV is appended at index 57.
 assays=(
   "A0A1I9GEU1_NEIME_Kennouche_2019"

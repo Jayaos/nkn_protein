@@ -255,13 +255,13 @@ python -m feature_generation.cli extract --config configs/extraction/proteinmpnn
 python -m feature_generation.cli validate --features data/features/pretrained/singles/BRCA2_HUMAN_Erwood_2022_HEK293T --feature-type inverse_folding --model-family proteinmpnn --cache-id v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb
 ```
 
-ProteinMPNN processes reference intervals 1–1000, 1001–2085, and 2086–2832 in
+ProteinMPNN processes reference intervals 1â€“1000, 1001â€“2085, and 2086â€“2832 in
 three independent calls, each using the configured seed and order count. Its
 sequence context is local to each fragment. Output rows are concatenated in
 reference-position order without changing probabilities or normalizing them
 again. The cache retains the full 3418-residue reference and contains `[2832,20]`
 probabilities plus their explicit positions. All 265 variants in the current
-assay mutate covered sites. Positions 2833–3418 have no structure-derived
+assay mutate covered sites. Positions 2833â€“3418 have no structure-derived
 probabilities, and extraction/loading rejects mutations there.
 
 Each fragment must exactly match its declared reference slice. Overlapping or
@@ -313,8 +313,8 @@ the sequence ends. The default NKN preparation preset enables this mode with
 `max_length=1022`. For one-based position `p`, set `W=min(L,max_length)` and
 `start=max(0,min(p-1-W//2,L-W))`; score the slice `WT[start:start+W]`, masking
 its residue at zero-based offset `p-1-start`. BOS/EOS tokens are added afterward.
-For a 3,000-residue reference, positions 1,000 and 2,300 use residues 489–1,510
-and 1,789–2,810 respectively. Other positions in each window stay wild type,
+For a 3,000-residue reference, positions 1,000 and 2,300 use residues 489â€“1,510
+and 1,789â€“2,810 respectively. Other positions in each window stay wild type,
 including positions mutated elsewhere in the variant. Distant context outside
 the window does not affect the score.
 
@@ -414,7 +414,7 @@ Use `--device cpu` when no GPU is available. This reuses the existing ProteinMPN
 checkpoint and structure manifest; no new dependencies or model downloads are
 needed if extraction already ran. Scoring can also run before extraction.
 `prepare_proteinmpnn.sbatch` downloads and verifies the pinned checkpoint/source
-and ProteinGym reference structures for the same three selected assays, then
+and ProteinGym reference structures for all catalog assays, then
 extracts the Kermut sequence-conditioned features and prepares variant scores,
 using `--singles-only` for both stages. The reference distribution still covers
 every residue; the shared variant table and scores contain only single mutants.
@@ -486,67 +486,56 @@ descriptors remain readable; all new score artifacts use `mean_score.csv`.
 Official scoring sources: [ProteinMPNN sequence scoring](https://github.com/dauparas/ProteinMPNN/blob/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/protein_mpnn_run.py),
 [ProteinMPNN NLL reduction](https://github.com/dauparas/ProteinMPNN/blob/8907e6671bfbfc92303b5f79c4b5e6ce47cdef57/protein_mpnn_utils.py).
 
-## Preparing the three selected assays on Slurm
+## Preparing the full substitutions catalog on Slurm
 
-Both preparation scripts select only these assays, in this order:
+Both preparation scripts select every assay in their configured
+`DMS_substitutions.csv`, in catalog order (217 assays in the current local catalog).
+There is no hard-coded assay list or single-mutant-count threshold.
+`DMS_substitutions.csv` supplies metadata; each entry must have its corresponding
+variant CSV beside the catalog. Both scripts still filter variants to single
+mutants and save under `data/features/pretrained/singles/<assay>/`; this does not
+add indel assays or multi-mutant variants.
 
-1. `PIN1_HUMAN_Tsuboyama_2023_1I6C`
-2. `VKOR1_HUMAN_Chiasson_2020_activity`
-3. `BLAT_ECOLX_Jacquier_2013`
-
-`DMS_substitutions.csv` supplies metadata; it is not itself a variant assay.
-Each selected catalog entry must have its corresponding
-CSV beside the catalog. Both scripts filter each assay to single mutants and save
-under `data/features/pretrained/singles/<assay>/`.
-
-Optionally use one assay per array task. Run from the repository root:
+Use one assay per array task. From the repository root:
 
 ```bash
-esm_job=$(sbatch --parsable --array=0-2 \
+count=$(python sbatch_run/run_prepare_rep/list_assays.py \
+  --config configs/extraction/esm2_650m_centered.json --count)
+esm_job=$(sbatch --parsable --array="0-$((count - 1))%4" \
   sbatch_run/run_prepare_rep/prepare_esm2.sbatch)
-sbatch --array=0-2 \
+count=$(python sbatch_run/run_prepare_rep/list_assays.py \
+  --config configs/extraction/proteinmpnn_v48_020_kermut.json --count)
+sbatch --array="0-$((count - 1))%4" \
   --dependency="afterany:${esm_job%%;*}" \
   sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
 ```
 
-Each array contains three GPU tasks. The dependency waits for
-the ESM2 array to finish, including failed tasks, before starting ProteinMPNN;
-this avoids simultaneous writes to shared assay metadata by the two models.
-These are standard [Slurm array options](https://slurm.schedmd.com/job_array.html).
-Each task retains the script's one-hour time limit and resource request. Increase
-the time limit with `sbatch --time=...` when an individual assay needs longer.
+`%4` limits each array to four simultaneous tasks. The dependency waits for ESM2
+before starting ProteinMPNN to avoid simultaneous writes to shared assay metadata.
+Array indices now refer to the full catalog, **not the previous 57-assay subset**.
+Use `list_assays.py --config <extraction-config> --task-index N` to inspect an
+index; omit `--task-index` to list the entire catalog. When overriding the ESM2
+config, use that same config to compute its array size.
 
-Task indices `0`, `1`, and `2` select PIN1, VKOR1, and BLAT, respectively; indices refer to
-the selected list, not raw catalog row numbers. The listing helper accepts
-repeatable `--assay` filters to match this selection (and needs only the Python
-standard library). To confirm the count or rerun VKOR1:
+Without `--array`, each script processes the whole catalog sequentially in one
+GPU allocation. The current limits are four hours for ESM2 and one hour for
+ProteinMPNN; increase time or memory with `sbatch` overrides when needed.
 
-```bash
-python sbatch_run/run_prepare_rep/list_assays.py \
-  --config configs/extraction/esm2_650m_centered.json \
-  --assay PIN1_HUMAN_Tsuboyama_2023_1I6C \
-  --assay VKOR1_HUMAN_Chiasson_2020_activity \
-  --assay BLAT_ECOLX_Jacquier_2013 --count
-sbatch --array=1 sbatch_run/run_prepare_rep/prepare_esm2.sbatch
-```
-
-The filtered count is `3`; replace `--count` with `--task-index 1` to print the
-second assay. Without `--assay` filters the helper still lists the entire catalog,
-which is broader than the preparation jobs' selection.
-
-Submitting either script without `--array` processes all three selected assays
-sequentially in one GPU allocation; the one-hour default may be insufficient
-for this mode. Logs include the array job/task IDs. Both scripts use `--resume`
-and `--continue-on-error`: failed assays are reported, remaining assays and the
-scoring stage are still attempted, and any failed stage gives a nonzero exit.
-Shared setup failures, such as an invalid catalog or failed model download,
-stop the job before extraction.
+Reruns reuse verified checkpoint files and registered structures. Both extraction
+and scoring use `--resume`: a matching, complete, validated cache is skipped
+before model loading/inference. Existing files alone do not qualify: corrupt,
+incomplete published caches or incompatible recipes are reported as errors;
+missing outputs are computed. Slurm jobs still start and perform validation.
+Both scripts use `--continue-on-error`, retaining completed outputs while reporting
+assay failures and returning a nonzero status. Shared setup failures stop the job.
+ProteinMPNN still needs compatible structures; BRCA2 uses fragment features and
+explicitly skips full-sequence ProteinMPNN scoring (use ESM2 scores).
 
 The default ESM2 compact preset uses at most 1,022 residues in each model input
 and supports mutation sites anywhere in the full reference. Its output estimate
 is `(number_of_variants + mutation_occurrences) * 1280 * 4` bytes plus four int64
 arrays per mutation occurrence. It has a 32 GiB output guard; the batch job
-requests 192 GiB host RAM. Peak process memory includes input tables, model
+requests 16 GiB host RAM. Peak process memory includes input tables, model
 weights, and validation. Completed assays can resume; partial assays restart.
 The default preset also scores long references with centered WT windows, so
 both ESM2 stages cover mutation positions beyond residue 1,022. ProteinMPNN's
@@ -565,7 +554,7 @@ sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch --config configs/extractio
 Using this optional recipe with Kermut also requires a copied experiment config
 selecting the `-mean-first1022` embedding cache and full-reference ESM2 score
 cache. The default Kermut config selects the centered preparation outputs.
-Use the same extraction config and both `--assay` filters when listing array indices. The
+Use the same extraction config when listing array indices. The
 pooled preset averages the first 1,022 residues (the full sequence when shorter)
 and retains its 4 GiB output limit. It can extract embeddings for longer
 references, but its scoring stage still fails the full-reference length check.
