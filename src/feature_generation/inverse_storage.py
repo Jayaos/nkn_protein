@@ -102,6 +102,14 @@ def _validate_config(config: dict, model_family: str, cache_id: str) -> None:
     if not isinstance(structure, dict):
         raise ValueError("Missing structure metadata")
     validate_structure_metadata(structure, structure.get("reference_sequence"))
+    if structure.get("schema_version") == 3:
+        expected_mapping_recipe = {
+            "structure_context": "original_pdb_then_kermut_mapping",
+            "residue_indexing": "explicit_one_based_reference_positions",
+            "reference_mapping": structure["mapping_policy"],
+        }
+        if any(config.get(key) != value for key, value in expected_mapping_recipe.items()):
+            raise ValueError("Mapped inverse-folding cache requires inference on the original PDB before mapping")
     if structure.get("schema_version") == 2:
         expected_fragment_recipe = {
             "structure_context": "independent_reference_fragments",

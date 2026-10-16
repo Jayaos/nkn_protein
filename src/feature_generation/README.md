@@ -284,6 +284,47 @@ Local fragments can be registered explicitly using repeated file/range pairs:
 python -m feature_generation.cli prepare-structure --assay BRCA2_HUMAN_Erwood_2022_HEK293T --structure data/structures/raw/BRCA2_HUMAN_1-1000.pdb --reference-range 1-1000 --structure data/structures/raw/BRCA2_HUMAN_1001-2085.pdb --reference-range 1001-2085 --structure data/structures/raw/BRCA2_HUMAN_2086-2832.pdb --reference-range 2086-2832
 ```
 
+### Kermut reference mappings
+
+Six assays require the same post-inference mapping used by Kermut's
+`extract_ProteinMPNN_probs.py` and `extract_3d_coords.py`. Structure download and
+registration apply these explicit exceptions automatically:
+
+| Assay | Treatment |
+| --- | --- |
+| `CAS9_STRP1_Spencer_2017_positive` | Infer features on all 1390 PDB residues, then retain output rows 1-1368. |
+| Three `P53_HUMAN_Giacomelli_2018_*` assays | Allow exactly PDB P72 versus assay R72 when matching; feature inference still uses the original PDB P72 sequence. |
+| `A0A140D2T1_ZIKV_Sourisseau_2019` | Map the 504 PDB residues to reference positions 291-794. |
+| `POLG_HCVJF_Qi_2014` | Map the 244 PDB residues to reference positions 1982-2225. |
+
+Schema-v3 manifests preserve the source file, checksum, original PDB sequence,
+and explicit source-to-reference mapping. Other mismatches remain errors.
+For domain structures, caches store only covered rows with explicit reference
+positions rather than Kermut's NaN-padded probability arrays. They retain the
+full assay reference and reject mutations outside structural coverage. Domain
+coordinates share one physical frame, so the distance kernel remains available.
+
+ZIKV and HCV do not have full-reference ProteinMPNN likelihood scores. Preparation
+skips those scores, readiness reports SKIP, and NKN drops the ProteinMPNN mean
+source while retaining ESM2. CAS9 and P53 can use the existing full-sequence
+scorer with their mapped reference backbones and assay variant sequences; this
+score is separate from Kermut's reference probability features. For CAS9, the
+scoring backbone has 1368 residues, while feature inference uses all 1390.
+
+The ProteinMPNN script now defaults to retrying these six failed assays as
+array tasks 0,31,116-118,130 in the current 217-row catalog:
+
+```bash
+sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
+```
+
+To prepare the whole current catalog, override with
+`sbatch --array=0-216 sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch`. Array indices follow
+catalog order; confirm them if the catalog changes. Existing
+valid manifests and matching completed feature/score caches are reused. ESM2
+does not need rerunning for this mapping change. Run `validate_prepared.sbatch`
+after preparation to refresh the readiness log and CSV.
+
 Upstream implementations: [ProteinMPNN](https://github.com/dauparas/ProteinMPNN),
 [ESM-IF1](https://github.com/facebookresearch/esm/tree/main/examples/inverse_folding).
 
@@ -488,9 +529,11 @@ Official scoring sources: [ProteinMPNN sequence scoring](https://github.com/daup
 
 ## Preparing the full substitutions catalog on Slurm
 
-Both preparation scripts select every assay in their configured
+Both preparation scripts support every assay in their configured
 `DMS_substitutions.csv`, in catalog order (217 assays in the current local catalog).
-There is no hard-coded assay list or single-mutant-count threshold.
+ProteinMPNN defaults to the six failed-assay retry tasks; the explicit array
+below overrides that default to process the full catalog. Neither script applies
+a single-mutant-count threshold.
 `DMS_substitutions.csv` supplies metadata; each entry must have its corresponding
 variant CSV beside the catalog. Both scripts still filter variants to single
 mutants and save under `data/features/pretrained/singles/<assay>/`; this does not
@@ -517,9 +560,10 @@ Use `list_assays.py --config <extraction-config> --task-index N` to inspect an
 index; omit `--task-index` to list the entire catalog. When overriding the ESM2
 config, use that same config to compute its array size.
 
-Without `--array`, each script processes the whole catalog sequentially in one
-GPU allocation. The current limits are four hours for ESM2 and one hour for
-ProteinMPNN; increase time or memory with `sbatch` overrides when needed.
+Without `--array`, ESM2 processes the whole catalog sequentially in one GPU
+allocation. ProteinMPNN uses its built-in six-assay retry array unless overridden.
+The current time limits are four hours for ESM2 and one hour per ProteinMPNN
+task; increase time or memory with `sbatch` overrides when needed.
 
 Reruns reuse verified checkpoint files and registered structures. Both extraction
 and scoring use `--resume`: a matching, complete, validated cache is skipped
@@ -528,8 +572,9 @@ incomplete published caches or incompatible recipes are reported as errors;
 missing outputs are computed. Slurm jobs still start and perform validation.
 Both scripts use `--continue-on-error`, retaining completed outputs while reporting
 assay failures and returning a nonzero status. Shared setup failures stop the job.
-ProteinMPNN still needs compatible structures; BRCA2 uses fragment features and
-explicitly skips full-sequence ProteinMPNN scoring (use ESM2 scores).
+ProteinMPNN still needs compatible structures. BRCA2 uses fragment features;
+ZIKV and HCV use domain features. These three assays explicitly skip full-sequence
+ProteinMPNN scoring (use ESM2 scores).
 
 After preparation finishes, submit the CPU-only readiness check:
 
@@ -542,8 +587,8 @@ This validates the assets selected by `prepare_esm2.sbatch` and
 and masked-marginal scores, ProteinMPNN sequence-conditioned features and
 seed-0 single-order scores, model/checkpoint files, and registered structures.
 It verifies cache completion markers, checksums, saved recipes, and complete
-single-mutant coverage against the current catalog and assay CSVs. BRCA2's
-ProteinMPNN score is explicitly skipped, matching preparation.
+single-mutant coverage against the current catalog and assay CSVs. BRCA2, ZIKV,
+and HCV ProteinMPNN scores are explicitly skipped, matching preparation.
 Use `--esm2-config PATH` (or `ESM2_CONFIG`) if ESM2 was prepared with a different
 extraction preset; the CLI option takes precedence. ProteinMPNN uses the same
 two fixed extraction configs as its preparation job. This job does not perform
@@ -559,8 +604,8 @@ log. Use `--summary-csv PATH` to choose a new destination (existing files are
 never overwritten). Each row contains the catalog array index, assay ID,
 per-asset READY/FAILED/SKIP statuses, output readiness, overall readiness,
 errors, and notes. Shared model statuses are repeated for each assay; `status`
-is FAILED if a shared asset fails even when `outputs_status` is READY. BRCA2's
-intentional score omission is SKIP, not a failure. Rows are flushed after each
+is FAILED if a shared asset fails even when `outputs_status` is READY. Intentional
+score omissions are SKIP, not failures. Rows are flushed after each
 assay, so an interrupted job retains a partial summary; absent rows have not
 been checked yet. No per-assay report directories are created. Failed assays
 do not stop subsequent checks. Any assay failure makes the job exit nonzero;

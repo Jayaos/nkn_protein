@@ -341,7 +341,7 @@ config = config.for_assay(metadata["assay_id"])
 if config.model.enabled_branches != requested_branches:
     print(f"Assay {metadata['assay_id']}: structure_distance disabled for separate reference fragments.")
 if config.score_sources != requested_scores:
-    print(f"Assay {metadata['assay_id']}: ProteinMPNN mean scores disabled for separate reference fragments; retained score sources: {config.score_sources}.")
+    print(f"Assay {metadata['assay_id']}: ProteinMPNN mean scores disabled for incomplete reference structures; retained score sources: {config.score_sources}.")
 Path(sys.argv[2]).write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
 execution_plan = {
     "parallel": sys.argv[5] == "true",

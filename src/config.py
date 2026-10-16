@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field, replace
 import json
 import math
 from pathlib import Path
+from assay_policies import STRUCTURE_DISTANCE_DISABLED_ASSAYS, PROTEINMPNN_SCORE_SKIP_REASONS
 
 
 VECTOR_PRIMITIVES = ("cosine", "rbf", "matern32")
@@ -12,9 +13,6 @@ IF_SITE_PRIMITIVES = ("exp", "rbf", "matern32")
 STRUCTURE_DISTANCE_PRIMITIVES = ("exp", "rbf", "matern32")
 DEFAULT_BRANCHES = ("inverse_folding", "structure", "sequence_site", "sequence_global")
 BRANCH_NAMES = (*DEFAULT_BRANCHES, "structure_distance", "inverse_folding_site")
-# This assay's reference joins separate BRCA2 fragments. Their structure
-# coordinates do not define physical distances between all reference sites.
-STRUCTURE_DISTANCE_DISABLED_ASSAYS = frozenset({"BRCA2_HUMAN_Erwood_2022_HEK293T"})
 
 
 def branch_primitives(name):
@@ -216,19 +214,19 @@ class ExperimentConfig:
 
     def for_assay(self, assay_id):
         """Resolve known assay restrictions before loading features or saving a run."""
-        if assay_id not in STRUCTURE_DISTANCE_DISABLED_ASSAYS:
+        if assay_id not in STRUCTURE_DISTANCE_DISABLED_ASSAYS and assay_id not in PROTEINMPNN_SCORE_SKIP_REASONS:
             return self
-        branches = tuple(name for name in self.model.enabled_branches if name != "structure_distance")
+        branches = tuple(name for name in self.model.enabled_branches
+                         if name != "structure_distance" or assay_id not in STRUCTURE_DISTANCE_DISABLED_ASSAYS)
         if not branches:
             raise ValueError(f"{assay_id} disables structure_distance; enable at least one other kernel branch")
-        # Preparation supports fragment-wise inverse-folding features, but not
-        # full-reference ProteinMPNN likelihoods. Keep the other mean sources.
+        # Partial structures support local features but not full-reference scores.
         scores = self.score_sources
-        if scores is not None:
+        if scores is not None and assay_id in PROTEINMPNN_SCORE_SKIP_REASONS:
             scores = [source for source in scores if not source.startswith("scores/proteinmpnn/")]
             if self.score_sources and not scores:
                 raise ValueError(
-                    f"{assay_id} disables ProteinMPNN mean scores for separate reference fragments; "
+                    f"{assay_id} disables ProteinMPNN mean scores for incomplete reference structures; "
                     "configure an ESM2 mean score source"
                 )
         if branches == self.model.enabled_branches and scores == self.score_sources:

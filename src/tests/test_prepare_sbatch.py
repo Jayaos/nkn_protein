@@ -343,6 +343,19 @@ class PreparationSbatchTests(PreparationFixture):
             self.assertEqual(arguments[arguments.index("--config") + 1], expected)
         self.assertEqual([record["args"] for record in records if record["kind"] == "inline"], [[expected]])
 
+    def test_domain_assay_array_tasks_extract_features_without_full_sequence_scores(self):
+        for assay in ("A0A140D2T1_ZIKV_Sourisseau_2019", "POLG_HCVJF_Qi_2014"):
+            with self.subTest(assay=assay):
+                self.rows = [{"DMS_id": assay, "DMS_filename": f"{assay}.csv", "target_seq": "ACD", "UniProt_ID": assay}]
+                self.write_catalog()
+                (self.raw / f"{assay}.csv").write_text("mutant,mutated_sequence,DMS_score\nA1C,CCD,1.0\n")
+                result, records = self.invoke(SCRIPTS[1], {"SLURM_ARRAY_TASK_ID": "0"})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("use ESM2 mean scores", result.stdout)
+                extracted = next(record["args"] for record in records if record["kind"] == "extract")
+                self.assertIn(assay, extracted)
+                self.assertFalse(any(record["kind"] == "score" for record in records))
+
     def test_esm2_config_override_selects_entire_overridden_catalog(self):
         # A distinct catalog exposes any stage that accidentally keeps the default.
         catalog = self.raw / "subset.csv"

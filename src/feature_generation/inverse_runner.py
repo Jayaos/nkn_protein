@@ -12,6 +12,7 @@ from .inputs import prepare_assay, safe_component
 from .inverse_storage import check_existing, make_leaf_config, validate_distributions, write_inverse_cache
 from .storage import ensure_assay
 from .structure_fragments import StructureFragments, load_inverse_structure as load_structure
+from .structure_mappings import MappedStructure
 from data_loading.features import parse_substitutions
 
 if TYPE_CHECKING:
@@ -79,8 +80,9 @@ def extract(
             )
             if structure.metadata.get("assay_id") != assay_id:
                 raise ValueError("Structure manifest belongs to a different assay")
-            fragments = structure.fragments if isinstance(structure, StructureFragments) else (structure,)
-            covered_positions = (structure.positions if isinstance(structure, StructureFragments)
+            fragments = (structure.fragments if isinstance(structure, StructureFragments)
+                         else (structure.source,) if isinstance(structure, MappedStructure) else (structure,))
+            covered_positions = (structure.positions if isinstance(structure, (StructureFragments, MappedStructure))
                                  else torch.arange(1, inputs.length + 1))
             covered = set(covered_positions.tolist())
             missing = sorted({position for row in inputs.rows for position in parse_substitutions(
@@ -98,6 +100,10 @@ def extract(
                     "inference_dtype": config.inference_dtype,
                 }
             effective_metadata = model_metadata
+            if isinstance(structure, MappedStructure):
+                effective_metadata = dict(model_metadata, structure_context="original_pdb_then_kermut_mapping",
+                                          residue_indexing="explicit_one_based_reference_positions",
+                                          reference_mapping=structure.metadata["mapping_policy"])
             if isinstance(structure, StructureFragments):
                 effective_metadata = dict(
                     model_metadata, structure_context="independent_reference_fragments",
@@ -139,6 +145,9 @@ def extract(
                 predictions.append(prediction)
             probabilities = torch.cat([prediction["probabilities"] for prediction in predictions])
             log_probs = torch.cat([prediction["log_probs"] for prediction in predictions])
+            if isinstance(structure, MappedStructure):
+                probabilities = probabilities[structure.source_indices]
+                log_probs = log_probs[structure.source_indices]
             validate_distributions(
                 probabilities, log_probs, len(covered_positions), normalization=leaf_config["normalization"],
             )

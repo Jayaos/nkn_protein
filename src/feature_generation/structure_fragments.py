@@ -92,6 +92,10 @@ def _global_mapping(fragments):
 
 def validate_inverse_structure_metadata(metadata: dict, reference_sequence: str) -> None:
     """Validate legacy structure or fragment metadata without reading PDB files."""
+    if isinstance(metadata, dict) and metadata.get("schema_version") == 3:
+        from .structure_mappings import validate_mapped_metadata
+        validate_mapped_metadata(metadata, reference_sequence)
+        return
     if isinstance(metadata, dict) and metadata.get("schema_version") == 1:
         validate_structure_metadata(metadata, reference_sequence)
         return
@@ -133,6 +137,9 @@ def load_inverse_structure(manifest_path: str | Path, reference_sequence: str,
     """Load separate coordinate arrays for fragments or a legacy full structure."""
     manifest_path = Path(manifest_path).resolve()
     metadata = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if isinstance(metadata, dict) and metadata.get("schema_version") == 3:
+        from .structure_mappings import load_mapped_structure
+        return load_mapped_structure(manifest_path, reference_sequence, require_oxygen)
     if isinstance(metadata, dict) and metadata.get("schema_version") == 1:
         return load_structure(manifest_path, reference_sequence, require_oxygen)
     validate_inverse_structure_metadata(metadata, reference_sequence)

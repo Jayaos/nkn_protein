@@ -71,6 +71,20 @@ class ReadinessTests(unittest.TestCase):
         self.assertIn("fixture corrupt cache", self.summary_rows[0]["errors"])
         self.assertEqual(self.summary_rows[1]["status"], "READY")
 
+    def test_domain_assays_require_features_but_skip_full_reference_scores(self):
+        for assay in r.PROTEINMPNN_SCORE_SKIP_REASONS:
+            if assay == r.BRCA2:
+                continue
+            with self.subTest(assay=assay):
+                self.esm.assay_index.write_text(
+                    f"DMS_id,DMS_filename,target_seq\n{assay},tiny.csv,ACD\n")
+                status, log, calls = self.run_audit()
+                self.assertEqual(status, 0, log)
+                self.assertIn((assay, "proteinmpnn", "features"), calls)
+                self.assertNotIn((assay, "proteinmpnn", "scores"), calls)
+                self.assertEqual(self.summary_rows[0]["proteinmpnn_scores"], "SKIP")
+                self.assertEqual(self.summary_rows[0]["status"], "READY")
+
     def test_missing_model_is_reported_even_when_outputs_pass(self):
         status, log, calls = self.run_audit(shared_failure=True)
         self.assertEqual(status, 1)

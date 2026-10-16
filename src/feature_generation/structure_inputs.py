@@ -51,6 +51,10 @@ def _signature(metadata: dict) -> str:
 
 def validate_structure_metadata(metadata: dict, reference_sequence: str) -> None:
     """Validate a copied manifest without needing the source structure file."""
+    if isinstance(metadata, dict) and metadata.get("schema_version") == 3:
+        from .structure_mappings import validate_mapped_metadata
+        validate_mapped_metadata(metadata, reference_sequence, require_full=True)
+        return
     if not isinstance(metadata, dict) or metadata.get("schema_version") != 1:
         raise ValueError("Unsupported structure manifest schema")
     if not reference_sequence or any(aa not in RESIDUE_CODES.values() for aa in reference_sequence):
@@ -88,7 +92,7 @@ def validate_structure_metadata(metadata: dict, reference_sequence: str) -> None
         raise ValueError("Structure input signature does not match manifest contents")
 
 
-def _parse_structure(path: Path, reference_sequence: str, chain_id: str | None, model_index: int):
+def _parse_structure(path: Path, reference_sequence: str | None, chain_id: str | None, model_index: int):
     try:
         import Bio
         from Bio.PDB import MMCIFParser, PDBParser
@@ -137,6 +141,10 @@ def _parse_structure(path: Path, reference_sequence: str, chain_id: str | None, 
             raise ValueError(f"Unsupported noncanonical protein residue {residue.resname} {residue.id}")
         residues.append(residue)
     observed = "".join(RESIDUE_CODES[residue.resname] for residue in residues)
+    # Only explicit mapped-assay registration calls with None, then verifies
+    # the observed sequence against its narrow, assay-specific mapping recipe.
+    if reference_sequence is None:
+        reference_sequence = observed
     if observed != reference_sequence:
         raise ValueError(f"Selected chain must exactly match the full reference sequence: structure length {len(observed)}, reference length {len(reference_sequence)}; partial coverage, mutations, or extra residues are unsupported")
     coords = torch.full((len(residues), 4, 3), float("nan"), dtype=torch.float32)
@@ -192,6 +200,10 @@ def prepare_structure(index_path: str | Path, assay_id: str, structure_file: str
     """
     safe_component(assay_id, "assay ID")
     index_path, structure_file = Path(index_path).resolve(), Path(structure_file).resolve()
+    from .structure_mappings import MAPPED_ASSAYS, prepare_mapped_structure
+    if assay_id in MAPPED_ASSAYS:
+        return prepare_mapped_structure(index_path, assay_id, structure_file, chain_id, model_index,
+                                        output_dir, source_url, source_archive)
     record = AssayCatalog(index_path).get(assay_id)
     index_hash, digest = sha256_file(index_path), sha256_file(structure_file)
     _, mapping, selected_chain, parser_version = _parse_structure(structure_file, record.reference_sequence, chain_id, model_index)
@@ -228,6 +240,9 @@ def load_structure(manifest_path: str | Path, reference_sequence: str, require_o
     manifest_path = Path(manifest_path).resolve()
     with manifest_path.open(encoding="utf-8") as handle:
         metadata = json.load(handle)
+    if isinstance(metadata, dict) and metadata.get("schema_version") == 3:
+        from .structure_mappings import load_mapped_structure
+        return load_mapped_structure(manifest_path, reference_sequence, require_oxygen).full_reference_structure()
     if isinstance(metadata, dict) and metadata.get("schema_version") == 2:
         raise ValueError("Fragment collections do not define a shared coordinate frame; use load_inverse_structure for independent fragment inference")
     return _load_structure_metadata(metadata, manifest_path, reference_sequence, require_oxygen)
@@ -318,6 +333,7 @@ def download_proteingym_structure(index_path: str | Path, assay_id: str,
     are matched uniquely by basename and never used as destination paths.
     """
     from .downloads import download_verified
+    from .structure_mappings import MAPPED_ASSAYS, mapping_recipe
     safe_component(assay_id, "assay ID")
     record = AssayCatalog(index_path).get(assay_id)
     filename = record.metadata.get("pdb_file")
@@ -329,7 +345,8 @@ def download_proteingym_structure(index_path: str | Path, assay_id: str,
         return download_proteingym_fragments(index_path, assay_id, chain_id, model_index, raw_dir, manifest_dir)
     manifest_path = Path(manifest_dir).resolve() / f"{assay_id}.json"
     if manifest_path.exists():
-        existing = load_structure(manifest_path, record.reference_sequence, require_oxygen=False)
+        from .structure_fragments import load_inverse_structure
+        existing = load_inverse_structure(manifest_path, record.reference_sequence, require_oxygen=False)
         source_archive = existing.metadata.get("source_archive", {})
         if source_archive.get("sha256") != PROTEINGYM_STRUCTURE_SHA256 or existing.model_index != model_index or (chain_id is not None and existing.chain_id != chain_id):
             raise ValueError("The existing structure manifest uses a different source, model, or chain")
@@ -356,7 +373,11 @@ def download_proteingym_structure(index_path: str | Path, assay_id: str,
                             break
                         handle.write(block)
                 handle.close()
-                _parse_structure(temporary, record.reference_sequence, chain_id, model_index)
+                if assay_id in MAPPED_ASSAYS:
+                    _, rows, _, _ = _parse_structure(temporary, None, chain_id, model_index)
+                    mapping_recipe(assay_id, record.reference_sequence, "".join(row["amino_acid"] for row in rows))
+                else:
+                    _parse_structure(temporary, record.reference_sequence, chain_id, model_index)
                 if target.exists():
                     if sha256_file(target) != sha256_file(temporary):
                         raise ValueError(f"Existing raw structure differs from the pinned ProteinGym archive: {target}")

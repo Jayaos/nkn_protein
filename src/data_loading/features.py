@@ -277,7 +277,10 @@ def kermut_probability_recipe(config: Mapping) -> dict | None:
 
 def _structure_distance_features(manifest_dir, assay_id, reference, root, stores, configs, sources):
     """Load mapped CA atoms and check any cached structural provenance."""
-    from feature_generation.structure_inputs import load_structure, validate_structure_metadata
+    from feature_generation.structure_fragments import (
+        StructureFragments, load_inverse_structure as load_structure,
+        validate_inverse_structure_metadata as validate_structure_metadata,
+    )
 
     manifest_root = Path(manifest_dir)
     if not manifest_root.is_absolute():
@@ -287,6 +290,8 @@ def _structure_distance_features(manifest_dir, assay_id, reference, root, stores
     if manifest.parent != manifest_root:
         raise ValueError("Assay structure manifest path escapes structure_manifest_dir")
     structure = load_structure(manifest, reference, require_oxygen=False)
+    if isinstance(structure, StructureFragments):
+        raise ValueError("Separate structure fragments do not define a shared coordinate frame")
     if structure.metadata.get("assay_id") != assay_id:
         raise ValueError("Structure manifest belongs to a different assay")
     # Sequence representations can also be structure-conditioned (e.g. ProSST).
@@ -318,7 +323,9 @@ def _structure_distance_features(manifest_dir, assay_id, reference, root, stores
         "structure_distance.structure_sha256": structure.structure_sha256,
         "structure_distance.coordinates": "reference_CA_angstrom",
     }
-    return structure.coords[:, 1].double(), signature
+    coordinates = torch.full((len(reference), 3), float("nan"), dtype=torch.float64)
+    coordinates[structure.positions - 1] = structure.coords[:, 1].double()
+    return coordinates, signature
 
 
 def load_feature_bundle(
@@ -413,7 +420,7 @@ def load_feature_bundle(
         positions = store.get("positions")
         expected_positions = torch.arange(1, len(reference) + 1)
         structure_metadata = configs[name].get("structure", {})
-        if name == "inverse_folding" and isinstance(structure_metadata, Mapping) and structure_metadata.get("schema_version") == 2:
+        if name == "inverse_folding" and isinstance(structure_metadata, Mapping) and structure_metadata.get("schema_version") in (2, 3):
             from feature_generation.structure_fragments import inverse_structure_positions
             from feature_generation.inverse_storage import _validate_config
 
@@ -422,7 +429,7 @@ def load_feature_bundle(
                 raise ValueError("Inverse-folding structure belongs to a different assay")
             expected_positions = inverse_structure_positions(structure_metadata, reference)
             if store.get("structure_input_signature") != structure_metadata["input_signature"]:
-                raise ValueError("Inverse-folding fragment structure identity mismatch")
+                raise ValueError("Inverse-folding mapped structure identity mismatch")
         if not isinstance(positions, Tensor) or positions.dtype != torch.long or not torch.equal(positions, expected_positions):
             raise ValueError(f"Expected complete one-based reference positions: {name}")
         if "synthetic" in metadata and store.get("synthetic") != metadata["synthetic"]:
@@ -548,6 +555,8 @@ def load_feature_bundle(
             structure_manifest_dir, assay_id, reference, root, stores, configs, sources,
         )
         local_features["structure_distance"] = coordinates[positions - 1]
+        if not torch.isfinite(local_features["structure_distance"]).all():
+            raise ValueError("Structure coordinates do not cover every requested mutation position")
     selected_scores = list(score_sources) if score_sources is not None else list(sources.values())
     if not selected_scores or len(set(selected_scores)) != len(selected_scores):
         raise ValueError("Select at least one unique mean score source")

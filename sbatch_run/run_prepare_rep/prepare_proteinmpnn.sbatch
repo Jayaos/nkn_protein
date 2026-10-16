@@ -1,5 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=proteinmpnn_rep
+#SBATCH --array=0,31,116-118,130
 #SBATCH --account=gts-yxie77-paid
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -19,17 +20,26 @@
 # This job downloads and verifies the assets before extraction and scoring.
 # It prepares Kermut's sequence-conditioned cache and variant mean scores.
 # Feature extraction uses ten conditional passes over every reference position.
-# The default presets have no sequence-length cap. Registered BRCA2 fragments
-# support inverse-folding features; use ESM2 mean scores for that assay.
-# Other assays require complete structures; long inputs still need sufficient GPU memory.
+# The default presets have no sequence-length cap. BRCA2 fragments and ZIKV/HCV
+# domains support inverse-folding features; those assays use ESM2 mean scores.
+# CAS9/P53 use Kermut's explicit PDB-to-reference mappings.
+# Long inputs still need sufficient GPU memory.
 # Variant scoring uses one sequence per batch to reduce peak GPU memory.
 # Submit: sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
-# Process every assay in the configured DMS_substitutions.csv, in catalog order.
-# No assay-count or single-mutant-count threshold is applied.
+# Default array retries the six FAILED assays in results/preparation_summary.csv:
+#   0: A0A140D2T1_ZIKV_Sourisseau_2019
+#  31: CAS9_STRP1_Spencer_2017_positive
+# 116: P53_HUMAN_Giacomelli_2018_Null_Etoposide
+# 117: P53_HUMAN_Giacomelli_2018_Null_Nutlin
+# 118: P53_HUMAN_Giacomelli_2018_WT_Nutlin
+# 130: POLG_HCVJF_Qi_2014
+# Array indices refer to the full configured catalog, not this six-assay list.
+# To prepare all 217 catalog assays: sbatch --array=0-216 <this-script>
+# Recheck indices if the configured catalog changes.
 # Select single mutants only, saved under data/features/pretrained/singles/.
-# Optional --array=0-(N-1) selects one assay per task in catalog order.
+# An explicit --array=0-(N-1) overrides the default retry selection.
 # Obtain N with list_assays.py --config <extraction-config> --count.
-# Without an array, the entire catalog runs sequentially in this job.
+# Direct execution without SLURM_ARRAY_TASK_ID processes the catalog sequentially.
 # Existing verified downloads are reused; --resume validates and skips completed
 # matching extraction/scoring caches. Job startup and validation still run.
 # Failed assays are reported without stopping the remaining assays or stages.
@@ -79,7 +89,7 @@ assay_args=()
 score_assay_args=()
 for assay in "${assays[@]}"; do
   assay_args+=(--assay "$assay")
-  if [[ "$assay" != BRCA2_HUMAN_Erwood_2022_HEK293T ]]; then
+  if [[ "$assay" != BRCA2_HUMAN_Erwood_2022_HEK293T && "$assay" != A0A140D2T1_ZIKV_Sourisseau_2019 && "$assay" != POLG_HCVJF_Qi_2014 ]]; then
     score_assay_args+=(--assay "$assay")
   fi
 done
@@ -105,7 +115,7 @@ print(f"Kermut extraction: {feature_config.conditioning_mode}; "
 print(f"Variant scoring seed: {score_config.seed}")
 for stage, config in (("Feature extraction", feature_config), ("Variant scoring", score_config)):
     length_policy = "no sequence-length cap" if config.max_length is None else f"at most {config.max_length} residues"
-    structure_policy = "registered BRCA2 fragments allowed" if stage == "Feature extraction" else "complete reference required"
+    structure_policy = "registered fragments and Kermut reference mappings allowed" if stage == "Feature extraction" else "complete reference required"
     print(f"{stage} length policy: {length_policy}; {structure_policy}")
 print("Variant scoring batch size: 1")
 
@@ -200,8 +210,8 @@ fi
 # One variant per batch reduces GPU memory for long complete sequences.
 printf '[4/4] Preparing variant mean_score.csv\n'
 for assay in "${assays[@]}"; do
-  if [[ "$assay" == BRCA2_HUMAN_Erwood_2022_HEK293T ]]; then
-    printf '%s: fragment inverse-folding features use ESM2 mean scores; skipping full-sequence ProteinMPNN scoring.\n' "$assay"
+  if [[ "$assay" == BRCA2_HUMAN_Erwood_2022_HEK293T || "$assay" == A0A140D2T1_ZIKV_Sourisseau_2019 || "$assay" == POLG_HCVJF_Qi_2014 ]]; then
+    printf '%s: partial-structure inverse-folding features use ESM2 mean scores; skipping full-sequence ProteinMPNN scoring.\n' "$assay"
   fi
 done
 if (( ${#score_assay_args[@]} )); then

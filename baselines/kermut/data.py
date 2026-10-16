@@ -10,7 +10,10 @@ import torch
 from data_loading import FeatureBatch
 from data_loading import load_feature_bundle as _load_feature_bundle
 from data_loading.features import ALPHABET, kermut_probability_recipe
-from feature_generation.structure_inputs import load_structure, validate_structure_metadata
+from feature_generation.structure_fragments import (
+    StructureFragments, load_inverse_structure as load_structure,
+    validate_inverse_structure_metadata as validate_structure_metadata,
+)
 
 from .config import KermutConfig
 
@@ -114,11 +117,14 @@ def load_feature_bundle(feature_dir: str | Path, config: KermutConfig) -> Featur
     if manifest.parent != manifest_root:
         raise ValueError("Assay structure manifest path escapes structure_manifest_dir")
     structure = load_structure(manifest, batch.reference_sequence, require_oxygen=False)
+    if isinstance(structure, StructureFragments):
+        raise ValueError("Separate structure fragments do not define a shared coordinate frame")
     if structure.metadata.get("assay_id") != batch.assay_id:
         raise ValueError("Structure manifest belongs to a different assay")
     _validate_structure_provenance(root, batch, structure)
     dtype = getattr(torch, config.training.dtype)
-    coordinates = structure.coords[:, 1].to(device=batch.device, dtype=dtype)
+    coordinates = torch.full((len(batch.reference_sequence), 3), float("nan"), device=batch.device, dtype=dtype)
+    coordinates[structure.positions.to(batch.device) - 1] = structure.coords[:, 1].to(device=batch.device, dtype=dtype)
     signature = {
         **batch.feature_signature,
         "structure.input_signature": structure.input_signature,

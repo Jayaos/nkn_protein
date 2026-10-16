@@ -214,7 +214,7 @@ def main(
             if config.model.enabled_branches != requested_branches:
                 print(f"Assay {metadata['assay_id']}: structure_distance disabled for separate reference fragments.", file=sys.stderr)
             if config.score_sources != requested_scores:
-                print(f"Assay {metadata['assay_id']}: ProteinMPNN mean scores disabled for separate reference fragments; retained score sources: {config.score_sources}.", file=sys.stderr)
+                print(f"Assay {metadata['assay_id']}: ProteinMPNN mean scores disabled for incomplete reference structures; retained score sources: {config.score_sources}.", file=sys.stderr)
         torch.set_num_threads(config.num_threads)
         batch = _load_batch(args, config, feature_loader)
         excluded_variant_ids = ()

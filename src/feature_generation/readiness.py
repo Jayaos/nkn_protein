@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 
 from data_loading.catalog import AssayCatalog
+from assay_policies import PROTEINMPNN_SCORE_SKIP_REASONS
 from .checkpoints import local_checkpoint as esm2_checkpoint
 from .config import ExtractionConfig, PROJECT_ROOT
 from .inputs import prepare_assay
@@ -127,10 +128,10 @@ def audit(esm2, features, scores, summary_stream=None):
             ("proteinmpnn_features", "ProteinMPNN features", features, "features"),
             ("proteinmpnn_scores", "ProteinMPNN scores", scores, "scores"),
         ):
-            if assay == BRCA2 and label == "ProteinMPNN scores":
+            if assay in PROTEINMPNN_SCORE_SKIP_REASONS and label == "ProteinMPNN scores":
                 statuses[key] = "SKIP"
-                statuses["notes"] = "ProteinMPNN scores intentionally omitted by preparation for BRCA2 fragments"
-                print("  SKIP   ProteinMPNN scores: intentionally omitted by preparation for BRCA2 fragments", flush=True)
+                statuses["notes"] = "ProteinMPNN scores intentionally omitted: " + PROTEINMPNN_SCORE_SKIP_REASONS[assay]
+                print("  SKIP   " + statuses["notes"], flush=True)
                 continue
             check(key, label, lambda c=config, k=kind: validate_output(c, assay, inputs, k, structure))
         passed = failures == before
