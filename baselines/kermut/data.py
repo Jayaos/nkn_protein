@@ -18,7 +18,7 @@ from feature_generation.structure_fragments import (
 from .config import KermutConfig
 
 
-def validate_batch(batch: FeatureBatch) -> None:
+def validate_batch(batch: FeatureBatch, *, use_structure_distance=True) -> None:
     """Reject incompatible sequence, mutation, probability, or coordinate inputs.
 
     Local inputs describe the reference structure and therefore must agree for
@@ -36,7 +36,7 @@ def validate_batch(batch: FeatureBatch) -> None:
     coordinates = batch.local_features.get("structure")
     if probabilities is None or probabilities.shape != (batch.owners.numel(), 20):
         raise ValueError("Kermut requires packed 20-amino-acid inverse-folding probabilities")
-    if coordinates is None or coordinates.shape != (batch.owners.numel(), 3):
+    if use_structure_distance and (coordinates is None or coordinates.shape != (batch.owners.numel(), 3)):
         raise ValueError("Kermut requires packed three-dimensional CA coordinates")
     recipe = json.loads(batch.feature_signature.get("inverse_folding.probability_recipe", "{}"))
     if not isinstance(recipe, dict):
@@ -70,7 +70,10 @@ def validate_batch(batch: FeatureBatch) -> None:
             raise ValueError("The probability of each substituted amino acid must be positive")
     for position in batch.mutation_positions.unique():
         rows = batch.mutation_positions == position
-        for values, name in ((probabilities, "probabilities"), (coordinates, "coordinates")):
+        reference_values = [(probabilities, "probabilities")]
+        if use_structure_distance:
+            reference_values.append((coordinates, "coordinates"))
+        for values, name in reference_values:
             selected = values[rows]
             if not torch.equal(selected, selected[0].expand_as(selected)):
                 raise ValueError(f"Reference {name} differ across variants at the same mutation position")
@@ -107,11 +110,24 @@ def load_feature_bundle(feature_dir: str | Path, config: KermutConfig) -> Featur
     the feature directory follows the command's normal path semantics.
     """
     root = Path(feature_dir).resolve()
+    metadata = json.loads((root / "assay.json").read_text(encoding="utf-8"))
+    config = config.for_assay(metadata.get("assay_id"))
     batch = _load_feature_bundle(
         root, feature_selection=config.feature_selection, score_sources=config.score_sources,
         pooling=config.pooling, device=config.device, enabled_branches=config.model.enabled_branches,
         inverse_folding_policy="kermut",
     )
+    dtype = getattr(torch, config.training.dtype)
+    batch = replace(
+        batch,
+        targets=None if batch.targets is None else batch.targets.to(dtype=dtype),
+        scores=batch.scores.to(dtype=dtype), global_features=batch.global_features.to(dtype=dtype),
+        local_features={key: values.to(dtype=dtype) for key, values in batch.local_features.items()},
+    )
+    if not config.model.use_structure_distance:
+        batch = replace(batch, feature_signature={**batch.feature_signature, "structure.distance_enabled": "false"})
+        validate_batch(batch, use_structure_distance=False)
+        return batch
     manifest_root = config.resolved_structure_manifest_dir
     manifest = (manifest_root / f"{batch.assay_id}.json").resolve()
     if manifest.parent != manifest_root:
@@ -122,7 +138,6 @@ def load_feature_bundle(feature_dir: str | Path, config: KermutConfig) -> Featur
     if structure.metadata.get("assay_id") != batch.assay_id:
         raise ValueError("Structure manifest belongs to a different assay")
     _validate_structure_provenance(root, batch, structure)
-    dtype = getattr(torch, config.training.dtype)
     coordinates = torch.full((len(batch.reference_sequence), 3), float("nan"), device=batch.device, dtype=dtype)
     coordinates[structure.positions.to(batch.device) - 1] = structure.coords[:, 1].to(device=batch.device, dtype=dtype)
     signature = {
@@ -133,11 +148,8 @@ def load_feature_bundle(feature_dir: str | Path, config: KermutConfig) -> Featur
     }
     batch = replace(
         batch,
-        targets=None if batch.targets is None else batch.targets.to(dtype=dtype),
-        scores=batch.scores.to(dtype=dtype),
-        global_features=batch.global_features.to(dtype=dtype),
         local_features={
-            **{key: values.to(dtype=dtype) for key, values in batch.local_features.items()},
+            **batch.local_features,
             "structure": coordinates[batch.mutation_positions - 1],
         },
         feature_signature=signature,

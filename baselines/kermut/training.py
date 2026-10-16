@@ -95,7 +95,7 @@ class FittedKermut:
         test = _convert_batch(test, self.train.device, self.train.scores.dtype)
         from .data import validate_batch
 
-        validate_batch(test)
+        validate_batch(test, use_structure_distance=self.model_config.use_structure_distance)
         if test.num_scores != self.train.num_scores:
             raise ValueError("Prediction mean scorer count differs from training")
         if test.global_features.shape[1] != self.train.global_features.shape[1]:
@@ -108,8 +108,9 @@ class FittedKermut:
         test_positions = {}
         for row, position in enumerate(test.mutation_positions.cpu().tolist()):
             test_positions.setdefault(position, row)
+        reference_features = ("inverse_folding", "structure") if self.model_config.use_structure_distance else ("inverse_folding",)
         for position in train_positions.keys() & test_positions.keys():
-            for name in ("inverse_folding", "structure"):
+            for name in reference_features:
                 if not torch.equal(self.train.local_features[name][train_positions[position]],
                                    test.local_features[name][test_positions[position]]):
                     raise ValueError(f"Prediction reference {name} differs from training at position {position}")
@@ -130,6 +131,7 @@ class FittedKermut:
                 "noise_variance_standardized": float(self.model.noise.detach()),
                 "target_standardization": "training_sample_std", "mean_score_standardization": "none",
                 "dtype": self.training_config.dtype,
+                "use_structure_distance": self.model_config.use_structure_distance,
                 "mean_intercept_standardized_target": float(self.model.intercept.detach()),
                 "mean_coefficients": {name: float(value) for name, value in zip(
                     self.train.score_names or tuple(f"score_{i}" for i in range(self.train.num_scores)),
@@ -169,7 +171,7 @@ class FittedKermut:
 
 def fit_gp(batch, model_config=None, training_config=None, progress=None):
     """Fit once for a fixed update count and return the final parameter state."""
-    model_config = model_config or KermutModelConfig()
+    model_config = (model_config or KermutModelConfig()).for_assay(batch.assay_id)
     cfg = training_config or KermutTrainingConfig()
     if cfg.max_train_variants is not None and batch.num_variants > cfg.max_train_variants:
         raise ValueError(f"{batch.num_variants} training variants exceed configured dense-GP limit {cfg.max_train_variants}")

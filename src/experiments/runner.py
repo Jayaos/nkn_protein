@@ -37,10 +37,10 @@ _FOLD_WORKER_STATE = None
 
 def _resolve_assay_config(batch, config):
     """Keep programmatic runs consistent with CLI assay restrictions."""
-    if not isinstance(config, ExperimentConfig):
+    if not hasattr(config, "for_assay"):
         return config
     resolved = config.for_assay(batch.assay_id)
-    if batch.assay_id in STRUCTURE_DISTANCE_DISABLED_ASSAYS and "structure_distance" in batch.local_features:
+    if isinstance(config, ExperimentConfig) and batch.assay_id in STRUCTURE_DISTANCE_DISABLED_ASSAYS and "structure_distance" in batch.local_features:
         raise ValueError(
             f"{batch.assay_id} disables structure_distance; reload features using "
             "config.for_assay(batch.assay_id).model.enabled_branches"
@@ -667,6 +667,8 @@ def run_predict(
     fitted = (load_function or FittedGP.load)(checkpoint, device=config.device)
     if config.model.enabled_branches != fitted.model_config.enabled_branches:
         raise ValueError("Prediction enabled branches differ from the fitted checkpoint")
+    if getattr(config.model, "use_structure_distance", None) != getattr(fitted.model_config, "use_structure_distance", None):
+        raise ValueError("Prediction structure-distance setting differs from the fitted checkpoint")
     prediction = fitted.predict(batch)
     output = prepare_output(output_dir, config)
     rows = _prediction_rows(batch, prediction, fitted)

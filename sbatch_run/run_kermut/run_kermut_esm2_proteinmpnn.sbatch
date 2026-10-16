@@ -242,6 +242,13 @@ if config.evaluation.n_folds != 5:
 metadata = json.loads((Path(sys.argv[3]) / "assay.json").read_text(encoding="utf-8"))
 if metadata.get("assay_id") != sys.argv[4] or metadata.get("synthetic") is not False:
     raise SystemExit("error: Expected real pretrained features for the selected assay.")
+requested_distance = config.model.use_structure_distance
+requested_scores = config.score_sources
+config = config.for_assay(metadata["assay_id"])
+if requested_distance and not config.model.use_structure_distance:
+    print(f"Assay {metadata['assay_id']}: structure_distance disabled for separate reference fragments.")
+if config.score_sources != requested_scores:
+    print(f"Assay {metadata['assay_id']}: ProteinMPNN mean scores disabled for incomplete reference structures; retained score sources: {config.score_sources}.")
 Path(sys.argv[2]).write_text(json.dumps(config.to_dict(), indent=2) + "\n", encoding="utf-8")
 execution_plan = {
     "parallel": sys.argv[5] == "true",
@@ -265,6 +272,7 @@ print(f"CPU allocation: {execution_plan['allocated_cpus']}; "
 print(f"Python: {sys.executable}")
 print(f"PyTorch: {torch.__version__}; device: cpu; threads: {config.num_threads}")
 print(f"Kernel branches: {', '.join(config.model.enabled_branches)}")
+print(f"Structure distance factor: {'enabled' if config.model.use_structure_distance else 'disabled'}")
 print(f"Sequence cache: {config.feature_selection.get('sequence')}")
 print(f"ProteinMPNN cache: {config.feature_selection.get('inverse_folding')}")
 print(f"Mean score caches: {config.score_sources}")

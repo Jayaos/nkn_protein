@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=nkn_assays
 #SBATCH --account=gts-yxie77-paid
-#SBATCH --array=0-57
+#SBATCH --array=0
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=15
@@ -12,23 +12,21 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
-# Default array: all 58 assays (indices 0-57), four branches and initial noise variance 1.0.
-# One assay per array task, in the order below. Submit from the repository or
-# a subdirectory; each task delegates to the shared NKN runner.
+# Timing test: A0A2Z5U3Z0_9INFA_Doud_2016 (10,715 single mutants), array index 0.
+# Submit from the repository or a subdirectory; the task delegates to the
+# shared NKN runner with four branches and initial noise variance 1.0.
 # Default: singles (random, modulo, contiguous; five folds each), with the
 # additive two-score preset and caches under data/features/pretrained/singles.
 # Branches: [1]; final NKN: [8, 4, 4, 2, 1]. Minimum optimizer steps: 1000.
 # Observation-noise variance prior: none. Initial noise variance: 1.0.
 # Enabled: sequence_site, sequence_global, inverse_folding, structure_distance.
-# For BRCA2's separate reference fragments, the shared runner disables
-# structure_distance and ProteinMPNN mean scores, retaining ESM2 mean scores.
-# Resources above are per assay task. The array parallelizes assays; --parallel
-# additionally divides each task's CPUs between its settings and folds.
+# Resources above are for this assay. --parallel divides the task's CPUs
+# between its settings and folds.
 # Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]
 # Add --held-out-interval 100 to record diagnostic Spearman every 100 updates.
 # Add --stopping-criterion validation_spearman for three train / one validation /
 # one test folds. --validation-interval 100 --patience 100 --min-steps 1000 are defaults.
-# Limit assay concurrency: sbatch --array=0-57%2 sbatch_run/run_nkn/run_nkn_assays.sbatch
+# For one five-fold timing run, pass singles_random instead of the default singles.
 # Logs: nkn_assays-<array-job-id>_<task-index>.out in the submission directory.
 # Results: results/<assay>/nkn_esm2_proteinmpnn_<selection>_<task-job-id>/
 # Add --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) to insert NAME under results/.
@@ -39,78 +37,18 @@
 # Optional: --noise-prior half_cauchy --noise-prior-scale 0.1.
 set -eo pipefail
 
-# 57 assays with DMS_number_single_mutants < 1000, in catalog order,
-# This training subset has its own indices; preparation uses the full catalog.
-# FKBP3_HUMAN_Tsuboyama_2023_2KFV is appended at index 57.
+# This timing-test selection has its own index; preparation uses the full catalog.
 assays=(
-  "A0A1I9GEU1_NEIME_Kennouche_2019"
-  "A4_HUMAN_Seuma_2022"
-  "AICDA_HUMAN_Gajula_2014_3cycles"
-  "AMFR_HUMAN_Tsuboyama_2023_4G3O"
-  "B2L11_HUMAN_Dutta_2010_binding-Mcl-1"
-  "BCHB_CHLTE_Tsuboyama_2023_2KRU"
-  "BLAT_ECOLX_Jacquier_2013"
-  "BRCA2_HUMAN_Erwood_2022_HEK293T"
-  "CAPSD_AAV2S_Sinai_2021"
-  "CBX4_HUMAN_Tsuboyama_2023_2K28"
-  "CUE1_YEAST_Tsuboyama_2023_2MYX"
-  "ENV_HV1B9_DuenasDecamp_2016"
-  "ERBB2_HUMAN_Elazar_2016"
-  "F7YBW8_MESOW_Ding_2023"
-  "F7YBW8_MESOW_Aakre_2015"
-  "GCN4_YEAST_Staller_2018"
-  "GLPA_HUMAN_Elazar_2016"
-  "HIS7_YEAST_Pokusaeva_2019"
-  "ISDH_STAAW_Tsuboyama_2023_2LHR"
-  "KCNH2_HUMAN_Kozek_2020"
-  "LYAM1_HUMAN_Elazar_2016"
-  "MAFG_MOUSE_Tsuboyama_2023_1K1V"
-  "MYO3_YEAST_Tsuboyama_2023_2BTT"
-  "NPC1_HUMAN_Erwood_2022_HEK293T"
-  "NPC1_HUMAN_Erwood_2022_RPE1"
-  "NRAM_I33A0_Jiang_2016"
-  "ODP2_GEOSE_Tsuboyama_2023_1W4G"
-  "OPSD_HUMAN_Wan_2019"
-  "OTU7A_HUMAN_Tsuboyama_2023_2L2D"
-  "PIN1_HUMAN_Tsuboyama_2023_1I6C"
-  "PITX2_HUMAN_Tsuboyama_2023_2L7M"
-  "POLG_PESV_Tsuboyama_2023_2MXD"
-  "Q837P4_ENTFA_Meier_2023"
-  "Q837P5_ENTFA_Meier_2023"
-  "RAD_ANTMA_Tsuboyama_2023_2CJJ"
-  "RAF1_HUMAN_Zinkus-Boltz_2019"
-  "RBP1_HUMAN_Tsuboyama_2023_2KWH"
-  "RCD1_ARATH_Tsuboyama_2023_5OAO"
-  "RD23A_HUMAN_Tsuboyama_2023_1IFY"
-  "RFAH_ECOLI_Tsuboyama_2023_2LCL"
-  "RPC1_LAMBD_Li_2019_high-expression"
-  "RPC1_LAMBD_Li_2019_low-expression"
-  "SAV1_MOUSE_Tsuboyama_2023_2YSB"
-  "SCN5A_HUMAN_Glazer_2019"
-  "SDA_BACSU_Tsuboyama_2023_1PV0"
-  "SPG1_STRSG_Wu_2016"
-  "SQSTM_MOUSE_Tsuboyama_2023_2RRU"
-  "SR43C_ARATH_Tsuboyama_2023_2N88"
-  "TCRG1_MOUSE_Tsuboyama_2023_1E0L"
-  "THO1_YEAST_Tsuboyama_2023_2WQG"
-  "TPOR_HUMAN_Bridgford_2020"
-  "UBE4B_MOUSE_Starita_2013"
-  "VG08_BPP22_Tsuboyama_2023_2GP8"
-  "VKOR1_HUMAN_Chiasson_2020_activity"
-  "YAIA_ECOLI_Tsuboyama_2023_2KVT"
-  "YAP1_HUMAN_Araya_2012"
-  "YNZC_BACSU_Tsuboyama_2023_2JVD"
-  "FKBP3_HUMAN_Tsuboyama_2023_2KFV"
+  "A0A2Z5U3Z0_9INFA_Doud_2016"
 )
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
   printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n'
-  printf 'Default array: 0-57 (58 assays); four additive branches and both GP mean scores.\n'
+  printf 'Timing test: array index 0; A0A2Z5U3Z0_9INFA_Doud_2016 (10,715 single mutants).\n'
   printf 'Default config for every assay: configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_1p0.json\n'
   printf 'Initial noise variance: 1.0 (explicit --config or NKN_CONFIG overrides the default).\n'
   printf 'Branches: sequence_site, sequence_global, inverse_folding, structure_distance\n'
-  printf "BRCA2_HUMAN_Erwood_2022_HEK293T disables structure_distance and ProteinMPNN mean scores for separate reference fragments.\n"
   printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'
   printf 'Noise prior: none; override with --noise-prior none|half_cauchy --noise-prior-scale SCALE\n'
   printf 'Overrides: --validation-interval 100 --patience 100 --min-steps 1000 (optimizer steps)\n'
@@ -122,9 +60,9 @@ fi
 
 task_index="${SLURM_ARRAY_TASK_ID:-}"
 case "$task_index" in
-  [0-9]|[1-4][0-9]|5[0-7]) ;;
+  0) ;;
   *)
-    printf 'error: SLURM_ARRAY_TASK_ID must be 0-57 (got "%s"). Submit this script with sbatch; its default array is 0-57.\n' "$task_index" >&2
+    printf 'error: SLURM_ARRAY_TASK_ID must be 0 (got "%s"). Submit this script with sbatch; its default array is 0.\n' "$task_index" >&2
     exit 1 ;;
 esac
 

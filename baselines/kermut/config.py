@@ -5,7 +5,7 @@ and use this project's existing frozen ESM2/ProteinMPNN caches for inputs.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 import json
 import math
 from pathlib import Path
@@ -13,6 +13,7 @@ import re
 from typing import Mapping
 
 from config import EvaluationConfig
+from assay_policies import PROTEINMPNN_SCORE_SKIP_REASONS, STRUCTURE_DISTANCE_DISABLED_ASSAYS
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -71,10 +72,19 @@ class KermutModelConfig:
     raw_p_lengthscale: float = 0.1
     raw_alpha: float = 0.5
     raw_sequence_lengthscale: float = 0.0
+    use_structure_distance: bool = True
 
     def __post_init__(self):
+        if type(self.use_structure_distance) is not bool:
+            raise ValueError("use_structure_distance must be a boolean")
         for item in fields(self):
-            _finite(item.name, getattr(self, item.name))
+            if item.name != "use_structure_distance":
+                _finite(item.name, getattr(self, item.name))
+
+    def for_assay(self, assay_id):
+        if assay_id in STRUCTURE_DISTANCE_DISABLED_ASSAYS and self.use_structure_distance:
+            return replace(self, use_structure_distance=False)
+        return self
 
     @property
     def enabled_branches(self):
@@ -168,6 +178,21 @@ class KermutConfig:
     def resolved_structure_manifest_dir(self):
         path = Path(self.structure_manifest_dir).expanduser()
         return (path if path.is_absolute() else PROJECT_ROOT / path).resolve()
+
+    def for_assay(self, assay_id):
+        """Apply the same incomplete-structure restrictions as NKN."""
+        model = self.model.for_assay(assay_id)
+        scores = self.score_sources
+        if assay_id in PROTEINMPNN_SCORE_SKIP_REASONS:
+            scores = tuple(source for source in scores if not source.startswith("scores/proteinmpnn/"))
+            if not scores:
+                raise ValueError(
+                    f"{assay_id} disables ProteinMPNN mean scores for incomplete reference structures; "
+                    "configure an ESM2 mean score source"
+                )
+        if model is self.model and scores == self.score_sources:
+            return self
+        return replace(self, model=model, score_sources=scores)
 
     def to_dict(self):
         return asdict(self)

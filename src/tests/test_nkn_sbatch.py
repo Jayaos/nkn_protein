@@ -47,7 +47,7 @@ class NknSbatchTests(unittest.TestCase):
             (self.root / directory).mkdir(parents=True)
         (self.root / self.cli_file).parent.mkdir(parents=True, exist_ok=True)
         (self.root / self.cli_file).touch()
-        for relative_path in (*self.config_sources, self.config_file):
+        for relative_path in ("src/assay_policies.py", *self.config_sources, self.config_file):
             target = self.root / relative_path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REPOSITORY / relative_path, target)

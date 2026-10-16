@@ -206,12 +206,14 @@ def main(
                 allocation = os.environ.get("SLURM_CPUS_PER_TASK")
                 if allocation is not None and args.fold_workers * config.num_threads > int(allocation):
                     raise ValueError("Fold workers times num_threads exceeds SLURM_CPUS_PER_TASK")
-        if isinstance(config, ExperimentConfig):
+        if hasattr(config, "for_assay"):
             metadata = json.loads((args.features / "assay.json").read_text(encoding="utf-8"))
             requested_branches = config.model.enabled_branches
+            requested_distance = getattr(config.model, "use_structure_distance", None)
             requested_scores = config.score_sources
             config = config.for_assay(metadata.get("assay_id"))
-            if config.model.enabled_branches != requested_branches:
+            if (config.model.enabled_branches != requested_branches
+                    or requested_distance is True and not config.model.use_structure_distance):
                 print(f"Assay {metadata['assay_id']}: structure_distance disabled for separate reference fragments.", file=sys.stderr)
             if config.score_sources != requested_scores:
                 print(f"Assay {metadata['assay_id']}: ProteinMPNN mean scores disabled for incomplete reference structures; retained score sources: {config.score_sources}.", file=sys.stderr)

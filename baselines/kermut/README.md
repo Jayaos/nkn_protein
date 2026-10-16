@@ -40,7 +40,8 @@ references, both the current and legacy prefix recipes use full-sequence
 context. For longer references, the current global vector includes residues
 beyond 1,022, whereas the legacy prefix vector excludes them; window boundaries
 still limit attention context. ProteinMPNN's presets have no sequence-length
-cap and still require complete reference structures for this baseline.
+cap. Registered CAS9/P53 mappings and ZIKV/HCV domain structures are supported;
+BRCA2 uses its independently prepared fragment features with the distance factor disabled.
 The GP mean combines ESM2 and ProteinMPNN variant scores; the publication's
 mean uses ESM2 alone. ProteinMPNN variant scoring uses one order and seed 0.
 For each reference position, ProteinMPNN conditions on the backbone and the
@@ -79,6 +80,24 @@ only the second uses a ProteinMPNN-only mean. Multiple entries
 give `mean(x) = intercept + sum(coefficient[j] * score[j](x))`; all coefficients
 start at one and are trained jointly with the kernel. Scores remain in their
 raw units. Duplicate sources and unknown configuration fields are rejected.
+
+The same assay restrictions as NKN are resolved automatically before feature
+loading, Slurm preflight, and saving run configurations. For
+`A0A140D2T1_ZIKV_Sourisseau_2019`, `POLG_HCVJF_Qi_2014`, and
+`BRCA2_HUMAN_Erwood_2022_HEK293T`, unavailable ProteinMPNN mean scores are
+removed from the selected sources; the default preset therefore uses ESM2
+scores alone. A preset containing only ProteinMPNN scores is rejected with a
+request to configure ESM2 scores. Other missing caches remain errors.
+
+For BRCA2 only, `model.use_structure_distance` resolves to `false`. The
+mutation kernel retains its Hellinger and substituted-amino-acid probability
+factors, but omits the spatial factor. No shared-frame coordinates are loaded
+or fabricated, and the distance parameter is not trained. ZIKV/HCV keep the
+distance factor using their mapped domain coordinates. CAS9 and the three P53
+assays retain both scores and the distance factor. The effective settings are
+saved in run configurations and checkpoints and preserved during prediction.
+Existing complete-structure configurations and checkpoints default to
+`use_structure_distance: true`.
 
 `model.raw_*` values are initial unconstrained kernel parameters. Positive
 parameters use softplus and `raw_alpha` uses sigmoid. `training` controls the
@@ -187,8 +206,10 @@ distributions (ten orders, seed 37), and a GP mean combining ESM2 650M
 masked-marginal scores with ProteinMPNN sequence likelihoods (one order, seed 0).
 The array forwards setting arguments, `--parallel`, and `--config PATH` to the
 shared launcher; `FEATURES` and `KERMUT_CONFIG` overrides remain available.
-Prepare features, both score caches, and the structure manifest for every selected
-assay before submission. Each task defaults to all three singles CV protocols
+Prepare features and the applicable score caches before submission. The
+intentional ProteinMPNN score omissions for BRCA2, ZIKV, and HCV are supported;
+BRCA2 also skips loading shared-frame coordinates. Other assays require a
+registered structure manifest. Each task defaults to all three singles CV protocols
 (15 fits) and requests 15 CPUs, 16 GB RAM, and a 24-hour limit. Assays may run
 concurrently; within each assay, fits run sequentially unless `--parallel` is set.
 Logs are `kermut_assays-<array-job-id>_<index>.out` in the submission directory.

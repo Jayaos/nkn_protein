@@ -15,6 +15,8 @@
 # One assay per array task, in the index order listed below.
 # Submit from the repository or a subdirectory; each task delegates to the
 # shared Kermut runner with both ESM2 and ProteinMPNN GP mean scores.
+# BRCA2 automatically uses ESM2 scores only and disables the distance factor.
+# ZIKV/HCV also use ESM2 scores only when selected in the shared runner.
 # Default: singles (random, modulo, contiguous; five folds each), using
 # configs/kermut_esm2_proteinmpnn.json and data/features/pretrained/singles.
 # Resources above are per assay task. The array parallelizes assays; --parallel
