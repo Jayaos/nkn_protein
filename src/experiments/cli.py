@@ -201,12 +201,15 @@ def main(
                 allocation = os.environ.get("SLURM_CPUS_PER_TASK")
                 if allocation is not None and args.fold_workers * config.num_threads > int(allocation):
                     raise ValueError("Fold workers times num_threads exceeds SLURM_CPUS_PER_TASK")
-        if isinstance(config, ExperimentConfig) and "structure_distance" in config.model.enabled_branches:
+        if isinstance(config, ExperimentConfig):
             metadata = json.loads((args.features / "assay.json").read_text(encoding="utf-8"))
             requested_branches = config.model.enabled_branches
+            requested_scores = config.score_sources
             config = config.for_assay(metadata.get("assay_id"))
             if config.model.enabled_branches != requested_branches:
                 print(f"Assay {metadata['assay_id']}: structure_distance disabled for separate reference fragments.", file=sys.stderr)
+            if config.score_sources != requested_scores:
+                print(f"Assay {metadata['assay_id']}: ProteinMPNN mean scores disabled for separate reference fragments; retained score sources: {config.score_sources}.", file=sys.stderr)
         torch.set_num_threads(config.num_threads)
         batch = _load_batch(args, config, feature_loader)
         excluded_variant_ids = ()

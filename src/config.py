@@ -216,12 +216,24 @@ class ExperimentConfig:
 
     def for_assay(self, assay_id):
         """Resolve known assay restrictions before loading features or saving a run."""
-        if assay_id not in STRUCTURE_DISTANCE_DISABLED_ASSAYS or "structure_distance" not in self.model.enabled_branches:
+        if assay_id not in STRUCTURE_DISTANCE_DISABLED_ASSAYS:
             return self
         branches = tuple(name for name in self.model.enabled_branches if name != "structure_distance")
         if not branches:
             raise ValueError(f"{assay_id} disables structure_distance; enable at least one other kernel branch")
-        return replace(self, model=replace(self.model, enabled_branches=branches))
+        # Preparation supports fragment-wise inverse-folding features, but not
+        # full-reference ProteinMPNN likelihoods. Keep the other mean sources.
+        scores = self.score_sources
+        if scores is not None:
+            scores = [source for source in scores if not source.startswith("scores/proteinmpnn/")]
+            if self.score_sources and not scores:
+                raise ValueError(
+                    f"{assay_id} disables ProteinMPNN mean scores for separate reference fragments; "
+                    "configure an ESM2 mean score source"
+                )
+        if branches == self.model.enabled_branches and scores == self.score_sources:
+            return self
+        return replace(self, model=replace(self.model, enabled_branches=branches), score_sources=scores)
 
     def to_dict(self):
         return asdict(self)

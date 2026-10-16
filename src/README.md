@@ -777,7 +777,11 @@ BRCA2 inverse-folding extraction runs each fragment separately and stitches its
 probability rows at reference positions 1–1000, 1001–2085, and 2086–2832. The
 full reference remains 3418 residues long. All current assay mutation sites lie
 inside the covered region; requesting an uncovered site raises an error. The
-default ESM2 mean scores remain applicable. See
+default ESM2 mean scores remain applicable. Assay configuration resolution also
+removes explicit `scores/proteinmpnn/...` mean sources, retaining ESM2 scores
+and the ProteinMPNN inverse-folding kernel features. A configuration requesting
+only ProteinMPNN scores is rejected with a request to configure ESM2 scores.
+The effective score sources are logged and saved in the resolved run config. See
 [fragment preparation](feature_generation/README.md#brca2-fragment-preparation)
 for extraction commands and cache details.
 

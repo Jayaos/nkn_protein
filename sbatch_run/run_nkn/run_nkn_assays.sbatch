@@ -20,7 +20,8 @@
 # Branches: [1]; final NKN: [8, 4, 4, 2, 1]. Minimum optimizer steps: 1000.
 # Observation-noise variance prior: none. Initial noise variance: 1.0.
 # Enabled: sequence_site, sequence_global, inverse_folding, structure_distance.
-# The shared runner disables structure_distance for BRCA2's separate reference fragments.
+# For BRCA2's separate reference fragments, the shared runner disables
+# structure_distance and ProteinMPNN mean scores, retaining ESM2 mean scores.
 # Resources above are per assay task. The array parallelizes assays; --parallel
 # additionally divides each task's CPUs between its settings and folds.
 # Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]
@@ -109,7 +110,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'Default config for every assay: configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_1p0.json\n'
   printf 'Initial noise variance: 1.0 (explicit --config or NKN_CONFIG overrides the default).\n'
   printf 'Branches: sequence_site, sequence_global, inverse_folding, structure_distance\n'
-  printf "BRCA2_HUMAN_Erwood_2022_HEK293T disables structure_distance for separate reference fragments.\n"
+  printf "BRCA2_HUMAN_Erwood_2022_HEK293T disables structure_distance and ProteinMPNN mean scores for separate reference fragments.\n"
   printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'
   printf 'Noise prior: none; override with --noise-prior none|half_cauchy --noise-prior-scale SCALE\n'
   printf 'Overrides: --validation-interval 100 --patience 100 --min-steps 1000 (optimizer steps)\n'

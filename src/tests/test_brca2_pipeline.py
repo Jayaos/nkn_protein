@@ -109,6 +109,32 @@ class Brca2PipelineTests(unittest.TestCase):
             saved = json.loads((destination / "resolved_config.json").read_text())
             self.assertEqual(saved["model"]["enabled_branches"], branches)
 
+    def test_two_score_preset_resolves_to_esm2_without_changing_other_assays(self):
+        config = ExperimentConfig.load(REPOSITORY / "configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json")
+        resolved = config.for_assay(ASSAY)
+        self.assertEqual(resolved.score_sources, [config.score_sources[0]])
+        self.assertEqual(len(config.score_sources), 2)
+        self.assertEqual(resolved.training.noise_initial, 0.5)
+        self.assertIn("inverse_folding", resolved.model.enabled_branches)
+        self.assertIs(resolved.for_assay(ASSAY), resolved)
+        self.assertIs(config.for_assay("A0A1I9GEU1_NEIME_Kennouche_2019"), config)
+        with self.assertRaisesRegex(ValueError, "configure an ESM2 mean score source"):
+            replace(config, score_sources=[config.score_sources[1]]).for_assay(ASSAY)
+
+    def test_cli_drops_unsupported_score_even_without_distance_branch(self):
+        config = self.config.for_assay(ASSAY)
+        config = replace(config, score_sources=[*config.score_sources, "scores/proteinmpnn/absent"])
+        self.config_path.write_text(json.dumps(config.to_dict()), encoding="utf-8")
+        destination = self.root / "validate_scores"
+        status, _, errors = self.invoke([
+            "validate", "--features", self.features, "--config", self.config_path,
+            "--output", destination, "--quiet",
+        ])
+        self.assertEqual(status, 0, errors)
+        self.assertIn("ProteinMPNN mean scores disabled", errors)
+        resolved = ExperimentConfig.load(destination / "resolved_config.json")
+        self.assertEqual(resolved.score_sources, self.config.score_sources)
+
     def test_distance_only_configuration_fails_before_feature_loading_or_output(self):
         config = replace(self.config, model=replace(self.config.model, enabled_branches=("structure_distance",)))
         self.config_path.write_text(json.dumps(config.to_dict()), encoding="utf-8")
@@ -161,11 +187,13 @@ class Brca2PipelineTests(unittest.TestCase):
         metadata["synthetic"] = False
         metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
         # The runtime block requires the published five-fold configuration.
-        config = replace(self.config, evaluation=replace(self.config.evaluation, n_folds=5))
+        config = replace(self.config, evaluation=replace(self.config.evaluation, n_folds=5),
+                         score_sources=[*self.config.score_sources, "scores/proteinmpnn/absent"])
         self.config_path.write_text(json.dumps(config.to_dict()), encoding="utf-8")
         runtime_path = self.root / "runtime_config.json"
         arguments = ["-", str(self.config_path), str(runtime_path), str(self.features), ASSAY,
-                     "false", "2", "1", "1", "singles_random"]
+                     "false", "2", "1", "1", "0", "training_nll", "100", "100", "1000",
+                     "none", "0.1", "singles_random"]
         output = io.StringIO()
         with patch.object(sys, "argv", arguments), patch.dict(os.environ, {"OMP_NUM_THREADS": "2"}), contextlib.redirect_stdout(output):
             exec(compile(runtime_source, "<sbatch-runtime-config>", "exec"), {})
@@ -173,6 +201,8 @@ class Brca2PipelineTests(unittest.TestCase):
         self.assertEqual(runtime.model.enabled_branches, config.for_assay(ASSAY).model.enabled_branches)
         self.assertEqual(runtime.num_threads, 2)
         self.assertIn("structure_distance disabled", output.getvalue())
+        self.assertIn("ProteinMPNN mean scores disabled", output.getvalue())
+        self.assertEqual(runtime.score_sources, self.config.score_sources)
         # Keep the small cache's genuine provenance for the scientific preflight.
         metadata["synthetic"] = True
         metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
