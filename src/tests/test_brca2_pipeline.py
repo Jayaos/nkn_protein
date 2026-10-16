@@ -148,6 +148,18 @@ class Brca2PipelineTests(unittest.TestCase):
         loader.assert_not_called()
         self.assertFalse((self.root / "rejected").exists())
 
+    def test_validation_without_output_prints_results_and_writes_nothing(self):
+        with patch("experiments.cli.prepare_output") as writer, \
+                patch.object(Path, "write_text", side_effect=AssertionError("must not write reports")):
+            status, output, errors = self.invoke([
+                "validate", "--features", self.features, "--config", self.config_path, "--no-output",
+            ])
+        self.assertEqual(status, 0, errors)
+        self.assertTrue(json.loads(output)["valid"])
+        self.assertNotIn("output_directory", json.loads(output))
+        self.assertIn("structure_distance disabled", errors)
+        writer.assert_not_called()
+
     def test_programmatic_cv_fit_and_predict_resolve_configuration(self):
         original = synthetic_batch()
         batch = replace(original, assay_id=ASSAY, local_features={

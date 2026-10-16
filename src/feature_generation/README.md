@@ -531,6 +531,29 @@ assay failures and returning a nonzero status. Shared setup failures stop the jo
 ProteinMPNN still needs compatible structures; BRCA2 uses fragment features and
 explicitly skips full-sequence ProteinMPNN scoring (use ESM2 scores).
 
+After preparation finishes, submit the CPU-only readiness check:
+
+```bash
+sbatch sbatch_run/run_prepare_rep/validate_prepared.sbatch
+```
+
+This checks every catalog assay against the NKN four-branch, two-score `0p5`
+preset, including complete single-mutant coverage and required structures.
+The shared BRCA2 resolver excludes its distance branch and ProteinMPNN score.
+Use `--config PATH` to select another NKN experiment preset. This job does not
+perform inference or training, download assets, or modify feature caches.
+It requests four CPUs, 64 GiB RAM, and four hours; resource limits can be
+overridden with `sbatch` options.
+
+All validation details, errors, catalog array indices, READY/FAILED statuses,
+and final totals print directly to `validate_prepared-<job-id>.out` in the
+submission directory. No report files or directories are created. Failed assays
+do not stop subsequent checks. Any assay failure makes the job exit nonzero;
+a catalog/setup error stops before the final summary is printed.
+This validates inputs for the selected experiment, not CV fold files. Wait for
+both preparation jobs to finish before running it, or use a Slurm `afterany`
+dependency on their job IDs.
+
 The default ESM2 compact preset uses at most 1,022 residues in each model input
 and supports mutation sites anywhere in the full reference. Its output estimate
 is `(number_of_variants + mutation_occurrences) * 1280 * 4` bytes plus four int64

@@ -25,7 +25,12 @@ def _parser(prog="python -m experiments.cli") -> argparse.ArgumentParser:
         sub = commands.add_parser(command)
         sub.add_argument("--features", required=True, type=Path, help="Assay cache directory containing assay.json")
         sub.add_argument("--config", type=Path, help="JSON experiment configuration; otherwise use documented defaults")
-        sub.add_argument("--output", required=True, type=Path, help="New or empty output directory")
+        if command == "validate":
+            destination = sub.add_mutually_exclusive_group(required=True)
+            destination.add_argument("--output", type=Path, help="New or empty output directory")
+            destination.add_argument("--no-output", action="store_true", help="Print validation results without writing reports")
+        else:
+            sub.add_argument("--output", required=True, type=Path, help="New or empty output directory")
         sub.add_argument("--device", help="Override configured device, e.g. cpu or cuda")
         sub.add_argument("--quiet", action="store_true", help="Suppress optimizer progress")
         sub.add_argument("--assay-index", type=Path, help="Optionally validate against a processed ProteinGym assay index")
@@ -223,7 +228,6 @@ def main(
                 batch = selected
         progress = None if args.quiet else _progress
         if args.command == "validate":
-            output = prepare_output(args.output, config)
             result = {
                 "valid": True,
                 "assay_id": batch.assay_id,
@@ -235,6 +239,10 @@ def main(
                 "global_feature_dimension": None if batch.global_features is None else batch.global_features.shape[1],
                 "local_feature_dimensions": {name: values.shape[1] for name, values in batch.local_features.items()},
             }
+            if args.no_output:
+                print(json.dumps(result, indent=2, allow_nan=False))
+                return 0
+            output = prepare_output(args.output, config)
             (output / "validation.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         elif args.command == "predict":
             result = (prediction_runner or run_predict)(batch, args.checkpoint, config, args.output)
