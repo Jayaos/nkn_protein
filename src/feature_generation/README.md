@@ -553,7 +553,16 @@ overridden with `sbatch` options.
 
 All validation details, errors, catalog array indices, READY/FAILED statuses,
 and final totals print directly to `validate_prepared-<job-id>.out` in the
-submission directory. No report files or directories are created. Failed assays
+submission directory. A single CSV summary is also saved to
+`results/preparation-check-<job-id>-<timestamp>.csv`; its full path prints in the
+log. Use `--summary-csv PATH` to choose a new destination (existing files are
+never overwritten). Each row contains the catalog array index, assay ID,
+per-asset READY/FAILED/SKIP statuses, output readiness, overall readiness,
+errors, and notes. Shared model statuses are repeated for each assay; `status`
+is FAILED if a shared asset fails even when `outputs_status` is READY. BRCA2's
+intentional score omission is SKIP, not a failure. Rows are flushed after each
+assay, so an interrupted job retains a partial summary; absent rows have not
+been checked yet. No per-assay report directories are created. Failed assays
 do not stop subsequent checks. Any assay failure makes the job exit nonzero;
 a catalog/setup error stops before the final summary is printed.
 This checks preparation assets, not kernel branches or CV fold files. Wait for

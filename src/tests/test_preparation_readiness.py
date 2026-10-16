@@ -1,6 +1,7 @@
 """Preparation audits select four exact caches, enforce coverage, and never infer."""
 
 import contextlib
+import csv
 from dataclasses import replace
 import io
 import json
@@ -37,10 +38,12 @@ class ReadinessTests(unittest.TestCase):
                 raise ValueError("fixture corrupt cache")
 
         log = io.StringIO()
+        summary = io.StringIO()
         with patch.object(r, "esm2_checkpoint", side_effect=ValueError("missing model") if shared_failure else None), \
                 patch.object(r, "proteinmpnn_checkpoint"), patch.object(r, "load_inverse_structure"), \
                 patch.object(r, "validate_output", side_effect=output), contextlib.redirect_stdout(log):
-            status = r.audit(self.esm, self.features, self.scores)
+            status = r.audit(self.esm, self.features, self.scores, summary_stream=summary)
+        self.summary_rows = list(csv.DictReader(io.StringIO(summary.getvalue())))
         return status, log.getvalue(), calls
 
     def test_complete_outputs_skip_only_brca2_score(self):
@@ -51,6 +54,11 @@ class ReadinessTests(unittest.TestCase):
         self.assertIn((r.BRCA2, "proteinmpnn", "features"), calls)
         self.assertIn("Assay outputs ready: 2 / 2", log)
         self.assertIn("SKIP   ProteinMPNN scores", log)
+        self.assertEqual([row["assay_id"] for row in self.summary_rows], ["tiny", r.BRCA2])
+        self.assertEqual([row["array_index"] for row in self.summary_rows], ["0", "1"])
+        self.assertEqual([row["status"] for row in self.summary_rows], ["READY", "READY"])
+        self.assertEqual(self.summary_rows[1]["proteinmpnn_scores"], "SKIP")
+        self.assertIn("BRCA2", self.summary_rows[1]["notes"])
 
     def test_failed_cache_does_not_hide_other_outputs_or_assays(self):
         status, log, calls = self.run_audit(("tiny", "esm2", "features"))
@@ -58,12 +66,30 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(len(calls), 7)
         self.assertIn("fixture corrupt cache", log)
         self.assertIn("Assay outputs ready: 1 / 2", log)
+        self.assertEqual(self.summary_rows[0]["esm2_embeddings"], "FAILED")
+        self.assertEqual(self.summary_rows[0]["status"], "FAILED")
+        self.assertIn("fixture corrupt cache", self.summary_rows[0]["errors"])
+        self.assertEqual(self.summary_rows[1]["status"], "READY")
 
     def test_missing_model_is_reported_even_when_outputs_pass(self):
         status, log, calls = self.run_audit(shared_failure=True)
         self.assertEqual(status, 1)
         self.assertEqual(len(calls), 7)
         self.assertIn("shared asset failures: 1", log)
+        for row in self.summary_rows:
+            self.assertEqual(row["esm2_model"], "FAILED")
+            self.assertEqual(row["outputs_status"], "READY")
+            self.assertEqual(row["status"], "FAILED")
+            self.assertIn("missing model", row["errors"])
+
+    def test_existing_summary_is_not_overwritten(self):
+        summary = self.root / "previous.csv"
+        summary.write_text("previous audit\n")
+        with patch.object(r, "audit") as audit, contextlib.redirect_stdout(io.StringIO()):
+            status = r.main(["--summary-csv", str(summary)])
+        self.assertEqual(status, 1)
+        audit.assert_not_called()
+        self.assertEqual(summary.read_text(), "previous audit\n")
 
     def test_selected_score_cache_and_current_coverage_are_checked(self):
         leaf = self.root / "score"

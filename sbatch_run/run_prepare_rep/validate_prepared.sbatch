@@ -14,7 +14,9 @@
 # Submit after both preparation jobs finish:
 # sbatch sbatch_run/run_prepare_rep/validate_prepared.sbatch [--esm2-config PATH]
 # Validate the assets selected by prepare_esm2.sbatch and prepare_proteinmpnn.sbatch.
-# CPU only, no inference/downloads; results print to the Slurm log without reports.
+# CPU only, no inference/downloads; details print to the Slurm log.
+# One CSV summary: results/preparation-check-<job-id>-<timestamp>.csv
+# Override its destination with --summary-csv PATH (must be a new file).
 # ESM2_CONFIG and --esm2-config select the ESM2 extraction recipe used to prepare.
 set -eo pipefail
 

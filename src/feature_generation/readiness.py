@@ -1,6 +1,8 @@
 """Read-only audit of the ESM2/ProteinMPNN preparation jobs' assets."""
 
 import argparse
+import csv
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -22,6 +24,11 @@ from .structure_fragments import load_inverse_structure
 
 BRCA2 = "BRCA2_HUMAN_Erwood_2022_HEK293T"
 CONFIG_DIR = PROJECT_ROOT / "configs/extraction"
+SUMMARY_COLUMNS = (
+    "array_index", "assay_id", "inputs", "structure", "esm2_embeddings", "esm2_scores",
+    "proteinmpnn_features", "proteinmpnn_scores", "esm2_model", "proteinmpnn_model",
+    "proteinmpnn_scoring_model", "outputs_status", "status", "errors", "notes",
+)
 
 
 def validate_output(config, assay, inputs, kind, structure=None):
@@ -66,7 +73,7 @@ def validate_output(config, assay, inputs, kind, structure=None):
     return report
 
 
-def audit(esm2, features, scores):
+def audit(esm2, features, scores, summary_stream=None):
     """Check every stage independently, continuing after missing/corrupt assets."""
     if any(config.assay_index != esm2.assay_index for config in (features, scores)):
         raise ValueError("Preparation configs must select the same assay catalog")
@@ -74,44 +81,66 @@ def audit(esm2, features, scores):
         raise ValueError("ProteinMPNN configs must select the same structure manifests")
     catalog = AssayCatalog(esm2.assay_index)
     failures = 0
+    statuses = {}
+    errors = []
+    writer = csv.DictWriter(summary_stream, fieldnames=SUMMARY_COLUMNS) if summary_stream is not None else None
+    if writer is not None:
+        writer.writeheader()
+        summary_stream.flush()
 
-    def check(label, action):
+    def check(key, label, action):
         nonlocal failures
         try:
             value = action()
+            statuses[key] = "READY"
             print(f"  READY  {label}", flush=True)
             return True, value
         except (OSError, ValueError, RuntimeError, KeyError, TypeError, ImportError, EOFError) as error:
             failures += 1
+            statuses[key] = "FAILED"
+            errors.append(f"{label}: {error}")
             print(f"  FAILED {label}: {error}", flush=True)
             return False, None
 
     print("Shared model assets (offline validation):", flush=True)
-    check("ESM2 checkpoint/tokenizer", lambda: esm2_checkpoint(esm2))
-    check("ProteinMPNN checkpoint/source", lambda: proteinmpnn_checkpoint(features))
+    check("esm2_model", "ESM2 checkpoint/tokenizer", lambda: esm2_checkpoint(esm2))
+    check("proteinmpnn_model", "ProteinMPNN checkpoint/source", lambda: proteinmpnn_checkpoint(features))
     if (scores.model_dir, scores.revision) != (features.model_dir, features.revision):
-        check("ProteinMPNN scoring checkpoint/source", lambda: proteinmpnn_checkpoint(scores))
+        check("proteinmpnn_scoring_model", "ProteinMPNN scoring checkpoint/source", lambda: proteinmpnn_checkpoint(scores))
+    else:
+        statuses["proteinmpnn_scoring_model"] = statuses["proteinmpnn_model"]
     shared_failures = failures
+    shared_statuses, shared_errors = statuses.copy(), errors.copy()
     ready = 0
     for index, record in enumerate(catalog):
         assay = record.assay_id
         before = failures
+        statuses = {"array_index": index, "assay_id": assay, **shared_statuses, "notes": ""}
+        errors = shared_errors.copy()
         print(f"\nArray index {index}: {assay}", flush=True)
-        _, inputs = check("complete single-mutant inputs", lambda: prepare_assay(esm2.assay_index, assay, singles_only=True))
-        _, structure = check("ProteinMPNN structure", lambda: load_inverse_structure(
+        _, inputs = check("inputs", "complete single-mutant inputs", lambda: prepare_assay(esm2.assay_index, assay, singles_only=True))
+        _, structure = check("structure", "ProteinMPNN structure", lambda: load_inverse_structure(
             features.structure_manifest_dir / f"{assay}.json", record.reference_sequence, require_oxygen=True))
-        for label, config, kind in (
-            ("ESM2 embeddings", esm2, "features"),
-            ("ESM2 scores", esm2, "scores"),
-            ("ProteinMPNN features", features, "features"),
-            ("ProteinMPNN scores", scores, "scores"),
+        for key, label, config, kind in (
+            ("esm2_embeddings", "ESM2 embeddings", esm2, "features"),
+            ("esm2_scores", "ESM2 scores", esm2, "scores"),
+            ("proteinmpnn_features", "ProteinMPNN features", features, "features"),
+            ("proteinmpnn_scores", "ProteinMPNN scores", scores, "scores"),
         ):
             if assay == BRCA2 and label == "ProteinMPNN scores":
+                statuses[key] = "SKIP"
+                statuses["notes"] = "ProteinMPNN scores intentionally omitted by preparation for BRCA2 fragments"
                 print("  SKIP   ProteinMPNN scores: intentionally omitted by preparation for BRCA2 fragments", flush=True)
                 continue
-            check(label, lambda c=config, k=kind: validate_output(c, assay, inputs, k, structure))
+            check(key, label, lambda c=config, k=kind: validate_output(c, assay, inputs, k, structure))
         passed = failures == before
         ready += int(passed)
+        statuses["outputs_status"] = "READY" if passed else "FAILED"
+        statuses["status"] = "READY" if passed and not shared_failures else "FAILED"
+        statuses["errors"] = " | ".join(errors)
+        if writer is not None:
+            writer.writerow(statuses)
+            summary_stream.flush()
         print(f"{index}\t{assay}\t{'READY' if passed else 'FAILED'}", flush=True)
     print(f"\nAssay outputs ready: {ready} / {len(catalog)}; failed assays: {len(catalog) - ready}; "
           f"shared asset failures: {shared_failures}", flush=True)
@@ -122,6 +151,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--esm2-config", type=Path, default=os.environ.get("ESM2_CONFIG", CONFIG_DIR / "esm2_650m_centered.json"),
                         help="ESM2 extraction config used by prepare_esm2.sbatch")
+    parser.add_argument("--summary-csv", type=Path,
+                        help="New CSV summary path; defaults to results/preparation-check-<job-id>-<timestamp>.csv")
     args = parser.parse_args(argv)
     try:
         torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "4")))
@@ -133,7 +164,16 @@ def main(argv=None):
               f"{CONFIG_DIR / 'proteinmpnn_v48_020.json'}", flush=True)
         print(f"Catalog: {esm2.assay_index}", flush=True)
         print(f"Output roots: ESM2={esm2.output_root}; ProteinMPNN features={features.output_root}; scores={scores.output_root}", flush=True)
-        return audit(esm2, features, scores)
+        summary_path = args.summary_csv or (
+            PROJECT_ROOT / "results" /
+            f"preparation-check-{os.environ.get('SLURM_JOB_ID', 'manual')}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}.csv"
+        )
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        # Preserve earlier audits. Flush each completed assay so interrupted jobs
+        # retain a partial summary; absent rows have not been checked yet.
+        with summary_path.open("x", newline="", encoding="utf-8") as handle:
+            print(f"CSV summary: {summary_path.resolve()}", flush=True)
+            return audit(esm2, features, scores, summary_stream=handle)
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, ImportError) as error:
         print(f"error: {error}", flush=True)
         return 1

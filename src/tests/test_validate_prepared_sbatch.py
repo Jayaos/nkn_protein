@@ -53,13 +53,14 @@ class ValidatePreparedSbatchTests(PreparationFixture):
         return subprocess.run([BASH, str(self.script), *arguments], env=env, cwd=self.workspace,
                               capture_output=True, text=True, timeout=90)
 
-    def test_launches_asset_audit_without_nkn_config_or_reports(self):
-        result = self.invoke(arguments=("--esm2-config", "configs/extraction/custom config.json"))
+    def test_launches_asset_audit_and_forwards_csv_destination(self):
+        arguments = ("--esm2-config", "configs/extraction/custom config.json", "--summary-csv", "results/custom summary.csv")
+        result = self.invoke(arguments=arguments)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("fixture asset audit", result.stdout)
         self.assertFalse((self.root / "results").exists())
         self.assertEqual(json.loads((self.root / "calls.jsonl").read_text()),
-                         ["-m", "feature_generation.readiness", "--esm2-config", "configs/extraction/custom config.json"])
+                         ["-m", "feature_generation.readiness", *arguments])
 
     def test_propagates_asset_audit_failure_to_slurm(self):
         result = self.invoke(failed_assay="fixture")
