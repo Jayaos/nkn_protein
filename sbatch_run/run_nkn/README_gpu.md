@@ -102,7 +102,17 @@ launcher's argument. For example, appending `--experiment-suffix comparison_01`
 to your submission arguments saves runs under
 `results/comparison_01/<assay>/nkn_esm2_proteinmpnn_<selection>_gpu_<job-id>_<task>/`.
 Both `--experiment-suffix NAME` and `--experiment-suffix=NAME` are accepted.
-The command-line value overrides `EXPERIMENT_SUFFIX`; omitting both preserves
+You can also put the group name first, before the optional setting:
+
+~~~bash
+sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch gpu_bbmm_test --inference-backend bbmm
+sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch gpu_bbmm_test singles_random --inference-backend bbmm
+~~~
+
+The group name is consumed by the launcher instead of being passed to Python
+as a selection. A group name alone does not enable BBMM; use
+`--inference-backend bbmm` as shown. `--experiment-suffix` overrides a leading
+group name, which overrides `EXPERIMENT_SUFFIX`; omitting all three preserves
 the existing output path. The name must be a single folder, without `/` or `\`,
 and cannot be `.` or `..`.
 

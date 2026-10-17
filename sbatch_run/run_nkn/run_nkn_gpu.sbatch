@@ -19,10 +19,11 @@
 # Settings and folds run sequentially on one GPU per task.
 # Training limits come from the preset unless explicitly overridden.
 # Cholesky is the default; --inference-backend bbmm selects iterative inference.
-# Usage: sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch [singles|SETTING] [OPTIONS]
+# Usage: sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch [NAME] [singles|SETTING] [OPTIONS]
 # One setting: ... singles_random
 # BBMM: ... singles_random --inference-backend bbmm
 # Results grouping: --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME).
+# A leading NAME is also accepted: ... gpu_bbmm_test --inference-backend bbmm
 # Inserts NAME below NKN_OUTPUT_ROOT (default results), as in the CPU launcher.
 # Short timing run: ... singles_random --max-steps 2 --min-steps 0
 # Override GPU hardware/resources using sbatch options before the script path.
@@ -105,8 +106,9 @@ done
 for argument in "$@"; do
   if [[ "$argument" == "--help" || "$argument" == "-h" ]]; then
     cat <<'HELP'
-Usage: sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch [singles|SETTING] [OPTIONS]
+Usage: sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch [NAME] [singles|SETTING] [OPTIONS]
 SETTINGS: singles_random, singles_modulo, singles_contiguous
+NAME: optional leading results-group folder name (must not be a setting).
 Default singles runs all three, sequentially, with five folds each.
 Edit assays=(...) in this file to choose among the four supported human IDs.
 Set the Slurm array range to match the list; current entries are shown below.
@@ -124,6 +126,7 @@ Supported IDs: A4_HUMAN_Seuma_2022, BRCA2_HUMAN_Erwood_2022_HEK293T,
                FKBP3_HUMAN_Tsuboyama_2023_2KFV, S22A1_HUMAN_Yee_2023_activity.
 NKN_OUTPUT_ROOT changes the results root (default results).
 Results grouping: --experiment-suffix NAME inserts one folder below that root.
+Precedence: --experiment-suffix, leading NAME, then EXPERIMENT_SUFFIX.
 Without a suffix, existing output paths are preserved.
 Assay, device, and per-task output paths are managed by this launcher.
 Cholesky is the default. BBMM requires linear_operator==0.5.2 in the environment.
@@ -146,6 +149,12 @@ HELP
 done
 
 experiment_suffix="${EXPERIMENT_SUFFIX:-}"
+# Consume a leading results-group name before forwarding runner arguments.
+# Known selections and options retain their existing meaning.
+case "${1:-}" in
+  ""|-*|singles|singles_random|singles_modulo|singles_contiguous) ;;
+  *) experiment_suffix="$1"; shift ;;
+esac
 runner_args=()
 while [[ $# -gt 0 ]]; do
   case "$1" in

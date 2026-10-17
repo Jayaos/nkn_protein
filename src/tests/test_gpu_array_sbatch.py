@@ -57,6 +57,7 @@ class HumanAssayArrayTests(unittest.TestCase):
             TEST_RECORD=self.record.as_posix(),
         )
         self.env.pop("NKN_CONFIG", None)
+        self.env.pop("EXPERIMENT_SUFFIX", None)
 
     def invoke(self, index, *arguments, script=None):
         # The production list is user-editable; use an explicit supported fixture.
@@ -145,6 +146,35 @@ class HumanAssayArrayTests(unittest.TestCase):
         self.assertEqual(parsed.assay, DEFAULT_ASSAYS[0])
         self.assertEqual(parsed.output, self.root / "results" / DEFAULT_ASSAYS[0]
                          / "nkn_esm2_proteinmpnn_singles_gpu_4242_0")
+
+    def test_results_group_is_consumed_without_changing_selection_or_backend(self):
+        cases = (
+            (("gpu_bbmm_test",), "gpu_bbmm_test", "singles"),
+            (("gpu_bbmm_test", "singles_random"), "gpu_bbmm_test", "singles_random"),
+            (("singles_modulo", "--experiment-suffix", "named"), "named", "singles_modulo"),
+            (("--experiment-suffix=named",), "named", "singles"),
+            (("gpu_bbmm_test", "--experiment-suffix", "override"), "override", "singles"),
+            ((), "from_env", "singles"),
+        )
+        self.env["EXPERIMENT_SUFFIX"] = "from_env"
+        for arguments, group, selection in cases:
+            with self.subTest(arguments=arguments):
+                result = self.invoke(0, *arguments, "--inference-backend", "bbmm")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                captured = json.loads(self.record.read_text())
+                parsed = _parser().parse_args(captured["args"][3:])
+                self.assertEqual(parsed.selection, selection)
+                self.assertEqual(parsed.inference_backend, "bbmm")
+                self.assertEqual(parsed.output, self.root / "results" / group / DEFAULT_ASSAYS[0]
+                                 / f"nkn_esm2_proteinmpnn_{selection}_gpu_4242_0")
+
+    def test_invalid_group_paths_fail_before_dispatch(self):
+        for group in (".", "..", "../outside", "path/name", "path\\name"):
+            with self.subTest(group=group):
+                result = self.invoke(0, group, "--inference-backend", "bbmm")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("single folder name", result.stderr)
+                self.assertFalse(self.record.exists())
 
     def test_help_reflects_edited_list_without_initializing_python(self):
         assays = [*DEFAULT_ASSAYS, FOURTH_ASSAY]
