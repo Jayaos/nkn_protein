@@ -1,19 +1,21 @@
 #!/bin/bash
 #SBATCH --job-name=nkn_gpu
 #SBATCH --account=gts-yxie77-paid
-#SBATCH --array=0-57
+#SBATCH --array=0-85
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:V100:1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
-#SBATCH --time=00:30:00
+#SBATCH --mem=192G
+#SBATCH --time=02:00:00
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%A_%a.out
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
-# Same default four-branch NKN preset as run_nkn_assays.sbatch, in float64.
+# 86 assays with more than 2,000 single-mutant variants; array indices 0-85.
+# Same default four-branch NKN preset as run_nkn_assays.sbatch:
+# initial noise variance 0.5, in float64.
 # Load prepared features/scores and published singles assignments; run populated folds.
 # Default: all three singles settings; assay-specific config rules still apply.
 # Settings and folds run sequentially on one GPU per task.
@@ -30,65 +32,95 @@
 # NKN_PYTHON may name an existing interpreter; otherwise activate nkn_protein.
 set -eo pipefail
 
+# DMS_number_single_mutants > 2000, in catalog order, from
+# data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv.
 assays=(
-  "A0A1I9GEU1_NEIME_Kennouche_2019"
-  "A4_HUMAN_Seuma_2022"
-  "AICDA_HUMAN_Gajula_2014_3cycles"
-  "AMFR_HUMAN_Tsuboyama_2023_4G3O"
-  "B2L11_HUMAN_Dutta_2010_binding-Mcl-1"
-  "BCHB_CHLTE_Tsuboyama_2023_2KRU"
-  "BLAT_ECOLX_Jacquier_2013"
-  "BRCA2_HUMAN_Erwood_2022_HEK293T"
-  "CAPSD_AAV2S_Sinai_2021"
-  "CBX4_HUMAN_Tsuboyama_2023_2K28"
-  "CUE1_YEAST_Tsuboyama_2023_2MYX"
-  "ENV_HV1B9_DuenasDecamp_2016"
-  "ERBB2_HUMAN_Elazar_2016"
-  "F7YBW8_MESOW_Ding_2023"
-  "F7YBW8_MESOW_Aakre_2015"
-  "GCN4_YEAST_Staller_2018"
-  "GLPA_HUMAN_Elazar_2016"
-  "HIS7_YEAST_Pokusaeva_2019"
-  "ISDH_STAAW_Tsuboyama_2023_2LHR"
-  "KCNH2_HUMAN_Kozek_2020"
-  "LYAM1_HUMAN_Elazar_2016"
-  "MAFG_MOUSE_Tsuboyama_2023_1K1V"
-  "MYO3_YEAST_Tsuboyama_2023_2BTT"
-  "NPC1_HUMAN_Erwood_2022_HEK293T"
-  "NPC1_HUMAN_Erwood_2022_RPE1"
-  "NRAM_I33A0_Jiang_2016"
-  "ODP2_GEOSE_Tsuboyama_2023_1W4G"
-  "OPSD_HUMAN_Wan_2019"
-  "OTU7A_HUMAN_Tsuboyama_2023_2L2D"
-  "PIN1_HUMAN_Tsuboyama_2023_1I6C"
-  "PITX2_HUMAN_Tsuboyama_2023_2L7M"
-  "POLG_PESV_Tsuboyama_2023_2MXD"
-  "Q837P4_ENTFA_Meier_2023"
-  "Q837P5_ENTFA_Meier_2023"
-  "RAD_ANTMA_Tsuboyama_2023_2CJJ"
-  "RAF1_HUMAN_Zinkus-Boltz_2019"
-  "RBP1_HUMAN_Tsuboyama_2023_2KWH"
-  "RCD1_ARATH_Tsuboyama_2023_5OAO"
-  "RD23A_HUMAN_Tsuboyama_2023_1IFY"
-  "RFAH_ECOLI_Tsuboyama_2023_2LCL"
-  "RPC1_LAMBD_Li_2019_high-expression"
-  "RPC1_LAMBD_Li_2019_low-expression"
-  "SAV1_MOUSE_Tsuboyama_2023_2YSB"
-  "SCN5A_HUMAN_Glazer_2019"
-  "SDA_BACSU_Tsuboyama_2023_1PV0"
-  "SPG1_STRSG_Wu_2016"
-  "SQSTM_MOUSE_Tsuboyama_2023_2RRU"
-  "SR43C_ARATH_Tsuboyama_2023_2N88"
-  "TCRG1_MOUSE_Tsuboyama_2023_1E0L"
-  "THO1_YEAST_Tsuboyama_2023_2WQG"
-  "TPOR_HUMAN_Bridgford_2020"
-  "UBE4B_MOUSE_Starita_2013"
-  "VG08_BPP22_Tsuboyama_2023_2GP8"
-  "VKOR1_HUMAN_Chiasson_2020_activity"
-  "YAIA_ECOLI_Tsuboyama_2023_2KVT"
-  "YAP1_HUMAN_Araya_2012"
-  "YNZC_BACSU_Tsuboyama_2023_2JVD"
-  "FKBP3_HUMAN_Tsuboyama_2023_2KFV"
+  "A0A140D2T1_ZIKV_Sourisseau_2019"
+  "A0A192B1T2_9HIV1_Haddox_2018"
+  "A0A2Z5U3Z0_9INFA_Doud_2016"
+  "A0A2Z5U3Z0_9INFA_Wu_2014"
+  "A4D664_9INFA_Soh_2019"
+  "A4GRB6_PSEAI_Chen_2020"
+  "ACE2_HUMAN_Chan_2020"
+  "ADRB2_HUMAN_Jones_2020"
+  "AMIE_PSEAE_Wrenbeck_2017"
+  "ANCSZ_Hobbs_2022"
+  "BLAT_ECOLX_Deng_2012"
+  "BLAT_ECOLX_Firnberg_2014"
+  "BLAT_ECOLX_Stiffler_2015"
+  "C6KNH7_9INFA_Lee_2018"
+  "CAR11_HUMAN_Meitlis_2020_gof"
+  "CAR11_HUMAN_Meitlis_2020_lof"
+  "CAS9_STRP1_Spencer_2017_positive"
+  "CBS_HUMAN_Sun_2020"
+  "CCR5_HUMAN_Gill_2023"
+  "CD19_HUMAN_Klesmith_2019_FMC_singles"
+  "CP2C9_HUMAN_Amorosi_2021_abundance"
+  "CP2C9_HUMAN_Amorosi_2021_activity"
+  "DYR_ECOLI_Nguyen_2023"
+  "DYR_ECOLI_Thompson_2019"
+  "ENV_HV1BR_Haddox_2016"
+  "ESTA_BACSU_Nutschel_2020"
+  "HEM3_HUMAN_Loggerenberg_2023"
+  "HMDH_HUMAN_Jiang_2019"
+  "HSP82_YEAST_Cote-Hammarlof_2020_growth-H2O2"
+  "HSP82_YEAST_Flynn_2019"
+  "HSP82_YEAST_Mishra_2016"
+  "HXK4_HUMAN_Gersing_2022_activity"
+  "HXK4_HUMAN_Gersing_2023_abundance"
+  "I6TAH8_I68A0_Doud_2015"
+  "KCNE1_HUMAN_Muhammad_2023_expression"
+  "KCNE1_HUMAN_Muhammad_2023_function"
+  "KCNJ2_MOUSE_Coyote-Maestas_2022_function"
+  "KCNJ2_MOUSE_Coyote-Maestas_2022_surface"
+  "KKA2_KLEPN_Melnikov_2014"
+  "LGK_LIPST_Klesmith_2015"
+  "MET_HUMAN_Estevam_2023"
+  "MK01_HUMAN_Brenan_2016"
+  "MLAC_ECOLI_MacRae_2023"
+  "MSH2_HUMAN_Jia_2020"
+  "MTHR_HUMAN_Weile_2021"
+  "NCAP_I34A1_Doud_2015"
+  "NUD15_HUMAN_Suiter_2020"
+  "OXDA_RHOTO_Vanella_2023_activity"
+  "OXDA_RHOTO_Vanella_2023_expression"
+  "P53_HUMAN_Giacomelli_2018_Null_Etoposide"
+  "P53_HUMAN_Giacomelli_2018_Null_Nutlin"
+  "P53_HUMAN_Giacomelli_2018_WT_Nutlin"
+  "PAI1_HUMAN_Huttinger_2021"
+  "PHOT_CHLRE_Chen_2023"
+  "POLG_CXB3N_Mattenberger_2021"
+  "POLG_DEN26_Suphatrakul_2023"
+  "PPARG_HUMAN_Majithia_2016"
+  "PPM1D_HUMAN_Miller_2022"
+  "PRKN_HUMAN_Clausen_2023"
+  "PTEN_HUMAN_Matreyek_2021"
+  "PTEN_HUMAN_Mighell_2018"
+  "Q2N0S5_9HIV1_Haddox_2018"
+  "Q53Z42_HUMAN_McShan_2019_binding-TAPBPR"
+  "Q53Z42_HUMAN_McShan_2019_expression"
+  "Q59976_STRSQ_Romero_2015"
+  "R1AB_SARS2_Flynn_2022"
+  "RASH_HUMAN_Bandaru_2017"
+  "RASK_HUMAN_Weng_2022_abundance"
+  "RASK_HUMAN_Weng_2022_binding-DARPin_K55"
+  "RDRP_I33A0_Li_2023"
+  "REV_HV1H2_Fernandes_2016"
+  "RNC_ECOLI_Weeks_2023"
+  "S22A1_HUMAN_Yee_2023_abundance"
+  "S22A1_HUMAN_Yee_2023_activity"
+  "SC6A4_HUMAN_Young_2021"
+  "SHOC2_HUMAN_Kwon_2022"
+  "SPIKE_SARS2_Starr_2020_binding"
+  "SPIKE_SARS2_Starr_2020_expression"
+  "SRC_HUMAN_Ahler_2019"
+  "SRC_HUMAN_Chakraborty_2023_binding-DAS_25uM"
+  "SRC_HUMAN_Nguyen_2022"
+  "SYUA_HUMAN_Newberry_2020"
+  "TPK1_HUMAN_Weile_2017"
+  "TPMT_HUMAN_Matreyek_2018"
+  "UBC9_HUMAN_Weile_2017"
+  "VKOR1_HUMAN_Chiasson_2020_abundance"
 )
 
 assay_count="${#assays[@]}"
@@ -110,7 +142,10 @@ Usage: sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch [NAME] [singles|SETTING] [OP
 SETTINGS: singles_random, singles_modulo, singles_contiguous
 NAME: optional leading results-group folder name (must not be a setting).
 Default singles runs all three sequentially, using each scheme's populated folds.
-Edit assays=(...) in this file to choose among the four supported human IDs.
+Default config: configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json
+Initial noise variance: 0.5; same model/training defaults as run_nkn_assays.sbatch.
+Config precedence: --config PATH, NKN_CONFIG, then the default above.
+Default: 86 ProteinGym assays with more than 2,000 single-mutant variants.
 Set the Slurm array range to match the list; current entries are shown below.
 Prepared features and scores: data/features/pretrained/singles/<assay>/
 Published folds: data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/<assay>.csv
@@ -122,8 +157,7 @@ Options: --config PATH --max-steps N --min-steps N --log-every N
          --bbmm-num-trace-samples N --bbmm-max-lanczos-iterations N
          --bbmm-preconditioner-size N --bbmm-probe-seed N
 This launcher uses real prepared inputs and CUDA; missing assets fail explicitly.
-Supported IDs: A4_HUMAN_Seuma_2022, BRCA2_HUMAN_Erwood_2022_HEK293T,
-               FKBP3_HUMAN_Tsuboyama_2023_2KFV, S22A1_HUMAN_Yee_2023_activity.
+Assays are selected in catalog order by DMS_number_single_mutants > 2000.
 NKN_OUTPUT_ROOT changes the results root (default results).
 Results grouping: --experiment-suffix NAME inserts one folder below that root.
 Precedence: --experiment-suffix, leading NAME, then EXPERIMENT_SUFFIX.
@@ -135,7 +169,7 @@ Short timing run (configured assays, all populated folds):
 BBMM with the same prepared data, published folds, and GPU resources:
   sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch singles_random --gp-computation-backend bbmm
 HELP
-    printf '\nConfigured human assays: %s; submit with --array=0-%s\n' "$assay_count" "$last_index"
+    printf '\nConfigured assays: %s; submit with --array=0-%s\n' "$assay_count" "$last_index"
     for index in "${!assays[@]}"; do
       printf '  %s: %s\n' "$index" "${assays[$index]}"
     done
@@ -184,7 +218,7 @@ task_index="${SLURM_ARRAY_TASK_ID:-0}"
 if [[ ! "$task_index" =~ ^(0|[1-9][0-9]*)$ ]] \
     || (( ${#task_index} > ${#last_index} )) \
     || (( task_index > last_index )); then
-  echo "error: SLURM_ARRAY_TASK_ID must be an integer from 0 to $last_index for the configured human assays." >&2
+  echo "error: SLURM_ARRAY_TASK_ID must be an integer from 0 to $last_index for the configured assays." >&2
   exit 1
 fi
 assay="${assays[$task_index]}"
@@ -229,7 +263,7 @@ case "${1:-}" in
 esac
 output_root="${NKN_OUTPUT_ROOT:-results}"
 run_root="$output_root/${experiment_suffix:+$experiment_suffix/}$assay/nkn_esm2_proteinmpnn_${selection}_gpu_${run_id}_${task_index}"
-config="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_1p0.json}"
+config="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json}"
 printf 'Job: %s\nRepository: %s\nPython: %s\n' "$run_id" "$project_root" "$python_exec"
 printf 'Array task: %s_%s; assay: %s\n' \
   "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$assay"
