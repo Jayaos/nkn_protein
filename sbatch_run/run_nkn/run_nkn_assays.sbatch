@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=15
-#SBATCH --mem=128G
+#SBATCH --mem=192G
 #SBATCH --time=2:00:00
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%A_%a.out
