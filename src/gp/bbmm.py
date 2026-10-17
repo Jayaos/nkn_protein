@@ -34,7 +34,7 @@ def _dependencies():
     except ImportError as exc:
         raise RuntimeError(
             "BBMM requires the optional linear_operator package (validated with "
-            "linear_operator==0.5.2); install requirements-bbmm.txt in the run environment."
+            "linear_operator==0.5.2); install requirements.txt in the run environment."
         ) from exc
 
     class BBMMAddedDiagLinearOperator(AddedDiagLinearOperator):

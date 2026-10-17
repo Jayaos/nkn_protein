@@ -18,18 +18,18 @@ run with two optimizer updates per fold:
 sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch singles_random --max-steps 2 --min-steps 0
 ~~~
 
-For BBMM, install the optional dependency once in the same Python environment
+For BBMM, install the project dependencies in the same Python environment
 used by the job, then select the backend:
 
 ~~~bash
-python -m pip install -r requirements-bbmm.txt
+python -m pip install -r requirements.txt
 sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch singles_random --inference-backend bbmm
 ~~~
 
 Append `--max-steps 2 --min-steps 0` for an initial full-size BBMM timing run.
 The same launcher, GPU resources, model, variants, and folds are used for
 both backends. No additional Slurm script or parallel option is needed.
-`env.yaml`, `requirements.txt`, and `requirements-bbmm.txt` pin
+`env.yaml` and `requirements.txt` pin
 `gpytorch==1.11` and `linear_operator==0.5.2`, matching the validation environment.
 The current BBMM adapter calls `linear_operator` directly.
 
