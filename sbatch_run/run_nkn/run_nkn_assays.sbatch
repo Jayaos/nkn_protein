@@ -39,7 +39,7 @@ set -eo pipefail
 
 # This timing-test selection has its own index; preparation uses the full catalog.
 assays=(
-  "CD19_HUMAN_Klesmith_2019_FMC_singles"
+  "BBC1_YEAST_Tsuboyama_2023_1TG0"
 )
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
