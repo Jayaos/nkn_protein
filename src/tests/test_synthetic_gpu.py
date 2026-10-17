@@ -40,6 +40,23 @@ def read_csv(path):
 
 
 class SyntheticBatchTests(unittest.TestCase):
+    def test_dataset_labels_are_safe_identifiers_and_do_not_select_input_assets(self):
+        baseline = make_synthetic_batch(40, 4, 19)
+        for label in ("control", "benchmark-2.v1", "7_repeat", "x" * 128):
+            with self.subTest(label=label):
+                batch = make_synthetic_batch(40, 4, 19, dataset_label=label)
+                self.assertEqual(batch.assay_id, f"synthetic_{label}")
+                self.assertEqual(batch.variant_ids, baseline.variant_ids)
+                torch.testing.assert_close(batch.scores, baseline.scores, rtol=0, atol=0)
+                torch.testing.assert_close(batch.targets, baseline.targets, rtol=0, atol=0)
+        for label in ("", "../outside", "path/name", "path\\name", "two words", "_leading", "A\n", "x" * 129,
+                      3, [], {}):
+            with self.subTest(invalid_label=label):
+                with patch("experiments.synthetic_gpu.torch.Generator") as generator:
+                    with self.assertRaises((ValueError, TypeError)):
+                        make_synthetic_batch(40, 4, 19, dataset_label=label)
+                    generator.assert_not_called()
+
     def test_reproducible_features_obey_model_and_position_invariants(self):
         batch = make_synthetic_batch(n_variants=40, feature_dim=6, seed=123)
         repeated = make_synthetic_batch(n_variants=40, feature_dim=6, seed=123)
@@ -104,12 +121,14 @@ class SyntheticBenchmarkTests(unittest.TestCase):
         self.config_path.write_text(json.dumps(self.config.to_dict()), encoding="utf-8")
         self.addCleanup(torch.set_num_threads, torch.get_num_threads())
 
-    def invoke(self, output, selection=None, device="cpu"):
+    def invoke(self, output, selection=None, device="cpu", dataset_label=None):
         arguments = ([] if selection is None else [selection]) + [
             "--config", str(self.config_path), "--output", str(output), "--device", device,
             "--variants", "40", "--feature-dim", "4", "--seed", "19",
             "--num-threads", "1", "--max-steps", "1", "--min-steps", "0", "--log-every", "1",
         ]
+        if dataset_label is not None:
+            arguments.extend(("--dataset-label", dataset_label))
         stdout, stderr = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             try:
@@ -172,6 +191,35 @@ class SyntheticBenchmarkTests(unittest.TestCase):
         self.assertNotEqual(status, 0)
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "original")
         self.assertEqual(list(output.iterdir()), [sentinel])
+
+    def test_dataset_label_survives_cv_artifacts_and_checkpoint_reload(self):
+        label = "custom-benchmark_2.v1"
+        output = self.root / label
+        status, logs = self.invoke(output, "singles_random", dataset_label=label)
+        self.assertEqual(status, 0, logs)
+        for filename in ("synthetic_manifest.json", "benchmark.json"):
+            metadata = json.loads((output / filename).read_text())
+            self.assertEqual(metadata["assay_id"], f"synthetic_{label}")
+            self.assertEqual(metadata["dataset_label"], label)
+            self.assertEqual(metadata["seed"], 19)
+        fitted = FittedGP.load(output / "cv/singles_random/fold_0/checkpoint.pt")
+        self.assertEqual(fitted.train.assay_id, f"synthetic_{label}")
+        batch = make_synthetic_batch(40, 4, 19, dataset_label=label)
+        rows = read_csv(output / "cv/singles_random/fold_0/predictions.csv")
+        ids = [batch.variant_ids.index(row["variant_id"]) for row in rows]
+        prediction = fitted.predict(replace(batch.select(ids), targets=None))
+        expected = torch.tensor([float(row["mean"]) for row in rows], dtype=torch.float64)
+        torch.testing.assert_close(prediction.mean, expected, rtol=1e-9, atol=1e-10)
+
+    def test_invalid_cli_labels_fail_without_generating_data_or_creating_outputs(self):
+        for label in ("", "../outside", "two words", "x" * 129):
+            with self.subTest(label=label):
+                output = self.root / "invalid_label"
+                with patch("experiments.synthetic_gpu.torch.Generator") as generator:
+                    status, logs = self.invoke(output, "singles_random", dataset_label=label)
+                self.assertNotEqual(status, 0, logs)
+                self.assertFalse(output.exists())
+                generator.assert_not_called()
 
     def test_missing_cuda_fails_before_outputs_are_created(self):
         output = self.root / "no_cuda"

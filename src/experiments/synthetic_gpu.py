@@ -4,6 +4,7 @@ import argparse
 from dataclasses import replace
 import json
 from pathlib import Path
+import re
 import sys
 import time
 import traceback
@@ -25,10 +26,16 @@ DEFAULT_CONFIG = (
 SETTINGS = ("singles_random", "singles_modulo", "singles_contiguous")
 
 
-def make_synthetic_batch(n_variants=256, feature_dim=32, seed=2024):
+def make_synthetic_batch(n_variants=256, feature_dim=32, seed=2024, *, dataset_label=None):
     """Generate reproducible CPU tensors, without sequences or prepared assets."""
     if n_variants < 4 or feature_dim < 1 or seed < 0:
         raise ValueError("variants must be >= 4, feature-dim >= 1, and seed >= 0")
+    if dataset_label is not None and (
+        not isinstance(dataset_label, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", dataset_label) is None
+    ):
+        raise ValueError("dataset_label must contain 1-128 letters/digits/underscore/dot/hyphen, "
+                         "starting with a letter or digit")
     generator = torch.Generator().manual_seed(seed)
 
     def normal(*shape):
@@ -46,7 +53,7 @@ def make_synthetic_batch(n_variants=256, feature_dim=32, seed=2024):
         + 0.3 * global_features[:, 0].sin() + 0.1 * normal(n_variants)
     )
     return FeatureBatch(
-        assay_id="synthetic_nkn_gpu",
+        assay_id=f"synthetic_{dataset_label}" if dataset_label else "synthetic_nkn_gpu",
         variant_ids=tuple(f"synthetic_{index}" for index in range(n_variants)),
         targets=targets,
         scores=scores,
@@ -190,6 +197,8 @@ def _parser():
     parser.add_argument("--variants", type=int, default=256)
     parser.add_argument("--feature-dim", type=int, default=32)
     parser.add_argument("--seed", type=int, default=2024)
+    parser.add_argument("--dataset-label", metavar="NAME",
+                        help="Optional identity for a generated synthetic dataset")
     parser.add_argument("--num-threads", type=int, default=1)
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--min-steps", type=int)
@@ -216,7 +225,8 @@ def main(argv=None):
             inverse_folding_policy="normalized",
         )
         torch.set_num_threads(config.num_threads)
-        batch = make_synthetic_batch(args.variants, args.feature_dim, args.seed)
+        batch = make_synthetic_batch(args.variants, args.feature_dim, args.seed,
+                                     dataset_label=args.dataset_label)
         settings = SETTINGS if args.selection == "singles" else (args.selection,)
         splits = {
             setting: make_folds(batch, setting.removeprefix("singles_"),
@@ -229,11 +239,13 @@ def main(argv=None):
         _write_json(args.output / "synthetic_manifest.json", {
             "source": "generated numerical tensors; no biological assets",
             "assay_id": batch.assay_id, "variants": args.variants,
+            "dataset_label": args.dataset_label,
             "feature_dim": args.feature_dim, "seed": args.seed,
             "score_names": batch.score_names, "settings": settings,
             "base_config": str(args.config.resolve()), "fold_workers": 1,
         })
-        print(f"Synthetic NKN: {args.variants} variants; feature dimension {args.feature_dim}", flush=True)
+        print(f"Synthetic NKN: {batch.assay_id}; data/fold seed {args.seed}; "
+              f"{args.variants} variants; feature dimension {args.feature_dim}", flush=True)
         print(f"PyTorch: {torch.__version__}; device: {args.device}; dtype: float64; "
               f"threads: {config.num_threads}; sequential folds", flush=True)
         print(f"Training: min_steps={training.min_steps}; max_steps={training.max_steps}; "
@@ -241,6 +253,7 @@ def main(argv=None):
         inference = inference_metadata(training)
         print(f"Inference: {json.dumps(inference)}", flush=True)
         summary = {"device": args.device, "torch_version": torch.__version__, "settings": {},
+                   "assay_id": batch.assay_id, "dataset_label": args.dataset_label, "seed": args.seed,
                    "inference_backend": training.inference_backend, "inference": inference}
         if args.device == "cuda":
             print(f"GPU: {torch.cuda.get_device_name()}", flush=True)
