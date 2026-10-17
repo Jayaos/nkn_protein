@@ -100,7 +100,7 @@ def main(argv=None):
         _write_json(args.output / "config.json", config.to_dict())
         _write_json(args.output / "execution_plan.json", {
             "assay_id": assay, "device": "cuda", "parallel": False,
-            "inference_backend": config.training.inference_backend, "inference": inference,
+            "gp_computation_backend": config.training.gp_computation_backend, "inference": inference,
             "setting_workers": 1, "fold_workers": 1, "threads_per_worker": config.num_threads,
             "settings": {setting: {"fits": 5, "fold_workers": 1} for setting in settings},
         })
@@ -133,7 +133,7 @@ def main(argv=None):
         print(f"Training: min_steps={config.training.min_steps}; max_steps={config.training.max_steps}; "
               f"stopping={config.training.stopping_criterion}; seeds={config.training.seeds}", flush=True)
         summary = {"assay_id": assay, "n_variants": batch.num_variants,
-                   "inference_backend": config.training.inference_backend, "inference": inference,
+                   "gp_computation_backend": config.training.gp_computation_backend, "inference": inference,
                    "gpu": torch.cuda.get_device_name(), "settings": {}}
         for setting in settings:
             print(f"[3/3] Running five-fold NKN/GP CV on CUDA: {setting}", flush=True)

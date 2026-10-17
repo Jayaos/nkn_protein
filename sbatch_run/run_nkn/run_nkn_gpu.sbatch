@@ -18,12 +18,12 @@
 # Default: all three singles settings; assay-specific config rules still apply.
 # Settings and folds run sequentially on one GPU per task.
 # Training limits come from the preset unless explicitly overridden.
-# Cholesky is the default; --inference-backend bbmm selects iterative inference.
+# Cholesky is the default; --gp-computation-backend bbmm applies to training and prediction.
 # Usage: sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch [NAME] [singles|SETTING] [OPTIONS]
 # One setting: ... singles_random
-# BBMM: ... singles_random --inference-backend bbmm
+# BBMM: ... singles_random --gp-computation-backend bbmm
 # Results grouping: --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME).
-# A leading NAME is also accepted: ... gpu_bbmm_test --inference-backend bbmm
+# A leading NAME is also accepted: ... gpu_bbmm_test --gp-computation-backend bbmm
 # Inserts NAME below NKN_OUTPUT_ROOT (default results), as in the CPU launcher.
 # Short timing run: ... singles_random --max-steps 2 --min-steps 0
 # Override GPU hardware/resources using sbatch options before the script path.
@@ -117,7 +117,7 @@ Published folds: data/DMS_ProteinGym_substitutions/cv_folds_singles_substitution
 Options: --config PATH --max-steps N --min-steps N --log-every N
          --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX)
          --num-threads N --features PATH --folds PATH --assay-index PATH
-         --inference-backend {cholesky,bbmm}
+         --gp-computation-backend {cholesky,bbmm}
          --bbmm-cg-tolerance FLOAT --bbmm-max-cg-iterations N
          --bbmm-num-trace-samples N --bbmm-max-lanczos-iterations N
          --bbmm-preconditioner-size N --bbmm-probe-seed N
@@ -133,7 +133,7 @@ Cholesky is the default. BBMM requires linear_operator==0.5.2 in the environment
 Short timing run (configured human assays, five folds each):
   sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch singles_random --max-steps 2 --min-steps 0
 BBMM with the same prepared data, published folds, and GPU resources:
-  sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch singles_random --inference-backend bbmm
+  sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch singles_random --gp-computation-backend bbmm
 HELP
     printf '\nConfigured human assays: %s; submit with --array=0-%s\n' "$assay_count" "$last_index"
     for index in "${!assays[@]}"; do

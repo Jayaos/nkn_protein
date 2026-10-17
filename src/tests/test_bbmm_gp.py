@@ -32,7 +32,7 @@ def compact_model():
 
 def bbmm_config(**overrides):
     values = dict(
-        inference_backend="bbmm", max_steps=2, min_steps=0, patience=3,
+        gp_computation_backend="bbmm", max_steps=2, min_steps=0, patience=3,
         tolerance=0, noise_initial=1.0, seeds=(7,), lengthscale_multipliers=(1.0,),
         bbmm_cg_tolerance=1e-10, bbmm_max_cg_iterations=128,
         bbmm_num_trace_samples=0, bbmm_max_lanczos_iterations=32,
@@ -44,7 +44,7 @@ def bbmm_config(**overrides):
 
 class BBMMConfigurationTests(unittest.TestCase):
     def test_default_backend_and_json_roundtrip(self):
-        self.assertEqual(TrainingConfig().inference_backend, "cholesky")
+        self.assertEqual(TrainingConfig().gp_computation_backend, "cholesky")
         default = TrainingConfig()
         self.assertEqual(default.bbmm_cg_tolerance, 1e-5)
         self.assertEqual(default.bbmm_max_cg_iterations, 1000)
@@ -60,7 +60,7 @@ class BBMMConfigurationTests(unittest.TestCase):
 
     def test_invalid_settings_are_rejected(self):
         invalid = {
-            "inference_backend": ("unknown", "BBMM", None),
+            "gp_computation_backend": ("unknown", "BBMM", None),
             "bbmm_cg_tolerance": (0, -1, 1, True, float("nan"), float("inf")),
             "bbmm_max_cg_iterations": (0, -1, 1.5, True),
             "bbmm_num_trace_samples": (-1, 1.5, True),
@@ -93,7 +93,7 @@ class BBMMIntegrationTests(unittest.TestCase):
         devices = [torch.device(device).index or 0] if torch.device(device).type == "cuda" else []
         with torch.random.fork_rng(devices=devices):
             torch.manual_seed(123)
-            reference = ExactProteinGP(train, self.model_config, replace(self.config, inference_backend="cholesky"))
+            reference = ExactProteinGP(train, self.model_config, replace(self.config, gp_computation_backend="cholesky"))
             actual = ExactProteinGP(train, self.model_config, self.config)
         actual.load_state_dict(reference.state_dict())
         for model in (reference, actual):
@@ -157,8 +157,8 @@ class BBMMIntegrationTests(unittest.TestCase):
         heldout = replace(self.batch.select(range(12, 16)), targets=None)
         fitted = fit_gp(train, self.model_config, self.config)
         self.assertEqual([row["step"] for row in fitted.history], [0, 1, 2])
-        self.assertTrue(all(row["inference_backend"] == "bbmm" for row in fitted.history))
-        self.assertEqual(fitted.fit_summary(train.num_variants)["inference_backend"], "bbmm")
+        self.assertTrue(all(row["gp_computation_backend"] == "bbmm" for row in fitted.history))
+        self.assertEqual(fitted.fit_summary(train.num_variants)["gp_computation_backend"], "bbmm")
         self.assertTrue(math.isfinite(fitted.selected_nll_per_variant))
         prediction = fitted.predict(heldout)
         with tempfile.TemporaryDirectory() as directory:
@@ -166,7 +166,7 @@ class BBMMIntegrationTests(unittest.TestCase):
             fitted.save(path)
             restored = FittedGP.load(path)
             self.assertEqual(restored.training_config, fitted.training_config)
-            self.assertEqual(restored.training_config.inference_backend, "bbmm")
+            self.assertEqual(restored.training_config.gp_computation_backend, "bbmm")
             for name, value in fitted.model.state_dict().items():
                 torch.testing.assert_close(restored.model.state_dict()[name], value, rtol=0, atol=0)
             reloaded = restored.predict(heldout)
@@ -178,23 +178,34 @@ class BBMMIntegrationTests(unittest.TestCase):
                 torch.testing.assert_close(gpu_reloaded.mean.cpu(), prediction.mean, rtol=1e-7, atol=1e-8)
                 torch.testing.assert_close(gpu_reloaded.observation_covariance.cpu(),
                                            prediction.observation_covariance, rtol=1e-7, atol=1e-8)
+            # Checkpoints written before the backend rename remain readable.
+            state = torch.load(path, map_location="cpu", weights_only=True)
+            state["training_config"]["inference_backend"] = state["training_config"].pop(
+                "gp_computation_backend")
+            torch.save(state, path)
+            legacy = FittedGP.load(path)
+            self.assertEqual(legacy.training_config.gp_computation_backend, "bbmm")
+            legacy_prediction = legacy.predict(heldout)
+            torch.testing.assert_close(legacy_prediction.mean, prediction.mean, rtol=1e-7, atol=1e-8)
+            torch.testing.assert_close(legacy_prediction.observation_covariance,
+                                       prediction.observation_covariance, rtol=1e-7, atol=1e-8)
 
     def test_legacy_checkpoint_defaults_to_cholesky(self):
         train = self.batch.select(range(12))
         heldout = replace(self.batch.select(range(12, 16)), targets=None)
         fitted = fit_gp(train, self.model_config,
-                        replace(self.config, inference_backend="cholesky", max_steps=1))
+                        replace(self.config, gp_computation_backend="cholesky", max_steps=1))
         expected = fitted.predict(heldout)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "legacy_checkpoint.pt"
             fitted.save(path)
             state = torch.load(path, map_location="cpu", weights_only=True)
             for name in tuple(state["training_config"]):
-                if name == "inference_backend" or name.startswith("bbmm_"):
+                if name == "gp_computation_backend" or name.startswith("bbmm_"):
                     del state["training_config"][name]
             torch.save(state, path)
             restored = FittedGP.load(path)
-            self.assertEqual(restored.training_config.inference_backend, "cholesky")
+            self.assertEqual(restored.training_config.gp_computation_backend, "cholesky")
             actual = restored.predict(heldout)
             torch.testing.assert_close(actual.mean, expected.mean, rtol=1e-12, atol=1e-12)
             torch.testing.assert_close(actual.observation_covariance, expected.observation_covariance,

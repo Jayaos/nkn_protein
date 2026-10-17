@@ -86,7 +86,7 @@ class HumanAssayArrayTests(unittest.TestCase):
             for backend in ("cholesky", "bbmm"):
                 with self.subTest(index=index, backend=backend):
                     result = self.invoke(
-                        index, "singles_random", "--inference-backend", backend,
+                        index, "singles_random", "--gp-computation-backend", backend,
                         "--max-steps", "2", "--min-steps", "0",
                     )
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -95,7 +95,7 @@ class HumanAssayArrayTests(unittest.TestCase):
                     parsed = _parser().parse_args(captured["args"][3:])
                     self.assertEqual(parsed.assay, assay)
                     self.assertEqual(parsed.selection, "singles_random")
-                    self.assertEqual(parsed.inference_backend, backend)
+                    self.assertEqual(parsed.gp_computation_backend, backend)
                     self.assertEqual(parsed.max_steps, 2)
                     self.assertEqual(parsed.min_steps, 0)
                     self.assertEqual(parsed.num_threads, 8)
@@ -159,19 +159,19 @@ class HumanAssayArrayTests(unittest.TestCase):
         self.env["EXPERIMENT_SUFFIX"] = "from_env"
         for arguments, group, selection in cases:
             with self.subTest(arguments=arguments):
-                result = self.invoke(0, *arguments, "--inference-backend", "bbmm")
+                result = self.invoke(0, *arguments, "--gp-computation-backend", "bbmm")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 captured = json.loads(self.record.read_text())
                 parsed = _parser().parse_args(captured["args"][3:])
                 self.assertEqual(parsed.selection, selection)
-                self.assertEqual(parsed.inference_backend, "bbmm")
+                self.assertEqual(parsed.gp_computation_backend, "bbmm")
                 self.assertEqual(parsed.output, self.root / "results" / group / DEFAULT_ASSAYS[0]
                                  / f"nkn_esm2_proteinmpnn_{selection}_gpu_4242_0")
 
     def test_invalid_group_paths_fail_before_dispatch(self):
         for group in (".", "..", "../outside", "path/name", "path\\name"):
             with self.subTest(group=group):
-                result = self.invoke(0, group, "--inference-backend", "bbmm")
+                result = self.invoke(0, group, "--gp-computation-backend", "bbmm")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("single folder name", result.stderr)
                 self.assertFalse(self.record.exists())

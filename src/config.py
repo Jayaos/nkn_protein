@@ -126,7 +126,7 @@ class TrainingConfig:
     validation_interval: int = 100
     noise_prior: str = "none"
     noise_prior_scale: float = 0.1
-    inference_backend: str = "cholesky"
+    gp_computation_backend: str = "cholesky"
     bbmm_cg_tolerance: float = 1e-5
     bbmm_max_cg_iterations: int = 1000
     bbmm_num_trace_samples: int = 32
@@ -134,9 +134,20 @@ class TrainingConfig:
     bbmm_preconditioner_size: int = 32
     bbmm_probe_seed: int = 0
 
+    @classmethod
+    def from_dict(cls, values):
+        """Load settings, including the backend key used by older saved runs."""
+        values = dict(values)
+        if "inference_backend" in values:
+            legacy = values.pop("inference_backend")
+            if "gp_computation_backend" in values and values["gp_computation_backend"] != legacy:
+                raise ValueError("Conflicting inference_backend and gp_computation_backend values")
+            values["gp_computation_backend"] = legacy
+        return cls(**values)
+
     def __post_init__(self):
-        if self.inference_backend not in ("cholesky", "bbmm"):
-            raise ValueError("inference_backend must be cholesky or bbmm")
+        if self.gp_computation_backend not in ("cholesky", "bbmm"):
+            raise ValueError("gp_computation_backend must be cholesky or bbmm")
         if (type(self.bbmm_cg_tolerance) not in (int, float)
                 or not math.isfinite(self.bbmm_cg_tolerance) or not 0 < self.bbmm_cg_tolerance < 1):
             raise ValueError("bbmm_cg_tolerance must be finite and strictly between zero and one")
@@ -219,7 +230,8 @@ class ExperimentConfig:
     def __post_init__(self):
         for name, cls in (("model", ModelConfig), ("training", TrainingConfig), ("evaluation", EvaluationConfig)):
             if not isinstance(getattr(self, name), cls):
-                setattr(self, name, cls(**getattr(self, name)))
+                values = getattr(self, name)
+                setattr(self, name, cls.from_dict(values) if cls is TrainingConfig else cls(**values))
         if type(self.num_threads) is not int or self.num_threads < 1:
             raise ValueError("num_threads must be a positive integer")
         if self.pooling != "mean":

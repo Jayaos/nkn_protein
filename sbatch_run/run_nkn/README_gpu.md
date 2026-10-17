@@ -57,7 +57,7 @@ Submit the same five-fold random setting for each configured assay:
 
 ~~~bash
 sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch singles_random
-sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch singles_random --inference-backend bbmm
+sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch singles_random --gp-computation-backend bbmm
 ~~~
 
 For a short check, append `--max-steps 2 --min-steps 0`. Omitting
@@ -79,6 +79,9 @@ Install dependencies in the job's Python environment:
 python -m pip install -r requirements.txt
 ~~~
 
+`--gp-computation-backend` selects the GP numerical method for both training
+and prediction. The JSON setting and new run metadata use `gp_computation_backend`.
+Previously saved configs and checkpoints with `inference_backend` still load.
 Cholesky is the default. BBMM uses `linear_operator` directly; the environment
 pins `gpytorch==1.11` and `linear_operator==0.5.2`. BBMM controls include
 `--bbmm-cg-tolerance`, `--bbmm-max-cg-iterations`,
@@ -105,13 +108,13 @@ Both `--experiment-suffix NAME` and `--experiment-suffix=NAME` are accepted.
 You can also put the group name first, before the optional setting:
 
 ~~~bash
-sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch gpu_bbmm_test --inference-backend bbmm
-sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch gpu_bbmm_test singles_random --inference-backend bbmm
+sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch gpu_bbmm_test --gp-computation-backend bbmm
+sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch gpu_bbmm_test singles_random --gp-computation-backend bbmm
 ~~~
 
 The group name is consumed by the launcher instead of being passed to Python
 as a selection. A group name alone does not enable BBMM; use
-`--inference-backend bbmm` as shown. `--experiment-suffix` overrides a leading
+`--gp-computation-backend bbmm` as shown. `--experiment-suffix` overrides a leading
 group name, which overrides `EXPERIMENT_SUFFIX`; omitting all three preserves
 the existing output path. The name must be a single folder, without `/` or `\`,
 and cannot be `.` or `..`.
@@ -124,5 +127,5 @@ directories are never overwritten. The chosen result path is printed in the log.
 Each run writes `config.json`, `execution_plan.json`, `fold_manifest.json`,
 the exact source fold CSV under `folds/`, progress logs, and normal CV
 checkpoints, predictions, and metrics under `cv/<setting>/`.
-`benchmark.json` records the selected assay, inference backend, elapsed CV time
+`benchmark.json` records the selected assay, GP computation backend, elapsed CV time
 (including evaluation/output), and peak CUDA memory.

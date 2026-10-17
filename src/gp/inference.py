@@ -10,8 +10,9 @@ BBMM_FIELDS = (
 
 
 def add_inference_arguments(parser):
-    parser.add_argument("--inference-backend", choices=("cholesky", "bbmm"),
-                        help="Override training.inference_backend (default: cholesky)")
+    parser.add_argument("--gp-computation-backend", choices=("cholesky", "bbmm"),
+                        help="GP computations for training and prediction: override "
+                             "training.gp_computation_backend (default: cholesky)")
     for name in BBMM_FIELDS:
         parser.add_argument("--" + name.replace("_", "-"),
                             type=float if name == "bbmm_cg_tolerance" else int,
@@ -19,18 +20,18 @@ def add_inference_arguments(parser):
 
 
 def resolve_training_config(training, args):
-    names = ("max_steps", "min_steps", "inference_backend", *BBMM_FIELDS)
+    names = ("max_steps", "min_steps", "gp_computation_backend", *BBMM_FIELDS)
     updates = {name: getattr(args, name) for name in names if getattr(args, name, None) is not None}
     resolved = replace(training, **updates)
-    if resolved.inference_backend == "bbmm":
+    if resolved.gp_computation_backend == "bbmm":
         from .bbmm import require_bbmm
         require_bbmm()
     return resolved
 
 
 def inference_metadata(training):
-    result = {"backend": training.inference_backend, "dtype": "float64"}
-    if training.inference_backend == "bbmm":
+    result = {"backend": training.gp_computation_backend, "dtype": "float64"}
+    if training.gp_computation_backend == "bbmm":
         import linear_operator
         result.update({name: getattr(training, name) for name in BBMM_FIELDS})
         result.update(linear_operator_version=linear_operator.__version__,

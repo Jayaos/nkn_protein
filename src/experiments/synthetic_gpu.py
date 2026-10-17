@@ -131,7 +131,7 @@ def validate_device_parity(config, device="cuda"):
     train, test = transform.apply(train), transform.apply(test)
     targets = transform.standardize_targets(train.targets)
     devices = list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
-    training = replace(config.training, inference_backend="cholesky")
+    training = replace(config.training, gp_computation_backend="cholesky")
     with torch.random.fork_rng(devices=devices):
         torch.manual_seed(0)
         cpu_model = ExactProteinGP(train, config.model, training)
@@ -160,9 +160,9 @@ def validate_backend_parity(config, device="cuda"):
     transform = FoldTransform.fit(train)
     targets = transform.standardize_targets(train.targets)
     train, test = transform.apply(train), transform.apply(test)
-    exact_training = replace(config.training, inference_backend="cholesky")
+    exact_training = replace(config.training, gp_computation_backend="cholesky")
     iterative_training = replace(
-        config.training, inference_backend="bbmm", bbmm_num_trace_samples=0,
+        config.training, gp_computation_backend="bbmm", bbmm_num_trace_samples=0,
         bbmm_preconditioner_size=0, bbmm_cg_tolerance=1e-9,
         bbmm_max_cg_iterations=100, bbmm_max_lanczos_iterations=12,
     )
@@ -254,14 +254,14 @@ def main(argv=None):
         print(f"Inference: {json.dumps(inference)}", flush=True)
         summary = {"device": args.device, "torch_version": torch.__version__, "settings": {},
                    "assay_id": batch.assay_id, "dataset_label": args.dataset_label, "seed": args.seed,
-                   "inference_backend": training.inference_backend, "inference": inference}
+                   "gp_computation_backend": training.gp_computation_backend, "inference": inference}
         if args.device == "cuda":
             print(f"GPU: {torch.cuda.get_device_name()}", flush=True)
             summary["gpu"] = torch.cuda.get_device_name()
             summary["parity"] = validate_device_parity(config)
             _write_json(args.output / "device_parity.json", summary["parity"])
             print("CPU/CUDA parity: passed (kernel, objective, gradients, posterior)", flush=True)
-        if training.inference_backend == "bbmm":
+        if training.gp_computation_backend == "bbmm":
             summary["backend_parity"] = validate_backend_parity(config, args.device)
             _write_json(args.output / "backend_parity.json", summary["backend_parity"])
             print("BBMM/Cholesky synthetic deterministic-trace preflight passed", flush=True)

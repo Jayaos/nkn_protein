@@ -105,7 +105,7 @@ class LargeAssayGpuTests(unittest.TestCase):
             self.assertEqual(set(folds.tolist()), set(range(5)))
             self.assertEqual(config.device, "cuda")
             self.assertEqual(config.training.max_steps, 2)
-            self.assertEqual(config.training.inference_backend, "cholesky")
+            self.assertEqual(config.training.gp_computation_backend, "cholesky")
             self.assertIsNone(config.training.max_train_variants)
             self.assertEqual(call.kwargs["setting"], setting)
             self.assertEqual(call.kwargs["fold_workers"], 1)
@@ -215,7 +215,7 @@ class LargeAssayGpuTests(unittest.TestCase):
     @unittest.skipUnless(find_spec("linear_operator"), "optional linear_operator dependency required")
     def test_bbmm_controls_reach_all_settings_and_saved_config(self):
         status, log, _, _, fit = self.invoke(
-            "--inference-backend", "bbmm", "--bbmm-cg-tolerance", "0.0001",
+            "--gp-computation-backend", "bbmm", "--bbmm-cg-tolerance", "0.0001",
             "--bbmm-max-cg-iterations", "200", "--bbmm-num-trace-samples", "16",
             "--bbmm-max-lanczos-iterations", "40", "--bbmm-preconditioner-size", "10",
             "--bbmm-probe-seed", "37",
@@ -223,7 +223,7 @@ class LargeAssayGpuTests(unittest.TestCase):
         self.assertEqual(status, 0, log)
         self.assertEqual(fit.call_count, 3)
         expected = {
-            "inference_backend": "bbmm", "bbmm_cg_tolerance": 0.0001,
+            "gp_computation_backend": "bbmm", "bbmm_cg_tolerance": 0.0001,
             "bbmm_max_cg_iterations": 200, "bbmm_num_trace_samples": 16,
             "bbmm_max_lanczos_iterations": 40, "bbmm_preconditioner_size": 10,
             "bbmm_probe_seed": 37,
@@ -243,7 +243,7 @@ class LargeAssayGpuTests(unittest.TestCase):
             self.assertFalse((self.output / filename).exists())
         for filename in ("execution_plan.json", "benchmark.json"):
             metadata = json.loads((self.output / filename).read_text())
-            self.assertEqual(metadata["inference_backend"], "bbmm")
+            self.assertEqual(metadata["gp_computation_backend"], "bbmm")
             self.assertEqual(metadata["inference"]["bbmm_probe_seed"], 37)
 
     def test_invalid_later_split_stops_before_any_fit(self):

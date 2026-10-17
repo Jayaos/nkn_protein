@@ -23,9 +23,9 @@ class ExactProteinGP(nn.Module):
         self.noise_prior = training_config.noise_prior
         self.noise_prior_scale = training_config.noise_prior_scale
         self.jitter_initial, self.jitter_max = training_config.jitter_initial, training_config.jitter_max
-        self.inference_backend = training_config.inference_backend
+        self.gp_computation_backend = training_config.gp_computation_backend
         self._inference_config = training_config
-        if self.inference_backend == "bbmm":
+        if self.gp_computation_backend == "bbmm":
             from .bbmm import require_bbmm
             require_bbmm()
         self.to(device=device, dtype=torch.float64)
@@ -38,14 +38,14 @@ class ExactProteinGP(nn.Module):
         return self.intercept + batch.scores @ self.coefficients
 
     def training_factor(self, train):
-        if self.inference_backend != "cholesky":
+        if self.gp_computation_backend != "cholesky":
             raise ValueError("BBMM uses iterative solves, not a training Cholesky factor")
         return factor_covariance(self.kernel(train), self.noise, self.jitter_initial, self.jitter_max)
 
     def objective_components(self, train, standardized_targets):
         """Return raw NLL, log prior on observation variance, and numerical jitter."""
         residual = standardized_targets - self.mean(train)
-        if self.inference_backend == "bbmm":
+        if self.gp_computation_backend == "bbmm":
             from .bbmm import negative_log_likelihood as bbmm_nll
             nll, jitter = bbmm_nll(self.kernel(train), self.noise, residual, self._inference_config)
         else:
@@ -62,7 +62,7 @@ class ExactProteinGP(nn.Module):
         return nll - log_prior, jitter
 
     def posterior(self, train, standardized_targets, test):
-        if self.inference_backend == "bbmm":
+        if self.gp_computation_backend == "bbmm":
             from .bbmm import solve
             kernel = self.kernel(train)
             cross = self.kernel(train, test)
@@ -84,7 +84,7 @@ class ExactProteinGP(nn.Module):
     def posterior_mean(self, train, standardized_targets, test):
         """Predict means only, without allocating a held-out covariance matrix."""
         residual = (standardized_targets - self.mean(train)).unsqueeze(-1)
-        if self.inference_backend == "bbmm":
+        if self.gp_computation_backend == "bbmm":
             from .bbmm import solve
             alpha, _ = solve(self.kernel(train), self.noise, residual, self._inference_config)
         else:
