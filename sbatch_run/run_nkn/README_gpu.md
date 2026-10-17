@@ -97,9 +97,19 @@ Logs: `nkn_gpu-<array-job>_<task>.out`.
 Results:
 `results/<assay>/nkn_esm2_proteinmpnn_<selection>_gpu_<job-id>_<task>/`.
 
-Set `NKN_OUTPUT_ROOT` to change the results root. The launcher manages the assay
-ID, CUDA selection, and per-task output path. Existing output directories are
-never overwritten.
+Use `--experiment-suffix NAME` to name a results group, matching the CPU
+launcher's argument. For example, appending `--experiment-suffix comparison_01`
+to your submission arguments saves runs under
+`results/comparison_01/<assay>/nkn_esm2_proteinmpnn_<selection>_gpu_<job-id>_<task>/`.
+Both `--experiment-suffix NAME` and `--experiment-suffix=NAME` are accepted.
+The command-line value overrides `EXPERIMENT_SUFFIX`; omitting both preserves
+the existing output path. The name must be a single folder, without `/` or `\`,
+and cannot be `.` or `..`.
+
+Set `NKN_OUTPUT_ROOT` to change the parent results directory. Combined with a
+suffix, the path is `<NKN_OUTPUT_ROOT>/<suffix>/<assay>/<run>/`. The launcher
+manages the assay ID, CUDA selection, and per-task output path. Existing output
+directories are never overwritten. The chosen result path is printed in the log.
 
 Each run writes `config.json`, `execution_plan.json`, `fold_manifest.json`,
 the exact source fold CSV under `folds/`, progress logs, and normal CV

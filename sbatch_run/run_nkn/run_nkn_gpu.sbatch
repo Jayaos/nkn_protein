@@ -23,6 +23,8 @@
 # Usage: sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch [singles|SETTING] [OPTIONS]
 # One setting: ... singles_random
 # BBMM: ... singles_random --inference-backend bbmm
+# Results grouping: --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME).
+# Inserts NAME below NKN_OUTPUT_ROOT (default results), as in the CPU launcher.
 # Short timing run: ... singles_random --max-steps 2 --min-steps 0
 # Override GPU hardware/resources using sbatch options before the script path.
 # NKN_PYTHON may name an existing interpreter; otherwise activate nkn_protein.
@@ -116,6 +118,7 @@ Set the Slurm array range to match the list; current entries are shown below.
 Prepared features and scores: data/features/pretrained/singles/<assay>/
 Published folds: data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/<assay>.csv
 Options: --config PATH --max-steps N --min-steps N --log-every N
+         --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX)
          --num-threads N --features PATH --folds PATH --assay-index PATH
          --inference-backend {cholesky,bbmm}
          --bbmm-cg-tolerance FLOAT --bbmm-max-cg-iterations N
@@ -125,6 +128,8 @@ This launcher uses real prepared inputs and CUDA; missing assets fail explicitly
 Supported IDs: A4_HUMAN_Seuma_2022, BRCA2_HUMAN_Erwood_2022_HEK293T,
                FKBP3_HUMAN_Tsuboyama_2023_2KFV, S22A1_HUMAN_Yee_2023_activity.
 NKN_OUTPUT_ROOT changes the results root (default results).
+Results grouping: --experiment-suffix NAME inserts one folder below that root.
+Without a suffix, existing output paths are preserved.
 Assay, device, and per-task output paths are managed by this launcher.
 Cholesky is the default. BBMM requires linear_operator==0.5.2 in the environment.
 Short timing run (configured human assays, five folds each):
@@ -144,6 +149,30 @@ HELP
       exit 1 ;;
   esac
 done
+
+experiment_suffix="${EXPERIMENT_SUFFIX:-}"
+runner_args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --experiment-suffix)
+      if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+        echo "error: --experiment-suffix requires a folder name." >&2
+        exit 1
+      fi
+      experiment_suffix="$2"
+      shift 2 ;;
+    --experiment-suffix=*)
+      set -- --experiment-suffix "${1#*=}" "${@:2}" ;;
+    *)
+      runner_args+=("$1")
+      shift ;;
+  esac
+done
+if [[ "$experiment_suffix" == *[/\\]* || "$experiment_suffix" == "." || "$experiment_suffix" == ".." ]]; then
+  echo "error: Experiment suffix must be a single folder name, not a path." >&2
+  exit 1
+fi
+set -- "${runner_args[@]}"
 
 task_index="${SLURM_ARRAY_TASK_ID:-0}"
 # Check the decimal spelling and length before arithmetic to reject both
@@ -195,11 +224,12 @@ case "${1:-}" in
   singles|singles_random|singles_modulo|singles_contiguous) selection="$1" ;;
 esac
 output_root="${NKN_OUTPUT_ROOT:-results}"
-run_root="$output_root/$assay/nkn_esm2_proteinmpnn_${selection}_gpu_${run_id}_${task_index}"
+run_root="$output_root/${experiment_suffix:+$experiment_suffix/}$assay/nkn_esm2_proteinmpnn_${selection}_gpu_${run_id}_${task_index}"
 config="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_1p0.json}"
 printf 'Job: %s\nRepository: %s\nPython: %s\n' "$run_id" "$project_root" "$python_exec"
 printf 'Array task: %s_%s; assay: %s\n' \
   "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$assay"
+printf 'Results: %s\n' "$run_root"
 exec "$python_exec" -u -m experiments.large_assay_gpu \
   --config "$config" --num-threads "$cpu_count" \
   "$@" --assay "$assay" --output "$run_root"
