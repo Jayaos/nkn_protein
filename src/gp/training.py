@@ -103,6 +103,7 @@ class FittedGP:
     def fit_summary(self, n_train):
         return {
             "n_train": n_train, "selected_seed": self.selected_seed,
+            "inference_backend": self.training_config.inference_backend,
             "stopping_criterion": self.training_config.stopping_criterion,
             "best_nll_per_variant": self.best_nll_per_variant,
             "best_validation_spearman": self.best_validation_spearman,
@@ -250,6 +251,7 @@ def fit_gp(batch, model_config=None, training_config=None, progress=None, *, hel
                         best_state, best_step, best_jitter = _parameter_state(model), step, jitter
                         selected_loss, selected_objective = nll_value, value
                 row = {"seed": seed, "step": step, "nll": float(nll.detach()), "nll_per_variant": nll_value,
+                       "inference_backend": cfg.inference_backend,
                        "best_nll_per_variant": best_loss, "jitter": jitter,
                        "noise_log_prior": float(log_prior.detach()), "objective": float(total.detach()),
                        "objective_per_variant": value, "best_objective_per_variant": best_objective,
@@ -303,6 +305,7 @@ def fit_gp(batch, model_config=None, training_config=None, progress=None, *, hel
         except NumericalError as error:
             status, failure = "failed", str(error)
         summary = {"seed": seed, "lengthscale_multiplier": multiplier, "status": status,
+                   "inference_backend": cfg.inference_backend,
                    "best_step": best_step, "best_nll_per_variant": best_loss if math.isfinite(best_loss) else None,
                    "stopping_criterion": cfg.stopping_criterion,
                    "best_validation_spearman": best_validation,

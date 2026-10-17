@@ -15,6 +15,7 @@ from data_loading import FeatureBatch
 from experiments.runner import run_cv
 from gp.model import ExactProteinGP
 from gp.preprocessing import FoldTransform
+from gp.inference import add_inference_arguments, inference_metadata, resolve_training_config
 
 
 DEFAULT_CONFIG = (
@@ -113,7 +114,7 @@ def _numerics(model, train, test, targets):
 
 
 def validate_device_parity(config, device="cuda"):
-    """Compare identical parameters and synthetic inputs across CPU and device."""
+    """Compare Cholesky reference numerics across CPU and device, without sampling."""
     device = torch.device(device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA is unavailable; GPU validation cannot fall back to CPU")
@@ -123,10 +124,11 @@ def validate_device_parity(config, device="cuda"):
     train, test = transform.apply(train), transform.apply(test)
     targets = transform.standardize_targets(train.targets)
     devices = list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
+    training = replace(config.training, inference_backend="cholesky")
     with torch.random.fork_rng(devices=devices):
         torch.manual_seed(0)
-        cpu_model = ExactProteinGP(train, config.model, config.training)
-        other_model = ExactProteinGP(train.to(device), config.model, config.training)
+        cpu_model = ExactProteinGP(train, config.model, training)
+        other_model = ExactProteinGP(train.to(device), config.model, training)
     other_model.load_state_dict(cpu_model.state_dict())
     reference = _numerics(cpu_model, train, test, targets)
     actual = _numerics(other_model, train.to(device), test.to(device), targets.to(device))
@@ -135,7 +137,44 @@ def validate_device_parity(config, device="cuda"):
         torch.testing.assert_close(actual[name], expected, rtol=1e-6, atol=1e-8)
         group = "gradients" if name.startswith("gradient:") else name
         errors[group] = max(errors.get(group, 0.0), float((actual[name] - expected).abs().max()))
-    return {"status": "passed", "rtol": 1e-6, "atol": 1e-8, "max_abs_error": errors}
+    return {"status": "passed", "backend": "cholesky", "rtol": 1e-6, "atol": 1e-8,
+            "max_abs_error": errors}
+
+
+def validate_backend_parity(config, device="cuda"):
+    """Check BBMM's deterministic trace limit against Cholesky on tiny synthetic inputs.
+
+    This validates the integration, not the stochastic error on a full assay.
+    Production solver/probe settings remain unchanged in the experiment config.
+    """
+    device = torch.device(device)
+    batch = make_synthetic_batch(16, 4, seed=37).to(device)
+    train, test = batch.select(range(12)), batch.select(range(12, 16))
+    transform = FoldTransform.fit(train)
+    targets = transform.standardize_targets(train.targets)
+    train, test = transform.apply(train), transform.apply(test)
+    exact_training = replace(config.training, inference_backend="cholesky")
+    iterative_training = replace(
+        config.training, inference_backend="bbmm", bbmm_num_trace_samples=0,
+        bbmm_preconditioner_size=0, bbmm_cg_tolerance=1e-9,
+        bbmm_max_cg_iterations=100, bbmm_max_lanczos_iterations=12,
+    )
+    devices = list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
+    with torch.random.fork_rng(devices=devices):
+        torch.manual_seed(0)
+        exact = ExactProteinGP(train, config.model, exact_training)
+        iterative = ExactProteinGP(train, config.model, iterative_training)
+    iterative.load_state_dict(exact.state_dict())
+    reference = _numerics(exact, train, test, targets)
+    actual = _numerics(iterative, train, test, targets)
+    errors = {}
+    for name, expected in reference.items():
+        torch.testing.assert_close(actual[name], expected, rtol=1e-5, atol=1e-7)
+        group = "gradients" if name.startswith("gradient:") else name
+        errors[group] = max(errors.get(group, 0.0), float((actual[name] - expected).abs().max()))
+    return {"status": "passed", "device": str(device), "rtol": 1e-5, "atol": 1e-7,
+            "max_abs_error": errors, "validation_settings": inference_metadata(iterative_training),
+            "scope": "tiny synthetic deterministic-trace limit; not full-assay stochastic accuracy"}
 
 
 def _write_json(path, value):
@@ -155,6 +194,7 @@ def _parser():
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--min-steps", type=int)
     parser.add_argument("--log-every", type=int, default=10)
+    add_inference_arguments(parser)
     return parser
 
 
@@ -167,9 +207,7 @@ def main(argv=None):
         if args.log_every < 1:
             raise ValueError("log-every must be positive")
         base = ExperimentConfig.load(args.config)
-        updates = {name: getattr(args, name) for name in ("max_steps", "min_steps")
-                   if getattr(args, name) is not None}
-        training = replace(base.training, **updates)
+        training = resolve_training_config(base.training, args)
         if training.min_steps > training.max_steps:
             raise ValueError("min-steps exceeds max-steps; supply both for a shorter smoke run")
         config = replace(
@@ -200,13 +238,20 @@ def main(argv=None):
               f"threads: {config.num_threads}; sequential folds", flush=True)
         print(f"Training: min_steps={training.min_steps}; max_steps={training.max_steps}; "
               f"stopping={training.stopping_criterion}; seeds={training.seeds}", flush=True)
-        summary = {"device": args.device, "torch_version": torch.__version__, "settings": {}}
+        inference = inference_metadata(training)
+        print(f"Inference: {json.dumps(inference)}", flush=True)
+        summary = {"device": args.device, "torch_version": torch.__version__, "settings": {},
+                   "inference_backend": training.inference_backend, "inference": inference}
         if args.device == "cuda":
             print(f"GPU: {torch.cuda.get_device_name()}", flush=True)
             summary["gpu"] = torch.cuda.get_device_name()
             summary["parity"] = validate_device_parity(config)
             _write_json(args.output / "device_parity.json", summary["parity"])
             print("CPU/CUDA parity: passed (kernel, objective, gradients, posterior)", flush=True)
+        if training.inference_backend == "bbmm":
+            summary["backend_parity"] = validate_backend_parity(config, args.device)
+            _write_json(args.output / "backend_parity.json", summary["backend_parity"])
+            print("BBMM/Cholesky synthetic deterministic-trace preflight passed", flush=True)
         for setting in settings:
             if args.device == "cuda":
                 torch.cuda.synchronize()

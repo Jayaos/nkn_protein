@@ -1,0 +1,4 @@
+# Optional BBMM backend; install in the existing NKN environment.
+# python -m pip install -r requirements-bbmm.txt
+gpytorch==1.11
+linear_operator==0.5.2

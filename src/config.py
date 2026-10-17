@@ -126,8 +126,26 @@ class TrainingConfig:
     validation_interval: int = 100
     noise_prior: str = "none"
     noise_prior_scale: float = 0.1
+    inference_backend: str = "cholesky"
+    bbmm_cg_tolerance: float = 1e-5
+    bbmm_max_cg_iterations: int = 1000
+    bbmm_num_trace_samples: int = 32
+    bbmm_max_lanczos_iterations: int = 64
+    bbmm_preconditioner_size: int = 32
+    bbmm_probe_seed: int = 0
 
     def __post_init__(self):
+        if self.inference_backend not in ("cholesky", "bbmm"):
+            raise ValueError("inference_backend must be cholesky or bbmm")
+        if (type(self.bbmm_cg_tolerance) not in (int, float)
+                or not math.isfinite(self.bbmm_cg_tolerance) or not 0 < self.bbmm_cg_tolerance < 1):
+            raise ValueError("bbmm_cg_tolerance must be finite and strictly between zero and one")
+        for name in ("bbmm_max_cg_iterations", "bbmm_max_lanczos_iterations"):
+            if type(getattr(self, name)) is not int or getattr(self, name) < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        for name in ("bbmm_num_trace_samples", "bbmm_preconditioner_size", "bbmm_probe_seed"):
+            if type(getattr(self, name)) is not int or getattr(self, name) < 0:
+                raise ValueError(f"{name} must be a nonnegative integer")
         if self.noise_prior not in ("none", "half_cauchy"):
             raise ValueError("noise_prior must be none or half_cauchy")
         if (type(self.noise_prior_scale) not in (int, float)

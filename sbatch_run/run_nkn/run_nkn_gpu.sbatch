@@ -14,14 +14,15 @@
 #SBATCH --mail-user=jlee3541@gatech.edu
 
 # Real assay: S22A1_HUMAN_Yee_2023_activity (human OCT1; 10,094 single mutants).
-# The filename is retained for compatibility with previous submission commands.
 # Same default four-branch NKN preset as run_nkn_assays.sbatch, in float64.
 # Default: all three singles settings and published five-fold assignments.
 # Settings and folds run sequentially on one GPU, using all prepared singles.
 # Training limits come from the preset unless explicitly overridden.
-# CPU/CUDA kernel, objective, gradient, and posterior checks precede training.
-# Usage: sbatch sbatch_run/run_nkn/run_nkn_synthetic_gpu.sbatch [singles|SETTING] [OPTIONS]
+# Cholesky is the default; --inference-backend bbmm selects iterative inference.
+# A small synthetic numerical preflight precedes training.
+# Usage: sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch [singles|SETTING] [OPTIONS]
 # One setting: ... singles_random
+# BBMM: ... singles_random --inference-backend bbmm
 # Short timing run (all variants): ... singles_random --max-steps 2 --min-steps 0
 # Override GPU hardware/resources using sbatch options before the script path.
 # NKN_PYTHON may name an existing interpreter; otherwise activate nkn_protein.
@@ -30,15 +31,22 @@ set -eo pipefail
 for argument in "$@"; do
   if [[ "$argument" == "--help" || "$argument" == "-h" ]]; then
     cat <<'HELP'
-Usage: sbatch sbatch_run/run_nkn/run_nkn_synthetic_gpu.sbatch [singles|SETTING] [OPTIONS]
+Usage: sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch [singles|SETTING] [OPTIONS]
 SETTINGS: singles_random, singles_modulo, singles_contiguous
 Default singles runs all three, sequentially, with five folds each.
 Assay: S22A1_HUMAN_Yee_2023_activity (human OCT1; 10,094 single mutants).
 Options: --config PATH --max-steps N --min-steps N --log-every N
          --num-threads N --output PATH --features PATH --folds PATH --assay-index PATH
+         --inference-backend {cholesky,bbmm}
+         --bbmm-cg-tolerance FLOAT --bbmm-max-cg-iterations N
+         --bbmm-num-trace-samples N --bbmm-max-lanczos-iterations N
+         --bbmm-preconditioner-size N --bbmm-probe-seed N
 This launcher uses CUDA, prepared real features, and published folds.
+Cholesky is the default. BBMM requires linear_operator==0.5.2 in the environment.
 Short timing run (all variants, five folds):
-  sbatch sbatch_run/run_nkn/run_nkn_synthetic_gpu.sbatch singles_random --max-steps 2 --min-steps 0
+  sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch singles_random --max-steps 2 --min-steps 0
+BBMM with the same assay, folds, and GPU resources:
+  sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch singles_random --inference-backend bbmm
 HELP
     exit 0
   fi

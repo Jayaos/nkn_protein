@@ -16,7 +16,8 @@ from config import ExperimentConfig
 from data_loading import load_feature_bundle, load_folds, validate_assay_coverage
 from experiments.runner import _validate_fold_assignments, run_cv
 from experiments.settings import select_setting_batch
-from experiments.synthetic_gpu import DEFAULT_CONFIG, SETTINGS, validate_device_parity
+from experiments.synthetic_gpu import DEFAULT_CONFIG, SETTINGS, validate_device_parity, validate_backend_parity
+from gp.inference import add_inference_arguments, inference_metadata, resolve_training_config
 
 
 ASSAY = "S22A1_HUMAN_Yee_2023_activity"
@@ -43,6 +44,7 @@ def _parser():
                         / f"{ASSAY}.csv")
     parser.add_argument("--assay-index", type=Path, default=ROOT
                         / "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv")
+    add_inference_arguments(parser)
     return parser
 
 
@@ -57,10 +59,8 @@ def main(argv=None):
         if args.log_every < 1:
             raise ValueError("log-every must be positive")
         base = ExperimentConfig.load(args.config).for_assay(ASSAY)
-        updates = {name: getattr(args, name) for name in ("max_steps", "min_steps")
-                   if getattr(args, name) is not None}
         config = replace(base, device="cuda", num_threads=args.num_threads,
-                         training=replace(base.training, **updates))
+                         training=resolve_training_config(base.training, args))
         if config.evaluation.n_folds != 5:
             raise ValueError("Published ProteinGym protocols require five folds")
         if config.training.min_steps > config.training.max_steps:
@@ -71,6 +71,8 @@ def main(argv=None):
         if metadata.get("assay_id") != ASSAY or metadata.get("synthetic") is not False:
             raise ValueError(f"Expected real prepared assets for {ASSAY}")
         torch.set_num_threads(config.num_threads)
+        inference = inference_metadata(config.training)
+        print(f"Inference: {json.dumps(inference)}", flush=True)
         print(f"Assay: {ASSAY}; features: {args.features}", flush=True)
         print("[1/3] Validating prepared assets and complete single-variant coverage on CPU", flush=True)
         batch = load_feature_bundle(
@@ -92,6 +94,7 @@ def main(argv=None):
         _write_json(args.output / "config.json", config.to_dict())
         _write_json(args.output / "execution_plan.json", {
             "assay_id": ASSAY, "device": "cuda", "parallel": False,
+            "inference_backend": config.training.inference_backend, "inference": inference,
             "setting_workers": 1, "fold_workers": 1, "threads_per_worker": config.num_threads,
             "settings": {setting: {"fits": 5, "fold_workers": 1} for setting in settings},
         })
@@ -126,7 +129,12 @@ def main(argv=None):
         parity = validate_device_parity(config)
         _write_json(args.output / "device_parity.json", parity)
         print("Synthetic CPU/CUDA numerical preflight passed", flush=True)
+        if config.training.inference_backend == "bbmm":
+            backend_parity = validate_backend_parity(config)
+            _write_json(args.output / "backend_parity.json", backend_parity)
+            print("BBMM/Cholesky synthetic deterministic-trace preflight passed", flush=True)
         summary = {"assay_id": ASSAY, "n_variants": batch.num_variants,
+                   "inference_backend": config.training.inference_backend, "inference": inference,
                    "gpu": torch.cuda.get_device_name(), "settings": {}}
         for setting in settings:
             print(f"[3/3] Running five-fold NKN/GP CV on CUDA: {setting}", flush=True)

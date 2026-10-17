@@ -2,6 +2,7 @@
 
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import csv
+from importlib.util import find_spec
 import io
 import json
 import os
@@ -23,7 +24,7 @@ from experiments import large_assay_gpu as gpu
 
 ROOT = Path(__file__).resolve().parents[2]
 FOLDS = ROOT / "data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions" / f"{gpu.ASSAY}.csv"
-SCRIPT = ROOT / "sbatch_run/run_nkn/run_nkn_synthetic_gpu.sbatch"
+SCRIPT = ROOT / "sbatch_run/run_nkn/run_nkn_gpu.sbatch"
 BASH = str(Path("C:/Program Files/Git/bin/bash.exe")) if os.name == "nt" else shutil.which("bash")
 
 
@@ -77,6 +78,7 @@ class LargeAssayGpuTests(unittest.TestCase):
             stack.enter_context(patch.object(gpu.torch.cuda, "get_device_properties",
                                             return_value=SimpleNamespace(total_memory=80 * 2**30)))
             stack.enter_context(patch.object(gpu, "validate_device_parity", return_value={"status": "passed"}))
+            stack.enter_context(patch.object(gpu, "validate_backend_parity", return_value={"status": "passed"}))
             loader = stack.enter_context(patch.object(gpu, "load_feature_bundle", return_value=self.batch))
             coverage = stack.enter_context(patch.object(gpu, "validate_assay_coverage"))
             fit = stack.enter_context(patch.object(gpu, "run_cv"))
@@ -101,6 +103,7 @@ class LargeAssayGpuTests(unittest.TestCase):
             self.assertEqual(set(folds.tolist()), set(range(5)))
             self.assertEqual(config.device, "cuda")
             self.assertEqual(config.training.max_steps, 2)
+            self.assertEqual(config.training.inference_backend, "cholesky")
             self.assertIsNone(config.training.max_train_variants)
             self.assertEqual(call.kwargs["setting"], setting)
             self.assertEqual(call.kwargs["fold_workers"], 1)
@@ -110,6 +113,38 @@ class LargeAssayGpuTests(unittest.TestCase):
         for counts in manifest["held_out_counts"].values():
             self.assertEqual(sum(counts), 10094)
         self.assertEqual(len(json.loads((self.output / "benchmark.json").read_text())["settings"]), 3)
+
+    @unittest.skipUnless(find_spec("linear_operator"), "optional linear_operator dependency required")
+    def test_bbmm_controls_reach_all_settings_and_saved_config(self):
+        status, log, _, _, fit = self.invoke(
+            "--inference-backend", "bbmm", "--bbmm-cg-tolerance", "0.0001",
+            "--bbmm-max-cg-iterations", "200", "--bbmm-num-trace-samples", "16",
+            "--bbmm-max-lanczos-iterations", "40", "--bbmm-preconditioner-size", "10",
+            "--bbmm-probe-seed", "37",
+        )
+        self.assertEqual(status, 0, log)
+        self.assertEqual(fit.call_count, 3)
+        expected = {
+            "inference_backend": "bbmm", "bbmm_cg_tolerance": 0.0001,
+            "bbmm_max_cg_iterations": 200, "bbmm_num_trace_samples": 16,
+            "bbmm_max_lanczos_iterations": 40, "bbmm_preconditioner_size": 10,
+            "bbmm_probe_seed": 37,
+        }
+        for call in fit.call_args_list:
+            training = call.args[2].training
+            for name, value in expected.items():
+                self.assertEqual(getattr(training, name), value)
+            self.assertEqual(call.args[0].num_variants, 10094)
+            self.assertEqual(call.kwargs["fold_workers"], 1)
+        saved = json.loads((self.output / "config.json").read_text())["training"]
+        for name, value in expected.items():
+            self.assertEqual(saved[name], value)
+        self.assertIn("bbmm", log.lower())
+        self.assertEqual(json.loads((self.output / "backend_parity.json").read_text())["status"], "passed")
+        for filename in ("execution_plan.json", "benchmark.json"):
+            metadata = json.loads((self.output / filename).read_text())
+            self.assertEqual(metadata["inference_backend"], "bbmm")
+            self.assertEqual(metadata["inference"]["bbmm_probe_seed"], 37)
 
     def test_invalid_later_split_stops_before_any_fit(self):
         broken = self.root / "broken_folds.csv"
@@ -167,18 +202,36 @@ class LargeAssayGpuTests(unittest.TestCase):
                    SLURM_CPUS_PER_TASK="8", SLURM_ARRAY_TASK_ID="0", SLURM_JOB_ID="4242",
                    CUDA_VISIBLE_DEVICES="3", TEST_PYTHON=Path(sys.executable).as_posix(),
                    TEST_CAPTURE=capture.as_posix(), TEST_RECORD=record.as_posix())
-        result = subprocess.run(
-            [BASH, SCRIPT.as_posix(), "singles_random", "--max-steps", "2", "--min-steps", "0"],
-            cwd=subdir, env=env, text=True, capture_output=True, timeout=30,
-        )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        captured = json.loads(record.read_text())
-        self.assertEqual(captured["args"][:3], ["-u", "-m", "experiments.large_assay_gpu"])
-        output = captured["args"][captured["args"].index("--output") + 1]
-        self.assertIn(gpu.ASSAY, output)
-        self.assertTrue(output.endswith("singles_random_gpu_4242"))
-        self.assertEqual(captured["cuda"], "3")
-        self.assertEqual(captured["threads"], "8")
+        overrides = [
+            [],
+            ["--inference-backend", "bbmm", "--bbmm-cg-tolerance", "0.0001",
+             "--bbmm-max-cg-iterations", "200", "--bbmm-num-trace-samples", "16",
+             "--bbmm-max-lanczos-iterations", "40", "--bbmm-preconditioner-size", "10",
+             "--bbmm-probe-seed", "37", "--output", "results/custom_bbmm"],
+        ]
+        for extra in overrides:
+            with self.subTest(extra=extra):
+                forwarded = ["singles_random", "--max-steps", "2", "--min-steps", "0", *extra]
+                result = subprocess.run(
+                    [BASH, SCRIPT.as_posix(), *forwarded],
+                    cwd=subdir, env=env, text=True, capture_output=True, timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                captured = json.loads(record.read_text())
+                self.assertEqual(captured["args"][:3], ["-u", "-m", "experiments.large_assay_gpu"])
+                self.assertEqual(captured["args"][-len(forwarded):], forwarded)
+                output = captured["args"][captured["args"].index("--output") + 1]
+                self.assertIn(gpu.ASSAY, output)
+                self.assertTrue(output.endswith("singles_random_gpu_4242"))
+                parsed = gpu._parser().parse_args(captured["args"][3:])
+                self.assertEqual(parsed.output, Path("results/custom_bbmm") if extra else Path(output))
+                if extra:
+                    self.assertEqual(parsed.inference_backend, "bbmm")
+                    self.assertEqual(parsed.bbmm_probe_seed, 37)
+                    self.assertEqual(parsed.bbmm_num_trace_samples, 16)
+                    self.assertEqual(parsed.bbmm_cg_tolerance, 0.0001)
+                self.assertEqual(captured["cuda"], "3")
+                self.assertEqual(captured["threads"], "8")
 
 
 if __name__ == "__main__":
