@@ -15,7 +15,7 @@
 # Timing test: A0A2Z5U3Z0_9INFA_Doud_2016 (10,715 single mutants), array index 0.
 # Submit from the repository or a subdirectory; the task delegates to the
 # shared NKN runner with four branches and initial noise variance 1.0.
-# Default: singles (random, modulo, contiguous; five folds each), with the
+# Default: singles (random, modulo, contiguous; populated published folds), with the
 # additive two-score preset and caches under data/features/pretrained/singles.
 # Branches: [1]; final NKN: [8, 4, 4, 2, 1]. Minimum optimizer steps: 1000.
 # Observation-noise variance prior: none. Initial noise variance: 1.0.
@@ -26,7 +26,7 @@
 # Add --held-out-interval 100 to record diagnostic Spearman every 100 updates.
 # Add --stopping-criterion validation_spearman for three train / one validation /
 # one test folds. --validation-interval 100 --patience 100 --min-steps 1000 are defaults.
-# For one five-fold timing run, pass singles_random instead of the default singles.
+# For one random-CV timing run, pass singles_random instead of the default singles.
 # Logs: nkn_assays-<array-job-id>_<task-index>.out in the submission directory.
 # Results: results/<assay>/nkn_esm2_proteinmpnn_<selection>_<task-job-id>/
 # Add --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) to insert NAME under results/.
@@ -39,7 +39,7 @@ set -eo pipefail
 
 # This timing-test selection has its own index; preparation uses the full catalog.
 assays=(
-  "A0A2Z5U3Z0_9INFA_Doud_2016"
+  "CD19_HUMAN_Klesmith_2019_FMC_singles"
 )
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then

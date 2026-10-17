@@ -74,6 +74,7 @@ class PipelineTests(unittest.TestCase):
         output = self.root / "cv"
         result = run_cv(self.batch, self.folds, self.config, output, split_source="provided")
         self.assertEqual(result["n_folds"], 3)
+        self.assertEqual(result["fold_ids"], [0, 1, 2])
         self.assertEqual(result["n_variants"], 8)
         self.assertEqual(result["split_source"], "provided")
         self.assertAlmostEqual(
@@ -107,6 +108,59 @@ class PipelineTests(unittest.TestCase):
             torch.testing.assert_close(prediction.mean, expected_means, rtol=1e-12, atol=1e-12)
             torch.testing.assert_close(prediction.observation_covariance.diagonal(), expected_variances, rtol=1e-12, atol=1e-12)
 
+    def test_cv_runs_only_observed_folds_and_preserves_assignments(self):
+        config = replace(self.config, evaluation=replace(self.config.evaluation, n_folds=5))
+        for fold_ids in ([0, 1, 2, 3], [0, 2, 4]):
+            with self.subTest(fold_ids=fold_ids):
+                folds = torch.tensor([fold_ids[index % len(fold_ids)] for index in range(self.batch.num_variants)])
+                output = self.root / f"observed_{len(fold_ids)}"
+                events = []
+                result = run_cv(self.batch, folds, config, output, progress=events.append)
+                self.assertEqual(result["n_folds"], len(fold_ids))
+                self.assertEqual(result["fold_ids"], fold_ids)
+                self.assertEqual([fold["fold"] for fold in result["fold_metrics"]], fold_ids)
+                self.assertEqual(result["n_variants"], self.batch.num_variants)
+                self.assertEqual(
+                    {event["fold"] for event in events if event.get("event") == "fold_start"},
+                    set(fold_ids),
+                )
+                self.assertEqual({path.name for path in output.glob("fold_*") if path.is_dir()}, {f"fold_{fold}" for fold in fold_ids})
+                for filename in ("fold_assignments.csv", "predictions.csv"):
+                    rows = read_predictions(output / filename)
+                    self.assertEqual([row["variant_id"] for row in rows], list(self.batch.variant_ids))
+                    self.assertEqual([int(row["fold"]) for row in rows], folds.tolist())
+                for fold in fold_ids:
+                    fitted = FittedGP.load(output / f"fold_{fold}" / "checkpoint.pt")
+                    expected_train = {variant for index, variant in enumerate(self.batch.variant_ids) if folds[index] != fold}
+                    self.assertEqual(set(fitted.train.variant_ids), expected_train)
+                    torch.testing.assert_close(fitted.transform.target_mean, self.batch.targets[folds != fold].mean())
+                self.assertEqual(json.loads((output / "metrics.json").read_text()), result)
+
+    def test_invalid_observed_folds_fail_before_training_and_artifacts(self):
+        config = replace(self.config, evaluation=replace(self.config.evaluation, n_folds=5))
+        assignments = ([0] * 8, [-1, 0, 1, 0, 1, 0, 1, 0], [0, 1, 5, 0, 1, 0, 1, 0])
+        for index, folds in enumerate(assignments):
+            output = self.root / f"invalid_folds_{index}"
+            with self.subTest(folds=folds), patch("experiments.runner.fit_gp") as trainer:
+                with self.assertRaises(ValueError):
+                    run_cv(self.batch, torch.tensor(folds), config, output)
+                trainer.assert_not_called()
+                self.assertFalse(output.exists())
+
+    def test_validation_stopping_still_requires_five_populated_folds(self):
+        batch = self.batch.select([0, 1, 2, 3, 5, 6])
+        config = replace(
+            self.config,
+            training=replace(self.config.training, stopping_criterion="validation_spearman"),
+            evaluation=replace(self.config.evaluation, n_folds=5),
+        )
+        output = self.root / "incomplete_validation"
+        with patch("experiments.runner.fit_gp") as trainer:
+            with self.assertRaisesRegex(ValueError, "requires five populated folds"):
+                run_cv(batch, torch.tensor([0, 1, 2, 3, 0, 1]), config, output)
+            trainer.assert_not_called()
+        self.assertFalse(output.exists())
+
     def test_cv_checkpoint_then_label_free_predict_and_no_output_overwrite(self):
         cv_output = self.root / "cv"
         run_cv(self.batch, self.folds, self.config, cv_output)
@@ -132,6 +186,19 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "single substitutions only"):
             run_cv(self.batch, self.folds, self.config, self.root / "invalid_position", scheme="modulo")
         self.assertFalse((self.root / "invalid_position").exists())
+
+    def test_missing_folds_do_not_relax_positional_leakage_guard(self):
+        batch = self.batch.select([0, 1, 2, 3, 5, 6])
+        config = replace(self.config, evaluation=replace(self.config.evaluation, n_folds=5))
+        # The two variants at position 2 belong to different observed folds.
+        folds = torch.tensor([0, 2, 4, 0, 0, 4])
+        for scheme in ("modulo", "contiguous"):
+            output = self.root / f"position_leakage_{scheme}"
+            with self.subTest(scheme=scheme), patch("experiments.runner.fit_gp") as trainer:
+                with self.assertRaisesRegex(ValueError, "mutation position occurs in multiple"):
+                    run_cv(batch, folds, config, output, scheme=scheme)
+                trainer.assert_not_called()
+                self.assertFalse(output.exists())
 
     def test_unsuccessful_fit_retains_failure_evidence(self):
         error = NumericalError("all synthetic restarts failed")

@@ -43,7 +43,8 @@
 # --config takes precedence over NKN_CONFIG; paths use the repository root.
 # For additive branches [1], final NKN [8, 4, 4, 2, 1], and both mean scores:
 #   --config configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json
-# Default: singles, the three published singles CV protocols (15 fold fits).
+# Default: singles, the three published singles CV protocols (up to 15 fold fits).
+# Use only populated published fold IDs; preserve assignments and original IDs.
 # Singles use data/features/pretrained/singles/<ASSAY>; other selections use
 # data/features/pretrained/<ASSAY>. FEATURES overrides either default.
 # all: three singles CV runs, one shared mixed CV run, one extrapolation fit
@@ -329,7 +330,7 @@ try:
 except (OSError, ValueError, TypeError) as error:
     raise SystemExit(f"error: Invalid NKN JSON configuration {sys.argv[1]}: {error}") from error
 if config.evaluation.n_folds != 5:
-    raise SystemExit("error: Published ProteinGym protocols require five folds.")
+    raise SystemExit("error: Published ProteinGym fold columns require nominal n_folds=5.")
 if config.training.stopping_criterion == "validation_spearman" and any(not s.startswith("singles_") for s in sys.argv[16:]):
     raise SystemExit("error: validation_spearman supports singles CV only; choose singles or a singles_* setting.")
 metadata = json.loads((Path(sys.argv[3]) / "assay.json").read_text(encoding="utf-8"))
@@ -350,7 +351,7 @@ execution_plan = {
     "fold_workers": int(sys.argv[8]),
     "threads_per_worker": config.num_threads,
     "settings": {
-        setting: {"fits": 1 if setting == "single_to_double" else 5,
+        setting: {"fits": 1 if setting == "single_to_double" else None,
                   "fold_workers": 1 if setting == "single_to_double" else int(sys.argv[8])}
         for setting in sys.argv[16:]
     },
@@ -415,6 +416,7 @@ batch = load_feature_bundle(
     device=config.device, enabled_branches=config.model.enabled_branches,
 )
 output = Path(sys.argv[1]).parent
+execution_plan = json.loads((output / "execution_plan.json").read_text(encoding="utf-8"))
 sources = {"singles": Path(sys.argv[3]), "multiples": Path(sys.argv[4])}
 settings = sys.argv[7:]
 manifest = {"assay_id": batch.assay_id, "requested_settings": settings, "sources": {}}
@@ -463,11 +465,18 @@ for setting in settings:
     )
     _validate_fold_assignments(selected, folds, config, scheme)
     counts = torch.bincount(folds, minlength=config.evaluation.n_folds).tolist()
+    fold_ids = folds.unique(sorted=True).tolist()
+    execution_plan["settings"][setting].update(
+        fits=len(fold_ids), fold_ids=fold_ids,
+        fold_workers=min(execution_plan["settings"][setting]["fold_workers"], len(fold_ids)),
+    )
     manifest["sources"][kind]["settings"][setting] = {
         "num_variants": selected.num_variants, "test_counts": counts,
+        "fold_ids": fold_ids, "n_folds": len(fold_ids),
     }
-    print(f"Published {setting} folds: held-out counts {counts}")
+    print(f"Published {setting} folds: {fold_ids}; held-out counts {counts}")
 (output / "fold_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+(output / "execution_plan.json").write_text(json.dumps(execution_plan, indent=2) + "\n", encoding="utf-8")
 PY
 
 run_setting() {
@@ -490,7 +499,7 @@ run_setting() {
       singles_*) fold_snapshot="$run_root/folds/singles.csv" ;;
       mixed_*) fold_snapshot="$run_root/folds/multiples.csv" ;;
     esac
-    printf '[3/3] Running five-fold NKN/GP CV on CPU: %s\n' "$setting"
+    printf '[3/3] Running NKN/GP CV using populated published folds on CPU: %s\n' "$setting"
     python -u -m experiments.cli cv \
       --features "$features" \
       --config "$runtime_config" \

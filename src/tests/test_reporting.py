@@ -90,6 +90,72 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual({r["status"] for r in tables["summary"]}, {"invalid", "incomplete"})
         self.assertEqual(len(tables["issues"]), 1)
 
+    def test_published_subset_is_complete_without_renumbering(self):
+        run = self.run_dir("nkn", 1)
+        self.write(run / "config.json", {"evaluation": {"n_folds": 5}})
+        directory = run / "cv/singles_random"
+        ids = [0, 1, 3, 4]
+        metrics = {**self.metrics(), "n_folds": 4, "fold_ids": ids,
+                   "fold_metrics": [{"fold": fold, "spearman": 0.2} for fold in ids]}
+        self.write(directory / "metrics.json", metrics)
+        (directory / "fold_assignments.csv").write_text(
+            "variant_id,fold\na,0\nb,1\nc,3\nd,4\ne,4\n", encoding="utf-8")
+        tables = aggregate_results(self.root)
+        row = tables["summary"][0]
+        self.assertEqual((row["status"], row["expected_folds"], row["completed_folds"]),
+                         ("complete", 4, 4))
+        self.assertEqual([fold["fold"] for fold in tables["folds"]], ids)
+        self.assertEqual(tables["issues"], [])
+
+    def test_missing_published_fold_remains_incomplete(self):
+        run = self.run_dir("nkn", 1)
+        self.write(run / "config.json", {"evaluation": {"n_folds": 5}})
+        directory = run / "cv/singles_random"
+        self.write(directory / "metrics.json", {**self.metrics(), "n_folds": 4,
+                   "fold_ids": [0, 1, 3, 4]})
+        (directory / "fold_assignments.csv").write_text(
+            "variant_id,fold\na,0\nb,1\nc,3\nd,4\n", encoding="utf-8")
+        row = aggregate_results(self.root)["summary"][0]
+        self.assertEqual((row["status"], row["expected_folds"], row["completed_folds"]),
+                         ("incomplete", 4, 2))
+
+    def test_metric_fold_ids_cannot_hide_missing_published_folds(self):
+        run = self.run_dir("nkn", 1)
+        self.write(run / "config.json", {"evaluation": {"n_folds": 5}})
+        directory = run / "cv/singles_random"
+        self.write(directory / "metrics.json", {**self.metrics(), "fold_ids": [0, 1]})
+        (directory / "fold_assignments.csv").write_text(
+            "variant_id,fold\na,0\nb,1\nc,3\nd,4\n", encoding="utf-8")
+        tables = aggregate_results(self.root)
+        self.assertEqual(tables["summary"][0]["status"], "invalid")
+        self.assertIn("disagree", tables["issues"][0]["error"])
+
+    def test_manifest_and_metric_fold_ids_support_runs_without_assignments(self):
+        for job, manifest in enumerate((
+            {"sources": {"singles": {"settings": {"singles_random": {"fold_ids": [0, 3]}}}}},
+            {"fold_ids": {"singles_random": [0, 3]}},
+            {},
+        )):
+            with self.subTest(manifest=manifest):
+                run = self.run_dir("nkn", job)
+                self.write(run / "config.json", {"evaluation": {"n_folds": 5}})
+                self.write(run / "fold_manifest.json", manifest)
+                metrics = {**self.metrics(), "fold_ids": [0, 3],
+                           "fold_metrics": [{"fold": 0}, {"fold": 3}]}
+                self.write(run / "cv/singles_random/metrics.json", metrics)
+        rows = aggregate_results(self.root)["summary"]
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(all(row["status"] == "complete" and row["expected_folds"] == 2 for row in rows))
+
+    def test_unstarted_setting_uses_manifest_populated_fold_count(self):
+        run = self.run_dir("nkn", 1)
+        self.write(run / "config.json", {"evaluation": {"n_folds": 5}})
+        self.write(run / "fold_manifest.json", {"requested_settings": ["singles_random"],
+                   "fold_ids": {"singles_random": [0, 1, 2, 3]}})
+        row = aggregate_results(self.root)["summary"][0]
+        self.assertEqual((row["status"], row["expected_folds"], row["completed_folds"]),
+                         ("incomplete", 4, 0))
+
     def test_missing_and_empty_results(self):
         self.assertEqual(aggregate_results(self.root), {"summary": [], "folds": [], "issues": []})
         with self.assertRaises(FileNotFoundError):

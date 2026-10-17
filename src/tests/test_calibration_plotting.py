@@ -214,6 +214,53 @@ class CalibrationResultTests(unittest.TestCase):
             self.assertIsNone(unavailable["summary"]["interval_ece"]["mean"])
             self.assertIsNone(unavailable["summary"]["pair_ece"]["mean"])
 
+    def test_populated_published_ids_determine_completeness(self):
+        run = self.make_run()
+        self.write(run / "config.json", {"evaluation": {"n_folds": 5}})
+        ids = [0, 1, 3, 4]
+        folds = [fold_metrics(index % 2) | {"fold": fold} for index, fold in enumerate(ids)]
+        directory = run / "cv/singles_random"
+        self.write(directory / "metrics.json", {"n_folds": 4, "fold_ids": ids, "fold_metrics": folds})
+        (directory / "fold_assignments.csv").write_text(
+            "variant_id,fold\na,0\nb,1\nc,3\nd,4\n", encoding="utf-8")
+        setting = self.setting(load_run(run), "singles_random")
+        self.assertEqual((setting["status"], setting["expected_folds"]), ("complete", 4))
+        self.assertEqual([fold["fold"] for fold in setting["folds"]], ids)
+        self.write(directory / "metrics.json", {"n_folds": 4, "fold_ids": ids, "fold_metrics": folds[:-1]})
+        setting = self.setting(load_run(run), "singles_random")
+        self.assertEqual((setting["status"], setting["expected_folds"]), ("partial", 4))
+
+    def test_partial_fold_files_use_published_ids_before_aggregate_exists(self):
+        run = self.make_run()
+        self.write(run / "config.json", {"evaluation": {"n_folds": 5}})
+        directory = run / "cv/singles_random"
+        self.write(directory / "fold_3/metrics.json", fold_metrics(0) | {"fold": 3})
+        (directory / "fold_assignments.csv").write_text(
+            "variant_id,fold\na,1\nb,3\n", encoding="utf-8")
+        setting = self.setting(load_run(run), "singles_random")
+        self.assertEqual((setting["status"], setting["expected_folds"]), ("partial", 2))
+        self.assertEqual(setting["folds"][0]["fold"], 3)
+
+    def test_conflicting_metric_ids_cannot_hide_missing_published_fold(self):
+        run = self.make_run()
+        self.write(run / "config.json", {"evaluation": {"n_folds": 5}})
+        self.write_complete_setting(run)
+        directory = run / "cv/singles_random"
+        metrics = json.loads((directory / "metrics.json").read_text(encoding="utf-8"))
+        metrics["fold_ids"] = [0, 1]
+        self.write(directory / "metrics.json", metrics)
+        (directory / "fold_assignments.csv").write_text(
+            "variant_id,fold\na,0\nb,1\nc,3\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "disagree"):
+            load_run(run)
+
+    def test_unstarted_setting_uses_manifest_populated_ids(self):
+        run = self.make_run()
+        self.write(run / "config.json", {"evaluation": {"n_folds": 5}})
+        self.write(run / "fold_manifest.json", {"fold_ids": {"singles_random": [0, 1, 2, 3]}})
+        setting = self.setting(load_run(run), "singles_random")
+        self.assertEqual((setting["status"], setting["expected_folds"]), ("unavailable", 4))
+
     def test_shared_mixed_aggregate_replaces_planned_missing_domain_placeholder(self):
         names = ("mixed_random_singles", "mixed_random_doubles")
         run = self.make_run(settings=names)

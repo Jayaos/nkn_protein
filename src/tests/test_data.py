@@ -176,7 +176,7 @@ class SplitTests(unittest.TestCase):
             write_csv(path, ["variant_id", "fold", "fold_random_5"], [[variant_id, (fold + 1) % 5, fold] for variant_id, fold in rows])
             torch.testing.assert_close(load_folds(path, variant_ids, "random"), folds)
 
-    def test_official_folds_join_by_id_and_require_complete_scheme(self):
+    def test_official_folds_join_by_id_and_require_requested_scheme(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "folds.csv"
             write_csv(path, ["mutant", "fold_random_5"], [["b", 1], ["c", 2], ["a", 0]])
@@ -185,6 +185,27 @@ class SplitTests(unittest.TestCase):
                 load_folds(path, ["a", "b", "c"], "contiguous", n_folds=3)
             with self.assertRaisesRegex(ValueError, "exactly"):
                 load_folds(path, ["a", "b"], "random", n_folds=3)
+
+    def test_published_folds_preserve_only_observed_identifiers(self):
+        variant_ids = ("a", "b", "c", "d")
+        assignments = ([3, 0, 2, 1], [4, 0, 2, 4], [4, 1, 4, 1])
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "folds.csv"
+            for scheme in ("random", "modulo", "contiguous"):
+                for folds in assignments:
+                    with self.subTest(scheme=scheme, folds=folds):
+                        write_csv(path, ["mutant", f"fold_{scheme}_5"], reversed(list(zip(variant_ids, folds))))
+                        self.assertEqual(load_folds(path, variant_ids, scheme).tolist(), folds)
+
+    def test_single_fold_and_out_of_range_identifiers_are_rejected(self):
+        variant_ids = ("a", "b", "c")
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "folds.csv"
+            for folds in ([0, 0, 0], [-1, 0, 1], [0, 1, 5]):
+                with self.subTest(folds=folds):
+                    write_csv(path, ["mutant", "fold_random_5"], zip(variant_ids, folds))
+                    with self.assertRaises(ValueError):
+                        load_folds(path, variant_ids, "random")
 
     def test_multiples_column_and_known_depth_exclusions_preserve_assignments(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -201,7 +222,7 @@ class SplitTests(unittest.TestCase):
                 load_folds(path, [*selected, "missing"], "random_multiples", n_folds=3, allowed_extra_ids=["triple"])
             with self.assertRaises(ValueError):
                 load_folds(path, selected, "random_multiples", n_folds=3, allowed_extra_ids=["unknown"])
-            # Permitting excluded IDs must not permit duplicate rows or lose a selected fold.
+            # Permitting excluded IDs must not permit duplicate rows.
             write_csv(path, ["mutant", "fold_rand_multiples"], [["double", 2], ["triple", 1], ["triple", 1], ["single_b", 1], ["single_a", 0]])
             with self.assertRaisesRegex(ValueError, "duplicate"):
                 load_folds(path, selected, "random_multiples", n_folds=3, allowed_extra_ids=["triple"])

@@ -40,6 +40,62 @@ def _write_csv(path: Path, rows: list[dict], columns: tuple[str, ...]) -> None:
         writer.writerows(rows)
 
 
+def _expected_fold_ids(
+    directory: Path, metrics: dict, nominal_n_folds: int | None,
+    manifest: dict | None = None, setting: str | None = None,
+) -> list[int] | None:
+    """Resolve populated folds from saved assignments, retaining legacy runs."""
+    def validate(values, source):
+        if (not isinstance(values, list) or not values
+                or any(type(value) is not int or value < 0 for value in values)
+                or len(set(values)) != len(values)):
+            raise ValueError(f"{source} must contain unique nonnegative integer fold IDs")
+        if nominal_n_folds is not None and (
+            type(nominal_n_folds) is not int or nominal_n_folds < 1
+            or any(value >= nominal_n_folds for value in values)
+        ):
+            raise ValueError(f"{source} contains IDs outside the configured fold range")
+        return sorted(values)
+
+    saved = None
+    assignments = directory / "fold_assignments.csv"
+    if assignments.is_file():
+        with assignments.open(newline="", encoding="utf-8-sig") as handle:
+            rows = csv.DictReader(handle)
+            if "fold" not in (rows.fieldnames or []):
+                raise ValueError(f"Fold assignments require a fold column: {assignments}")
+            try:
+                values = sorted({int(row["fold"]) for row in rows})
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"Fold assignments require integer IDs: {assignments}") from error
+        saved = validate(values, str(assignments))
+    if manifest:
+        published = manifest.get("fold_ids", {}).get(setting)
+        for source in manifest.get("sources", {}).values():
+            value = source.get("settings", {}).get(setting, {}).get("fold_ids")
+            if value is not None:
+                published = value
+        if published is not None:
+            published = validate(published, "Manifest fold_ids")
+            if saved is not None and saved != published:
+                raise ValueError("Manifest fold_ids disagree with saved fold assignments")
+            saved = published
+    declared = metrics.get("fold_ids")
+    if declared is not None:
+        declared = validate(declared, "Metric fold_ids")
+        if saved is not None and saved != declared:
+            raise ValueError("Metric fold_ids disagree with saved fold assignments")
+        saved = declared
+    if saved is not None:
+        return saved
+    count = nominal_n_folds if nominal_n_folds is not None else metrics.get("n_folds")
+    if count is None:
+        return None
+    if type(count) is not int or count < 1:
+        raise ValueError("Expected fold count must be a positive integer")
+    return list(range(count))
+
+
 def aggregate_results(
     results_dir: str | Path = "results", output_dir: str | Path | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
@@ -92,19 +148,27 @@ def aggregate_results(
                 if not metrics and label != setting:
                     selected_folds = [f.get("setting_metrics", {}).get(label, f) for f in fold_data]
                 status = "complete" if metrics else ("invalid" if path.exists() else "incomplete")
+                expected_ids = None
+                if stage == "cv":
+                    try:
+                        expected_ids = _expected_fold_ids(directory, metrics or {}, expected, manifest, setting)
+                    except (OSError, ValueError) as error:
+                        status = "invalid"
+                        issues.append({"path": str(directory), "error": str(error)})
                 if metrics and stage == "cv":
-                    n_folds = expected if expected is not None else metrics.get("n_folds")
                     ids = [f.get("fold") for f in selected_folds]
-                    if (not isinstance(n_folds, int) or n_folds < 1
-                            or metrics.get("n_folds") != n_folds
-                            or len(ids) != n_folds or set(ids) != set(range(n_folds))):
+                    if status != "invalid" and (
+                        expected_ids is None or metrics.get("n_folds") != len(expected_ids)
+                        or len(ids) != len(expected_ids) or set(ids) != set(expected_ids)
+                    ):
                         status = "incomplete"
                 if metrics and (metrics.get("assay_id", run.parent.name) != run.parent.name
                                 or metrics.get("setting", label) != label):
                     status = "invalid"
                     issues.append({"path": str(path), "error": "Metric identity disagrees with directory"})
                 row = {
-                    **identity, "status": status, "expected_folds": expected if stage == "cv" else None,
+                    **identity, "status": status,
+                    "expected_folds": len(expected_ids) if expected_ids is not None else None,
                     "completed_folds": len(selected_folds) if stage == "cv" else None,
                     "stopping_criterion": config.get("training", {}).get("stopping_criterion"),
                     "config_path": str(run / "config.json"), "metrics_path": str(path),

@@ -68,7 +68,7 @@ def main(argv=None):
         config = replace(base, device="cuda", num_threads=args.num_threads,
                          training=resolve_training_config(base.training, args))
         if config.evaluation.n_folds != 5:
-            raise ValueError("Published ProteinGym protocols require five folds")
+            raise ValueError("Published ProteinGym fold columns require nominal n_folds=5")
         if config.training.min_steps > config.training.max_steps:
             raise ValueError("min-steps exceeds max-steps; supply both for a shorter timing run")
         if config.training.max_train_variants is not None:
@@ -98,12 +98,6 @@ def main(argv=None):
         args.output.mkdir(parents=True, exist_ok=False)
         output_created = True
         _write_json(args.output / "config.json", config.to_dict())
-        _write_json(args.output / "execution_plan.json", {
-            "assay_id": assay, "device": "cuda", "parallel": False,
-            "gp_computation_backend": config.training.gp_computation_backend, "inference": inference,
-            "setting_workers": 1, "fold_workers": 1, "threads_per_worker": config.num_threads,
-            "settings": {setting: {"fits": 5, "fold_workers": 1} for setting in settings},
-        })
         print("[2/3] Snapshotting and validating published folds", flush=True)
         fold_dir = args.output / "folds"
         fold_dir.mkdir()
@@ -112,7 +106,7 @@ def main(argv=None):
         snapshot.write_bytes(source_bytes)
         with snapshot.open(newline="", encoding="utf-8-sig") as handle:
             columns = csv.DictReader(handle).fieldnames or []
-        splits, fold_counts = {}, {}
+        splits, fold_counts, fold_ids = {}, {}, {}
         for setting in settings:
             scheme = setting.removeprefix("singles_")
             if f"fold_{scheme}_5" not in columns or scheme in columns:
@@ -121,11 +115,20 @@ def main(argv=None):
                 batch, load_folds(snapshot, batch.variant_ids, scheme, 5), config, scheme,
             )
             fold_counts[setting] = torch.bincount(splits[setting], minlength=5).tolist()
-            print(f"{setting}: {batch.num_variants} singles; held-out counts {fold_counts[setting]}", flush=True)
+            fold_ids[setting] = splits[setting].unique(sorted=True).tolist()
+            print(f"{setting}: {batch.num_variants} singles; populated folds {fold_ids[setting]}; "
+                  f"held-out counts {fold_counts[setting]}", flush=True)
+        _write_json(args.output / "execution_plan.json", {
+            "assay_id": assay, "device": "cuda", "parallel": False,
+            "gp_computation_backend": config.training.gp_computation_backend, "inference": inference,
+            "setting_workers": 1, "fold_workers": 1, "threads_per_worker": config.num_threads,
+            "settings": {setting: {"fits": len(fold_ids[setting]), "fold_workers": 1,
+                                   "fold_ids": fold_ids[setting]} for setting in settings},
+        })
         _write_json(args.output / "fold_manifest.json", {
             "assay_id": assay, "source": str(args.folds.resolve()), "snapshot": "folds/singles.csv",
             "sha256": hashlib.sha256(source_bytes).hexdigest(),
-            "n_variants": batch.num_variants, "held_out_counts": fold_counts,
+            "n_variants": batch.num_variants, "held_out_counts": fold_counts, "fold_ids": fold_ids,
         })
         print(f"PyTorch: {torch.__version__}; GPU: {torch.cuda.get_device_name()}; "
               f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 2**30:.1f} GiB; "
@@ -136,7 +139,7 @@ def main(argv=None):
                    "gp_computation_backend": config.training.gp_computation_backend, "inference": inference,
                    "gpu": torch.cuda.get_device_name(), "settings": {}}
         for setting in settings:
-            print(f"[3/3] Running five-fold NKN/GP CV on CUDA: {setting}", flush=True)
+            print(f"[3/3] Running {len(fold_ids[setting])}-fold NKN/GP CV on CUDA: {setting}", flush=True)
             torch.cuda.synchronize()
             torch.cuda.reset_peak_memory_stats()
             started = time.perf_counter()

@@ -101,6 +101,30 @@ class ParallelCVTests(unittest.TestCase):
             execution = json.loads((parallel / f"fold_{event['fold']}" / "execution.json").read_text())
             self.assertEqual(event["pid"], execution["pid"])
 
+    def test_nonconsecutive_observed_folds_match_serial_and_cap_workers(self):
+        config = replace(self.config, evaluation=replace(self.config.evaluation, n_folds=5))
+        folds = torch.tensor([4, 0, 2, 4, 0, 2, 4, 0])
+        serial = self.root / "observed_serial"
+        parallel = self.root / "observed_parallel"
+        expected = run_cv(self.batch, folds, config, serial)
+        events = []
+        actual = run_cv(self.batch, folds, config, parallel, fold_workers=5, progress=events.append)
+        self.assertEqual(actual, expected)
+        self.assertEqual(actual["n_folds"], 3)
+        self.assertEqual(actual["fold_ids"], [0, 2, 4])
+        self.assertEqual([fold["fold"] for fold in actual["fold_metrics"]], [0, 2, 4])
+        self.assertEqual(read_predictions(serial / "predictions.csv"), read_predictions(parallel / "predictions.csv"))
+        self.assertEqual([int(row["fold"]) for row in read_predictions(parallel / "predictions.csv")], folds.tolist())
+        self.assertEqual({event["fold"] for event in events if event.get("event") == "fold_complete"}, {0, 2, 4})
+        self.assertEqual(json.loads((parallel / "execution.json").read_text())["fold_workers"], 3)
+        self.assertEqual({path.name for path in parallel.glob("fold_*") if path.is_dir()}, {"fold_0", "fold_2", "fold_4"})
+        for fold in (0, 2, 4):
+            execution = json.loads((parallel / f"fold_{fold}" / "execution.json").read_text())
+            self.assertNotEqual(execution["pid"], os.getpid())
+            fitted = FittedGP.load(parallel / f"fold_{fold}" / "checkpoint.pt")
+            expected_train = {variant for index, variant in enumerate(self.batch.variant_ids) if folds[index] != fold}
+            self.assertEqual(set(fitted.train.variant_ids), expected_train)
+
     def test_invalid_parallel_options_fail_before_output(self):
         for index, workers in enumerate((0, -1, 4, 1.5, True, "2")):
             output = self.root / f"invalid_{index}"

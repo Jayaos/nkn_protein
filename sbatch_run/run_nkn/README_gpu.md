@@ -48,12 +48,21 @@ can override their paths; the selected assay identity and coverage checks still
 apply. Paths passed in an array job apply to every task, so overrides are usually
 appropriate for a single-assay submission.
 
+Cross-validation uses the fold IDs actually present in each published column,
+matching the original Kermut benchmark. `evaluation.n_folds=5` denotes the
+nominal `fold_*_5` protocol; assays with fewer populated folds run only those
+folds, with original IDs and assignments preserved. At least two populated folds
+are required. Execution plans, manifests, and metrics record the actual folds.
+For example, `F7YBW8_MESOW_Aakre_2015` runs four folds per singles setting.
+The optional `validation_spearman` stopping mode still requires all five folds
+because it uses three training folds, one validation fold, and one test fold.
+
 The configuration is resolved with `ExperimentConfig.for_assay`, preserving
 existing assay-specific handling. For BRCA2, this disables the structure-distance
 branch and excludes the ProteinMPNN mean score because its structures represent
 separate reference fragments. Prepared ProteinMPNN features remain in use.
 
-Submit the same five-fold random setting for each configured assay:
+Submit the published random-fold setting for each configured assay:
 
 ~~~bash
 sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch singles_random

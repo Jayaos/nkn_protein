@@ -14,8 +14,11 @@ from .features import read_csv
 def _validate_folds(folds: Tensor, n_folds: int) -> Tensor:
     if n_folds < 2:
         raise ValueError("At least two folds are required")
-    if set(folds.cpu().tolist()) != set(range(n_folds)):
-        raise ValueError(f"Fold assignments must contain every fold numbered 0 through {n_folds - 1}")
+    observed = set(folds.cpu().tolist())
+    if not observed.issubset(range(n_folds)):
+        raise ValueError(f"Fold identifiers must be between 0 and {n_folds - 1}")
+    if len(observed) < 2:
+        raise ValueError("Fold assignments must contain at least two populated folds")
     return folds
 
 
@@ -31,6 +34,8 @@ def load_folds(
 
     Extra rows are allowed only for explicitly excluded, known cache IDs (for
     example higher-order mutants removed by a 1M/2M setting).
+    n_folds is the nominal protocol size; unpopulated folds are allowed. Published
+    IDs are preserved, including gaps, rather than repartitioning the variants.
     """
     rows = read_csv(path)
     id_column = "variant_id" if "variant_id" in rows[0] else "mutant"

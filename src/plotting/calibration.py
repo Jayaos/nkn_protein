@@ -1,7 +1,8 @@
 """Plot interval and pairwise calibration from saved NKN fold metrics.
 
 Run ``python -m plotting.calibration --help`` with src on PYTHONPATH.
-This module reads JSON only: it never loads checkpoints or recomputes pairs.
+This module reads saved metrics and fold assignments; it never loads checkpoints
+or recomputes pairs.
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ import math
 from pathlib import Path
 import statistics
 import sys
+
+from reporting.aggregate import _expected_fold_ids as _saved_fold_ids
 
 
 SETTING_ORDER = (
@@ -144,15 +147,19 @@ def discover_runs(results_dir: Path, assays: list[str] | None = None) -> list[Pa
     return runs
 
 
-def _expected_folds(path: Path, run_dir: Path, aggregate: dict) -> int:
+def _expected_fold_ids(path: Path, run_dir: Path, aggregate: dict) -> list[int]:
     if path.parent.name == "fit":
-        return 1
+        return [0]
+    nominal = None
     for config_path in (path / "resolved_config.json", run_dir / "config.json"):
         if config_path.is_file():
             value = _read(config_path).get("evaluation", {}).get("n_folds")
             if value is not None:
-                return _count(value, "expected folds")
-    return _count(aggregate.get("n_folds", 5), "expected folds")
+                nominal = _count(value, "expected folds")
+                break
+    manifest_path = run_dir / "fold_manifest.json"
+    manifest = _read(manifest_path) if manifest_path.is_file() else {}
+    return _saved_fold_ids(path, {"n_folds": 5, **aggregate}, nominal, manifest, path.name)
 
 
 def _load_setting(path: Path, run_dir: Path, aggregate: dict | None = None,
@@ -161,7 +168,8 @@ def _load_setting(path: Path, run_dir: Path, aggregate: dict | None = None,
     aggregate_path = path / "metrics.json"
     if aggregate is None:
         aggregate = _read(aggregate_path) if aggregate_path.is_file() else {}
-    expected = _expected_folds(path, run_dir, aggregate)
+    expected_ids = _expected_fold_ids(path, run_dir, aggregate)
+    expected = len(expected_ids)
     folds = []
     if "fold_metrics" in aggregate:
         folds = aggregate["fold_metrics"]
@@ -181,6 +189,10 @@ def _load_setting(path: Path, run_dir: Path, aggregate: dict | None = None,
             source_files.append(str(fold_path))
     if not isinstance(folds, list):
         raise ValueError(f"fold_metrics must be a list: {aggregate_path}")
+    if path.parent.name != "fit":
+        observed = {_count(fold.get("fold", index), "fold ID") for index, fold in enumerate(folds)}
+        if not observed.issubset(expected_ids):
+            raise ValueError(f"Fold metrics contain IDs absent from the saved assignments: {path}")
     summary = summarize_setting(folds)
     failure_path = path / "failure.json"
     failed = failure_path.is_file()
@@ -192,9 +204,11 @@ def _load_setting(path: Path, run_dir: Path, aggregate: dict | None = None,
     if not folds:
         status = "unavailable"
         reason = reason or "No completed fold metrics"
-    elif len(folds) < expected or failed:
+    elif (len(folds) < expected or failed
+          or (path.parent.name != "fit" and aggregate.get("n_folds", expected) != expected)):
         status = "partial"
-        reason = reason or f"Only {len(folds)} of {expected} expected folds have metrics"
+        reason = reason or (f"Only {len(folds)} of {expected} expected folds have metrics"
+                            if len(folds) < expected else "Aggregate fold count disagrees with saved assignments")
     else:
         status = "complete"
     if len(folds) > expected:

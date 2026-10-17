@@ -23,6 +23,7 @@ from torch import Tensor
 
 from config import ExperimentConfig, STRUCTURE_DISTANCE_DISABLED_ASSAYS
 from data_loading import FeatureBatch
+from data_loading.splits import _validate_folds
 from evaluation import aggregate_folds, evaluate_fold, spearman
 from gp.linalg import NumericalError
 from gp.training import FittedGP, fit_gp
@@ -87,10 +88,9 @@ def _validate_fold_assignments(batch: FeatureBatch, folds: Tensor, config: Exper
     if folds.dtype == torch.bool or folds.is_floating_point() or folds.is_complex():
         raise ValueError("Fold assignments must be integer identifiers")
     result = folds.detach().to(device="cpu", dtype=torch.long)
-    expected = set(range(config.evaluation.n_folds))
-    if set(result.tolist()) != expected:
-        raise ValueError(f"Every configured fold must be present, with identifiers {sorted(expected)}")
-    if any(batch.num_variants - int((result == fold).sum()) < 2 for fold in expected):
+    _validate_folds(result, config.evaluation.n_folds)
+    observed = sorted(set(result.tolist()))
+    if any(batch.num_variants - int((result == fold).sum()) < 2 for fold in observed):
         raise ValueError("Every training partition must contain at least two variants")
     if scheme in ("modulo", "contiguous"):
         if not bool((_mutation_counts(batch) == 1).all()):
@@ -101,9 +101,11 @@ def _validate_fold_assignments(batch: FeatureBatch, folds: Tensor, config: Exper
             if result[positions == position].unique().numel() != 1:
                 raise ValueError("A mutation position occurs in multiple positional folds")
     if _uses_validation(config):
-        if config.evaluation.n_folds != 5 or scheme == "random_multiples" or not bool((_mutation_counts(batch) == 1).all()):
-            raise ValueError("validation_spearman requires five-fold single-substitution CV (three train, one validation, one test)")
-        for fold in expected:
+        if (config.evaluation.n_folds != 5 or observed != list(range(5))
+                or scheme == "random_multiples" or not bool((_mutation_counts(batch) == 1).all())):
+            raise ValueError("validation_spearman requires five populated folds for five-fold single-substitution CV "
+                             "(three train, one validation, one test)")
+        for fold in observed:
             validation_fold = (fold + 1) % 5
             if int(((result != fold) & (result != validation_fold)).sum()) < 2:
                 raise ValueError("Every three-fold training partition must contain at least two variants")
@@ -540,7 +542,7 @@ def _run_parallel_folds(batch, folds, config, output, setting, fold_workers, pro
                 initargs=(batch, folds, config, output, setting, events, cancelled, fit_function),
             ) as executor:
                 try:
-                    futures = {executor.submit(_run_fold_worker, fold): fold for fold in range(config.evaluation.n_folds)}
+                    futures = {executor.submit(_run_fold_worker, fold): fold for fold in folds.unique(sorted=True).tolist()}
                     pending = set(futures)
                     while pending:
                         finished, pending = wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
@@ -573,7 +575,7 @@ def _run_parallel_folds(batch, folds, config, output, setting, fold_workers, pro
         if receiver_finished.is_set():
             events.join_thread()
     _drain_fold_events(received, progress)
-    return [results[fold] for fold in range(config.evaluation.n_folds)]
+    return [results[fold] for fold in folds.unique(sorted=True).tolist()]
 
 
 def run_cv(
@@ -593,6 +595,7 @@ def run_cv(
 
     Parallel custom fit functions must be importable module-level callables.
     Progress callbacks run in the parent and may remain local closures.
+    Only populated published folds are evaluated; their original IDs are retained.
     """
     config = _resolve_assay_config(batch, config)
     if type(fold_workers) is not int or not 1 <= fold_workers <= config.evaluation.n_folds:
@@ -606,6 +609,8 @@ def run_cv(
     torch.set_num_threads(config.num_threads)
     batch = batch.to(config.device)
     folds = _validate_fold_assignments(batch, folds, config, scheme)
+    fold_ids = folds.unique(sorted=True).tolist()
+    fold_workers = min(fold_workers, len(fold_ids))
     output = prepare_output(output_dir, config)
     _write_fold_assignments(output, batch, folds)
     if fold_workers > 1:
@@ -619,7 +624,7 @@ def run_cv(
     else:
         fold_results = (
             _run_fold(batch, folds, config, output, setting, fold, progress, fit_function)
-            for fold in range(config.evaluation.n_folds)
+            for fold in fold_ids
         )
     by_variant: dict[str, dict[str, Any]] = {}
     fold_metrics = []
@@ -629,7 +634,8 @@ def run_cv(
 
     ordered_rows = [by_variant[variant_id] for variant_id in batch.variant_ids]
     _write_csv(output / "predictions.csv", ordered_rows)
-    metadata = {"assay_id": batch.assay_id, "scheme": scheme, "split_source": split_source}
+    metadata = {"assay_id": batch.assay_id, "scheme": scheme, "split_source": split_source,
+                "fold_ids": fold_ids}
     if setting in _MIXED_DEPTHS:
         setting_metrics = {}
         for name, depth in _MIXED_DEPTHS.items():

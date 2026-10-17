@@ -14,7 +14,7 @@
 #SBATCH --mail-user=jlee3541@gatech.edu
 
 # Same default four-branch NKN preset as run_nkn_assays.sbatch, in float64.
-# Load prepared features/scores and published five-fold singles assignments.
+# Load prepared features/scores and published singles assignments; run populated folds.
 # Default: all three singles settings; assay-specific config rules still apply.
 # Settings and folds run sequentially on one GPU per task.
 # Training limits come from the preset unless explicitly overridden.
@@ -109,7 +109,7 @@ for argument in "$@"; do
 Usage: sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch [NAME] [singles|SETTING] [OPTIONS]
 SETTINGS: singles_random, singles_modulo, singles_contiguous
 NAME: optional leading results-group folder name (must not be a setting).
-Default singles runs all three, sequentially, with five folds each.
+Default singles runs all three sequentially, using each scheme's populated folds.
 Edit assays=(...) in this file to choose among the four supported human IDs.
 Set the Slurm array range to match the list; current entries are shown below.
 Prepared features and scores: data/features/pretrained/singles/<assay>/
@@ -130,7 +130,7 @@ Precedence: --experiment-suffix, leading NAME, then EXPERIMENT_SUFFIX.
 Without a suffix, existing output paths are preserved.
 Assay, device, and per-task output paths are managed by this launcher.
 Cholesky is the default. BBMM requires linear_operator==0.5.2 in the environment.
-Short timing run (configured human assays, five folds each):
+Short timing run (configured assays, all populated folds):
   sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch singles_random --max-steps 2 --min-steps 0
 BBMM with the same prepared data, published folds, and GPU resources:
   sbatch sbatch_run/run_nkn/run_nkn_gpu.sbatch singles_random --gp-computation-backend bbmm
