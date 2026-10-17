@@ -18,68 +18,6 @@ from experiments.runner import _validate_fold_assignments, run_cv
 from experiments.settings import select_setting_batch
 from gp.inference import add_inference_arguments, inference_metadata, resolve_training_config
 
-
-SUPPORTED_ASSAYS = (
-  "A0A1I9GEU1_NEIME_Kennouche_2019"
-  "A4_HUMAN_Seuma_2022"
-  "AICDA_HUMAN_Gajula_2014_3cycles"
-  "AMFR_HUMAN_Tsuboyama_2023_4G3O"
-  "B2L11_HUMAN_Dutta_2010_binding-Mcl-1"
-  "BCHB_CHLTE_Tsuboyama_2023_2KRU"
-  "BLAT_ECOLX_Jacquier_2013"
-  "BRCA2_HUMAN_Erwood_2022_HEK293T"
-  "CAPSD_AAV2S_Sinai_2021"
-  "CBX4_HUMAN_Tsuboyama_2023_2K28"
-  "CUE1_YEAST_Tsuboyama_2023_2MYX"
-  "ENV_HV1B9_DuenasDecamp_2016"
-  "ERBB2_HUMAN_Elazar_2016"
-  "F7YBW8_MESOW_Ding_2023"
-  "F7YBW8_MESOW_Aakre_2015"
-  "GCN4_YEAST_Staller_2018"
-  "GLPA_HUMAN_Elazar_2016"
-  "HIS7_YEAST_Pokusaeva_2019"
-  "ISDH_STAAW_Tsuboyama_2023_2LHR"
-  "KCNH2_HUMAN_Kozek_2020"
-  "LYAM1_HUMAN_Elazar_2016"
-  "MAFG_MOUSE_Tsuboyama_2023_1K1V"
-  "MYO3_YEAST_Tsuboyama_2023_2BTT"
-  "NPC1_HUMAN_Erwood_2022_HEK293T"
-  "NPC1_HUMAN_Erwood_2022_RPE1"
-  "NRAM_I33A0_Jiang_2016"
-  "ODP2_GEOSE_Tsuboyama_2023_1W4G"
-  "OPSD_HUMAN_Wan_2019"
-  "OTU7A_HUMAN_Tsuboyama_2023_2L2D"
-  "PIN1_HUMAN_Tsuboyama_2023_1I6C"
-  "PITX2_HUMAN_Tsuboyama_2023_2L7M"
-  "POLG_PESV_Tsuboyama_2023_2MXD"
-  "Q837P4_ENTFA_Meier_2023"
-  "Q837P5_ENTFA_Meier_2023"
-  "RAD_ANTMA_Tsuboyama_2023_2CJJ"
-  "RAF1_HUMAN_Zinkus-Boltz_2019"
-  "RBP1_HUMAN_Tsuboyama_2023_2KWH"
-  "RCD1_ARATH_Tsuboyama_2023_5OAO"
-  "RD23A_HUMAN_Tsuboyama_2023_1IFY"
-  "RFAH_ECOLI_Tsuboyama_2023_2LCL"
-  "RPC1_LAMBD_Li_2019_high-expression"
-  "RPC1_LAMBD_Li_2019_low-expression"
-  "SAV1_MOUSE_Tsuboyama_2023_2YSB"
-  "SCN5A_HUMAN_Glazer_2019"
-  "SDA_BACSU_Tsuboyama_2023_1PV0"
-  "SPG1_STRSG_Wu_2016"
-  "SQSTM_MOUSE_Tsuboyama_2023_2RRU"
-  "SR43C_ARATH_Tsuboyama_2023_2N88"
-  "TCRG1_MOUSE_Tsuboyama_2023_1E0L"
-  "THO1_YEAST_Tsuboyama_2023_2WQG"
-  "TPOR_HUMAN_Bridgford_2020"
-  "UBE4B_MOUSE_Starita_2013"
-  "VG08_BPP22_Tsuboyama_2023_2GP8"
-  "VKOR1_HUMAN_Chiasson_2020_activity"
-  "YAIA_ECOLI_Tsuboyama_2023_2KVT"
-  "YAP1_HUMAN_Araya_2012"
-  "YNZC_BACSU_Tsuboyama_2023_2JVD"
-  "FKBP3_HUMAN_Tsuboyama_2023_2KFV"
-)
-
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = (ROOT / "configs"
                   / "esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_1p0.json")
@@ -93,7 +31,7 @@ def _write_json(path, value):
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("selection", nargs="?", default="singles", choices=("singles", *SETTINGS))
-    parser.add_argument("--assay", choices=SUPPORTED_ASSAYS, default=ASSAY)
+    parser.add_argument("--assay", required=True)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--num-threads", type=int, default=1)
