@@ -13,7 +13,6 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
-# One selected human ProteinGym assay per entry in the editable list below.
 # Same default four-branch NKN preset as run_nkn_assays.sbatch, in float64.
 # Load prepared features/scores and published five-fold singles assignments.
 # Default: all three singles settings; assay-specific config rules still apply.
@@ -30,10 +29,6 @@
 # NKN_PYTHON may name an existing interpreter; otherwise activate nkn_protein.
 set -eo pipefail
 
-# EDIT THIS LIST: choose unique IDs from the four supported human assays.
-# The three defaults below and S22A1_HUMAN_Yee_2023_activity are supported.
-# Set #SBATCH --array above to 0-(number of entries minus 1), or override it
-# in the submission command. Slurm reads directives before this shell executes.
 assays=(
   "A0A1I9GEU1_NEIME_Kennouche_2019"
   "A4_HUMAN_Seuma_2022"
