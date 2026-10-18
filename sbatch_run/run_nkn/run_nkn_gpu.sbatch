@@ -4,9 +4,10 @@
 #SBATCH --array=0-85
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:V100-32G:1
+#SBATCH --gres=gpu:v100:1
+#SBATCH --constraint=V100-32GB
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=128G
+#SBATCH --mem=192G
 #SBATCH --time=02:00:00
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%A_%a.out
