@@ -5,6 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:V100:1
+#SBATCH --constraint=gpu-v100-32GB
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=192G
 #SBATCH --time=02:00:00
@@ -26,7 +27,9 @@
 # BBMM: ... singles_random --gp-computation-backend bbmm
 # Results grouping: --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME).
 # A leading NAME is also accepted: ... gpu_bbmm_test --gp-computation-backend bbmm
-# Inserts NAME below NKN_OUTPUT_ROOT (default results), as in the CPU launcher.
+# Inserts NAME below the output root, as in the CPU launcher.
+# --output-root PATH overrides NKN_OUTPUT_ROOT (default results/).
+# Relative output roots are resolved from the repository root.
 # Short timing run: ... singles_random --max-steps 2 --min-steps 0
 # Override GPU hardware/resources using sbatch options before the script path.
 # NKN_PYTHON may name an existing interpreter; otherwise activate nkn_protein.
@@ -150,6 +153,7 @@ Set the Slurm array range to match the list; current entries are shown below.
 Prepared features and scores: data/features/pretrained/singles/<assay>/
 Published folds: data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/<assay>.csv
 Options: --config PATH --max-steps N --min-steps N --log-every N
+         --output-root PATH (overrides NKN_OUTPUT_ROOT; default results/)
          --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX)
          --num-threads N --features PATH --folds PATH --assay-index PATH
          --gp-computation-backend {cholesky,bbmm}
@@ -158,7 +162,8 @@ Options: --config PATH --max-steps N --min-steps N --log-every N
          --bbmm-preconditioner-size N --bbmm-probe-seed N
 This launcher uses real prepared inputs and CUDA; missing assets fail explicitly.
 Assays are selected in catalog order by DMS_number_single_mutants > 2000.
-NKN_OUTPUT_ROOT changes the results root (default results).
+Output root precedence: --output-root PATH, NKN_OUTPUT_ROOT, then results/.
+Relative output roots are resolved from the repository root.
 Results grouping: --experiment-suffix NAME inserts one folder below that root.
 Precedence: --experiment-suffix, leading NAME, then EXPERIMENT_SUFFIX.
 Without a suffix, existing output paths are preserved.
@@ -177,12 +182,13 @@ HELP
   fi
   case "$argument" in
     --assay|--assay=*|--output|--output=*|--device|--device=*)
-      echo "error: The array manages assay IDs, output paths, and CUDA. Use NKN_OUTPUT_ROOT to change the results root." >&2
+      echo "error: The array manages assay IDs, output paths, and CUDA. Use --output-root PATH or NKN_OUTPUT_ROOT to change the results root." >&2
       exit 1 ;;
   esac
 done
 
 experiment_suffix="${EXPERIMENT_SUFFIX:-}"
+output_root="${NKN_OUTPUT_ROOT:-results}"
 # Consume a leading results-group name before forwarding runner arguments.
 # Known selections and options retain their existing meaning.
 case "${1:-}" in
@@ -192,6 +198,15 @@ esac
 runner_args=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --output-root)
+      if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+        echo "error: --output-root requires a directory path." >&2
+        exit 1
+      fi
+      output_root="$2"
+      shift 2 ;;
+    --output-root=*)
+      set -- --output-root "${1#*=}" "${@:2}" ;;
     --experiment-suffix)
       if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
         echo "error: --experiment-suffix requires a folder name." >&2
@@ -261,7 +276,6 @@ selection="singles"
 case "${1:-}" in
   singles|singles_random|singles_modulo|singles_contiguous) selection="$1" ;;
 esac
-output_root="${NKN_OUTPUT_ROOT:-results}"
 run_root="$output_root/${experiment_suffix:+$experiment_suffix/}$assay/nkn_esm2_proteinmpnn_${selection}_gpu_${run_id}_${task_index}"
 config="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json}"
 printf 'Job: %s\nRepository: %s\nPython: %s\n' "$run_id" "$project_root" "$python_exec"

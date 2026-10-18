@@ -55,7 +55,9 @@
 # SAMPLE_RATIO=1.0 trains on all singles. Relative paths use the repository root.
 # Logs go to the submission directory. Every job creates a new results directory.
 # --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) groups results under
-# results/NAME/<assay>/<model-run>/. Without it, existing paths are preserved.
+# <output-root>/NAME/<assay>/<model-run>/. Without it, NAME is omitted.
+# --output-root PATH overrides NKN_OUTPUT_ROOT (default results/).
+# Relative output roots are resolved from the repository root.
 set -eo pipefail
 
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
@@ -72,6 +74,7 @@ selection="singles"
 selection_given=false
 parallel=false
 experiment_suffix="${EXPERIMENT_SUFFIX:-}"
+output_root="${NKN_OUTPUT_ROOT:-results}"
 held_out_interval=""
 stopping_criterion=""
 validation_interval=""
@@ -103,6 +106,15 @@ while [[ $# -gt 0 ]]; do
       shift 2 ;;
     --noise-prior=*|--noise-prior-scale=*)
       set -- "${1%%=*}" "${1#*=}" "${@:2}" ;;
+    --output-root)
+      if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+        echo "error: --output-root requires a directory path." >&2
+        exit 1
+      fi
+      output_root="$2"
+      shift 2 ;;
+    --output-root=*)
+      set -- --output-root "${1#*=}" "${@:2}" ;;
     --experiment-suffix)
       if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
         echo "error: --experiment-suffix requires a folder name." >&2
@@ -170,6 +182,7 @@ while [[ $# -gt 0 ]]; do
       fi
       shift ;;
     -h|--help)
+      printf 'Output root: --output-root PATH, then NKN_OUTPUT_ROOT, then results/. Relative paths use the repository root.\n'
       printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
       printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
       printf 'Diagnostic example: --held-out-interval 100 (0 disables; overrides training.held_out_interval in JSON)\n'
@@ -289,7 +302,7 @@ export CUDA_VISIBLE_DEVICES=""
 
 assay_index="data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv"
 run_id="${SLURM_JOB_ID:-manual_$(date -u +%Y%m%dT%H%M%SZ)}"
-run_root="results/${experiment_suffix:+$experiment_suffix/}$assay/nkn_esm2_proteinmpnn_${selection}_${run_id}"
+run_root="$output_root/${experiment_suffix:+$experiment_suffix/}$assay/nkn_esm2_proteinmpnn_${selection}_${run_id}"
 runtime_config="$run_root/config.json"
 
 # Refuse to reuse a previous run's directory or overwrite its results.

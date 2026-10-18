@@ -29,7 +29,9 @@
 # For random CV only, pass singles_random instead of the default singles.
 # Logs: nkn_assays-<array-job-id>_<task-index>.out in the submission directory.
 # Results: results/<assay>/nkn_esm2_proteinmpnn_<selection>_<task-job-id>/
-# Add --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) to insert NAME under results/.
+# --output-root PATH overrides NKN_OUTPUT_ROOT (default results/).
+# Relative output roots are resolved from the repository root.
+# Add --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) under that output root.
 # Config precedence: --config PATH, NKN_CONFIG, then the four-branch additive
 # noise_initial_0p5 preset for every assay.
 # Four-branch alternative with the original noise_initial=0.01:
@@ -175,6 +177,7 @@ assays=(
 )
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  printf 'Output root: --output-root PATH, then NKN_OUTPUT_ROOT, then results/. Relative paths use the repository root.\n'
   printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
   printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n'
   printf 'Default array: 0-130; 131 assays with fewer than 2,000 single-mutant variants.\n'
