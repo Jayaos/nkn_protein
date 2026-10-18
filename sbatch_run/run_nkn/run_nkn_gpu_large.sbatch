@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=nkn_gpu_large
 #SBATCH --account=gts-yxie77-paid
-#SBATCH --array=0-41
+#SBATCH --array=0-24
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:A100:1
@@ -13,7 +13,7 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
-# 42 assays with more than 6,000 single-mutant variants; array indices 0-41.
+# 25 assays with more than 8,000 single-mutant variants; array indices 0-24.
 # Same default four-branch NKN preset as run_nkn_assays.sbatch:
 # initial noise variance 0.5, in float64.
 # Load prepared features/scores and published singles assignments; run populated folds.
@@ -34,45 +34,28 @@
 # NKN_PYTHON may name an existing interpreter; otherwise activate nkn_protein.
 set -eo pipefail
 
-# DMS_number_single_mutants > 6000, in catalog order, from
+# DMS_number_single_mutants > 8000, in catalog order, from
 # data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv.
 assays=(
   "A0A140D2T1_ZIKV_Sourisseau_2019"
   "A0A192B1T2_9HIV1_Haddox_2018"
   "A0A2Z5U3Z0_9INFA_Doud_2016"
   "A4D664_9INFA_Soh_2019"
-  "ADRB2_HUMAN_Jones_2020"
-  "AMIE_PSEAE_Wrenbeck_2017"
   "C6KNH7_9INFA_Lee_2018"
   "CAS9_STRP1_Spencer_2017_positive"
-  "CBS_HUMAN_Sun_2020"
-  "CCR5_HUMAN_Gill_2023"
-  "CP2C9_HUMAN_Amorosi_2021_abundance"
-  "CP2C9_HUMAN_Amorosi_2021_activity"
   "ENV_HV1BR_Haddox_2016"
   "HMDH_HUMAN_Jiang_2019"
   "HSP82_YEAST_Flynn_2019"
   "HXK4_HUMAN_Gersing_2022_activity"
   "HXK4_HUMAN_Gersing_2023_abundance"
   "I6TAH8_I68A0_Doud_2015"
-  "KCNJ2_MOUSE_Coyote-Maestas_2022_function"
-  "KCNJ2_MOUSE_Coyote-Maestas_2022_surface"
-  "LGK_LIPST_Klesmith_2015"
-  "MK01_HUMAN_Brenan_2016"
   "MSH2_HUMAN_Jia_2020"
   "MTHR_HUMAN_Weile_2021"
   "NCAP_I34A1_Doud_2015"
-  "OXDA_RHOTO_Vanella_2023_activity"
-  "OXDA_RHOTO_Vanella_2023_expression"
-  "P53_HUMAN_Giacomelli_2018_Null_Etoposide"
-  "P53_HUMAN_Giacomelli_2018_Null_Nutlin"
-  "P53_HUMAN_Giacomelli_2018_WT_Nutlin"
   "POLG_CXB3N_Mattenberger_2021"
   "POLG_DEN26_Suphatrakul_2023"
   "PPARG_HUMAN_Majithia_2016"
-  "PPM1D_HUMAN_Miller_2022"
   "PRKN_HUMAN_Clausen_2023"
-  "PTEN_HUMAN_Mighell_2018"
   "Q2N0S5_9HIV1_Haddox_2018"
   "RDRP_I33A0_Li_2023"
   "S22A1_HUMAN_Yee_2023_abundance"
@@ -103,7 +86,7 @@ Default singles runs all three sequentially, using each scheme's populated folds
 Default config: configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json
 Initial noise variance: 0.5; same model/training defaults as run_nkn_assays.sbatch.
 Config precedence: --config PATH, NKN_CONFIG, then the default above.
-Default: 42 ProteinGym assays with more than 6,000 single-mutant variants.
+Default: 25 ProteinGym assays with more than 8,000 single-mutant variants.
 Set the Slurm array range to match the list; current entries are shown below.
 Prepared features and scores: data/features/pretrained/singles/<assay>/
 Published folds: data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/<assay>.csv
@@ -116,7 +99,7 @@ Options: --config PATH --max-steps N --min-steps N --log-every N
          --bbmm-num-trace-samples N --bbmm-max-lanczos-iterations N
          --bbmm-preconditioner-size N --bbmm-probe-seed N
 This launcher uses real prepared inputs and CUDA; missing assets fail explicitly.
-Assays are selected in catalog order by DMS_number_single_mutants > 6000.
+Assays are selected in catalog order by DMS_number_single_mutants > 8000.
 Output root precedence: --output-root PATH, NKN_OUTPUT_ROOT, then results/.
 Relative output roots are resolved from the repository root.
 Results grouping: --experiment-suffix NAME inserts one folder below that root.
