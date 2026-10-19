@@ -2,6 +2,7 @@
 
 import csv
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,94 @@ def _write_csv(path: Path, rows: list[dict], columns: tuple[str, ...]) -> None:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _run_settings(run: Path, manifest: dict, plan: dict) -> set[tuple[str, str]]:
+    """Include settings that were requested but never started."""
+    settings = {(stage, directory.name)
+                for stage in ("cv", "fit") for directory in (run / stage).glob("*")
+                if directory.is_dir()}
+    requested = manifest.get("requested_settings", [])
+    if not isinstance(requested, list):
+        raise ValueError("Manifest requested_settings must be a list")
+    names = list(requested)
+    mappings = [manifest.get("fold_ids", {}), plan.get("settings", {})]
+    sources = manifest.get("sources", {})
+    if not isinstance(sources, dict):
+        raise ValueError("Manifest sources must be an object")
+    for source in sources.values():
+        if not isinstance(source, dict):
+            raise ValueError("Manifest source must be an object")
+        mappings.append(source.get("settings", {}))
+    for mapping in mappings:
+        if not isinstance(mapping, dict):
+            raise ValueError("Saved settings and fold_ids must be objects")
+        names.extend(mapping)
+    for name in names:
+        if (not isinstance(name, str) or not name or name in {".", ".."}
+                or "/" in name or "\\" in name):
+            raise ValueError("Requested settings must be nonempty directory names")
+        settings.add(("fit" if name == "single_to_double" else "cv", name))
+    return settings
+
+
+def _job_id(run: Path) -> int | None:
+    # GPU names end in <job>_<task>; CPU names end in <job>. Manual GPU
+    # runs also end in a task index, which must not be treated as a job ID.
+    if "_manual_" in run.name:
+        return None
+    match = re.search(r"_(\d+)(?:_\d+)?$", run.name)
+    return int(match.group(1)) if match else None
+
+
+def _select_runs(root: Path, issues: list[dict]) -> list[tuple[Path, dict, dict]]:
+    """Select one run with all aggregate metric files per assay and model."""
+    candidates: dict[tuple[str, str], list[tuple[Path, dict, dict]]] = {}
+    for run in sorted(root.glob("*/*")):
+        model = run.name.split("_", 1)[0]
+        if not run.is_dir() or model not in {"nkn", "kermut"}:
+            continue
+        manifest_path, plan_path = run / "fold_manifest.json", run / "execution_plan.json"
+        manifest = _read(manifest_path, issues)
+        plan = _read(plan_path, issues)
+        if ((manifest_path.exists() and manifest is None)
+                or (plan_path.exists() and plan is None)):
+            continue
+        manifest = manifest or {}
+        try:
+            settings = _run_settings(run, manifest, plan or {})
+        except ValueError as error:
+            issues.append({"path": str(run), "error": str(error)})
+            continue
+        if not settings:
+            issues.append({"path": str(run), "error": "No setting directories or requested settings found"})
+            continue
+        saved_metrics = {}
+        for stage, setting in sorted(settings):
+            path = run / stage / setting / "metrics.json"
+            data = _read(path, issues)
+            if not path.exists():
+                issues.append({"path": str(path), "error": "Skipping run: missing aggregate metrics.json"})
+            elif data == {}:
+                issues.append({"path": str(path), "error": "Skipping run: empty aggregate metrics.json"})
+            if data:
+                saved_metrics[stage, setting] = data
+        if len(saved_metrics) == len(settings):
+            candidates.setdefault((run.parent.name, model), []).append((run, manifest, saved_metrics))
+
+    selected = []
+    for key in sorted(candidates):
+        runs = candidates[key]
+        # Job IDs order Slurm submissions numerically, independent of task
+        # index or copied-directory timestamps. Legacy/manual groups without
+        # comparable job IDs fall back to directory modification time.
+        job_ids = {run: _job_id(run) for run, _, _ in runs}
+        if all(job_id is not None for job_id in job_ids.values()):
+            latest = max(runs, key=lambda item: (job_ids[item[0]], item[0].stat().st_mtime_ns, item[0].name))
+        else:
+            latest = max(runs, key=lambda item: (item[0].stat().st_mtime_ns, item[0].name))
+        selected.append(latest)
+    return selected
 
 
 def _expected_fold_ids(
@@ -99,15 +188,21 @@ def _expected_fold_ids(
 def aggregate_results(
     results_dir: str | Path = "results", output_dir: str | Path | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Return ``summary``, ``folds``, and ``issues`` tables for every saved run.
+    """Return tables for the latest eligible run per assay and model.
 
     Scan results/<assay>/{nkn,kermut}_*/{cv,fit}/<setting>/metrics.json.
-    Summary rows retain separate runs, model names, config paths, and stopping
-    criteria. CV metrics are copied from the runner's aggregate, not recomputed
-    from partial folds. Nested mixed singles/doubles metrics become separate rows.
-    Missing aggregate metrics produce incomplete rows; malformed files are also
-    listed in issues. Null/undefined metrics remain None (empty in CSV).
-    Requested but unstarted settings are discovered from fold_manifest.json.
+    Every discovered or requested setting must have a readable, nonempty JSON
+    metrics object. Missing or malformed files exclude the entire run and are
+    listed in issues. Manifests and execution plans identify unstarted settings;
+    legacy runs without this metadata use their existing setting directories.
+    Select the highest numeric Slurm job ID, ignoring the array task index. If
+    any eligible run in a group lacks a job ID, use directory modification time.
+    NKN and Kermut are selected independently within each assay.
+
+    CV metrics are copied from the selected runner aggregate, not recomputed
+    from partial folds. Existing fold and identity checks still annotate its
+    rows with their status. Nested mixed singles/doubles metrics become separate
+    rows. Null/undefined metrics remain None (empty in CSV).
 
     If output_dir is supplied, write summary.csv, folds.csv, and issues.csv there.
     Existing report CSVs at that destination are replaced; experiment files are
@@ -117,30 +212,16 @@ def aggregate_results(
     if not root.is_dir():
         raise FileNotFoundError(f"Results directory does not exist: {root}")
     summary, folds, issues = [], [], []
-    for run in sorted(root.glob("*/*")):
+    for run, manifest, saved_metrics in _select_runs(root, issues):
         model = run.name.split("_", 1)[0]
-        if not run.is_dir() or model not in {"nkn", "kermut"}:
-            continue
         config = _read(run / "config.json", issues) or {}
-        manifest = _read(run / "fold_manifest.json", issues) or {}
         expected = config.get("evaluation", {}).get("n_folds")
-        settings = {(stage, directory.name)
-                    for stage in ("cv", "fit") for directory in (run / stage).glob("*")
-                    if directory.is_dir()}
-        for setting in manifest.get("requested_settings", []):
-            settings.add(("fit" if setting == "single_to_double" else "cv", setting))
-        if not settings:
-            issues.append({"path": str(run), "error": "No setting directories or requested settings found"})
-        for stage, setting in sorted(settings):
+        for (stage, setting), data in sorted(saved_metrics.items()):
             directory = run / stage / setting
             path = directory / "metrics.json"
-            data = _read(path, issues)
             # The embedded fold records belong to the same snapshot as the
-            # aggregate. Only inspect individual fold files for unfinished CV.
+            # aggregate; individual fold files cannot complete an unfinished run.
             fold_data = data.get("fold_metrics", []) if data else []
-            if not data and stage == "cv":
-                fold_data = [value for p in sorted(directory.glob("fold_*/metrics.json"))
-                             if (value := _read(p, issues)) is not None]
             variants = data.get("setting_metrics", {setting: data}) if data else {setting: None}
             for label, metrics in sorted(variants.items()):
                 identity = dict(zip(IDENTITY, (run.parent.name, model, run.name, stage, label)))

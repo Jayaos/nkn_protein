@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import gc
 import importlib
 import json
 import math
@@ -639,10 +640,20 @@ def run_cv(
     for result_index, (rows, metrics) in enumerate(fold_results):
         fold_metrics.append(metrics)
         by_variant.update({row["variant_id"]: row for row in rows})
-        if fold_workers == 1 and progress is not None:
+        if fold_workers == 1:
             # _run_fold has returned: its model, predictions, and local tensors
-            # are now out of scope. Observe natural release without forcing GC.
-            progress({"event": "fold_returned", "fold": fold_ids[result_index]})
+            # are now out of scope. Keep a sample before explicit cleanup.
+            if progress is not None:
+                progress({"event": "fold_returned", "fold": fold_ids[result_index]})
+            if batch.device.type == "cuda":
+                # Nearby fold sizes otherwise reuse and split the previous
+                # fold's large cached blocks, leaving unusable memory slivers.
+                # Collect cycles before releasing unoccupied allocator segments.
+                gc.collect()
+                with torch.cuda.device(batch.device):
+                    torch.cuda.empty_cache()
+                if progress is not None:
+                    progress({"event": "fold_cleanup_complete", "fold": fold_ids[result_index]})
 
     ordered_rows = [by_variant[variant_id] for variant_id in batch.variant_ids]
     _write_csv(output / "predictions.csv", ordered_rows)

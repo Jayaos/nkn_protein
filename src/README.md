@@ -418,6 +418,21 @@ sbatch sbatch_run/run_kermut/run_kermut_assays.sbatch singles --experiment-suffi
 PYTHONPATH=src python -m reporting --results results/comparison_v1 --output results/comparison_v1/aggregate
 ```
 
+Aggregation selects the latest run per assay and model (NKN and Kermut
+independently) with readable, nonempty `metrics.json` objects for every requested
+or existing setting. It checks the fold manifest and execution plan so settings
+that never started also exclude a run. Legacy runs without this metadata use
+their existing setting directories. A missing or unreadable metrics file skips
+the entire run; reasons appear in `issues.csv`. If no run qualifies, that assay
+and model contribute no summary or fold rows.
+
+The highest numeric Slurm job ID wins; the GPU array task index is ignored.
+If any eligible run for an assay and model lacks a job ID, selection falls back
+to directory modification time. All exported settings and folds come from the
+selected run. Existing fold-coverage and identity checks still set each summary
+row's status; selection itself checks the aggregate metric files. Source run
+directories are never modified or deleted.
+
 CV results are saved under `cv/<setting>/`; extrapolation is under
 `fit/single_to_double/`. For `all`, both mixed-domain results are in
 `cv/mixed_random_singles/metrics.json` under `setting_metrics`.

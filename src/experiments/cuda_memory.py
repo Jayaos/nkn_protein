@@ -1,4 +1,4 @@
-"""Opt-in CUDA allocator diagnostics; never collect garbage or clear the cache."""
+"""Passive CUDA allocator diagnostics, including samples around runner cleanup."""
 
 import json
 import os

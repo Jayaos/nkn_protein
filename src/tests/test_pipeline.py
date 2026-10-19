@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import weakref
 from unittest.mock import patch
 
 import torch
@@ -15,7 +16,7 @@ from data_loading import FeatureBatch
 from evaluation import evaluate_fold, spearman
 from experiments import run_cv, run_extrapolation, run_predict
 from gp.linalg import NumericalError
-from gp.training import FittedGP
+from gp.training import FittedGP, fit_gp
 
 
 def synthetic_batch():
@@ -69,6 +70,63 @@ class PipelineTests(unittest.TestCase):
         self.batch = synthetic_batch()
         self.config = small_config()
         self.folds = torch.tensor([0, 1, 2, 0, 1, 2, 0, 1])
+
+    def test_cpu_cv_does_not_collect_or_touch_cuda_cache(self):
+        events = []
+        with patch("experiments.runner.gc.collect") as collect, \
+                patch("experiments.runner.torch.cuda.empty_cache") as empty_cache:
+            run_cv(self.batch, self.folds, self.config, self.root / "cpu_cache", progress=events.append)
+        collect.assert_not_called()
+        empty_cache.assert_not_called()
+        self.assertEqual([event["fold"] for event in events if event.get("event") == "fold_returned"], [0, 1, 2])
+        self.assertFalse(any(event.get("event") == "fold_cleanup_complete" for event in events))
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+    def test_cuda_cv_releases_fold_objects_before_next_fit_with_or_without_logging(self):
+        config = replace(self.config, device="cuda")
+        release_cache = torch.cuda.empty_cache
+        for log_progress in (True, False):
+            with self.subTest(log_progress=log_progress):
+                fitted_refs, releases, events = [], [], []
+                device_index = torch.cuda.current_device()
+
+                def fit(*args, **kwargs):
+                    # Every preceding fold must have been cleaned before a new fit.
+                    self.assertEqual(len(releases), len(fitted_refs))
+                    # Ensure releasable cached blocks even for this tiny model.
+                    scratch = torch.empty(8 * 1024**2, dtype=torch.uint8, device=config.device)
+                    del scratch
+                    fitted = fit_gp(*args, **kwargs)
+                    fitted_refs.append(weakref.ref(fitted))
+                    # Exercise collection of cycles as well as ordinary local release.
+                    fitted._test_cycle = fitted
+                    return fitted
+
+                def empty_cache():
+                    self.assertTrue(all(reference() is None for reference in fitted_refs))
+                    self.assertEqual(torch.cuda.current_device(), device_index)
+                    before = torch.cuda.memory_reserved()
+                    release_cache()
+                    releases.append((before, torch.cuda.memory_reserved()))
+                    events.append({"event": "cache_released", "fold": len(releases) - 1})
+
+                with patch("experiments.runner.torch.cuda.empty_cache", side_effect=empty_cache):
+                    result = run_cv(
+                        self.batch, self.folds, config, self.root / f"cuda_cache_{log_progress}",
+                        fit_function=fit, progress=events.append if log_progress else None,
+                    )
+                self.assertEqual(len(releases), result["n_folds"])
+                # Live inputs/library workspaces can pin a segment in a tiny fold.
+                self.assertTrue(all(after <= before for before, after in releases), releases)
+                self.assertTrue(any(after < before for before, after in releases), releases)
+                self.assertTrue(all(reference() is None for reference in fitted_refs))
+                if log_progress:
+                    boundaries = [(event["event"], event["fold"]) for event in events
+                                  if event.get("event") in ("fold_start", "fold_returned",
+                                                            "cache_released", "fold_cleanup_complete")]
+                    self.assertEqual(boundaries, [(event, fold) for fold in range(3) for event in
+                                                  ("fold_start", "fold_returned", "cache_released",
+                                                   "fold_cleanup_complete")])
 
     def test_cv_artifacts_and_reloaded_out_of_fold_predictions(self):
         output = self.root / "cv"

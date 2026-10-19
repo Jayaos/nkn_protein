@@ -75,6 +75,34 @@ within each task. Folds also run sequentially. The array parallelizes assays;
 no `--parallel` argument is needed. Limit concurrent GPU jobs with
 `sbatch --array=0-2%1 ...` for the default three-assay list.
 
+After each CUDA fold returns, the CV runner collects garbage and calls
+`torch.cuda.empty_cache()` on that fold's device. This releases unused cached
+segments before the next fold allocates differently sized matrices. Cleanup
+also runs after the final fold and when memory logging is disabled; live input
+tensors remain allocated. It does not run inside the optimizer loop.
+
+The memory diagnostic launcher targets `HMDH_HUMAN_Jiang_2019` on an A100 80 GB.
+Its `cuda_memory.jsonl` records `fold_returned` before cleanup and
+`fold_cleanup_complete` afterward. Large reserved memory alone is normal caching;
+low allocated memory between folds followed by growing `inactive_split` memory
+and an OOM on a larger fold points to allocator fragmentation.
+
+For that case, enable expandable allocator segments before Python starts.
+The launchers preserve the submitted allocator configuration. For example:
+
+~~~bash
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True sbatch \
+  sbatch_run/run_nkn/run_nkn_gpu_memory_diagnostic.sbatch \
+  cuda_memory_fix singles_random
+~~~
+
+Compare the two boundary samples: reserved memory should drop after cleanup,
+while allocated memory should stay near the shared input footprint. Peaks still
+cover the whole setting. Cache cleanup cannot reduce memory held by live tensors
+or guarantee that a fold whose working set exceeds VRAM will fit. See
+[PyTorch 2.5.1 CUDA memory management](https://github.com/pytorch/pytorch/blob/v2.5.1/docs/source/notes/cuda.rst#memory-management)
+for allocator behavior and the experimental `expandable_segments` option.
+
 Each task requests one A100, 8 CPUs, 64 GB host memory, and two hours. The
 existing account, QoS, conda environment, four-branch preset, initial noise 1.0,
 float64 precision, and training limits are retained, subject to assay-specific

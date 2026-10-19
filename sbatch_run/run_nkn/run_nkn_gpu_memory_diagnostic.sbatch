@@ -23,7 +23,7 @@
 # Settings and folds run sequentially on one GPU per task.
 # Default min-steps=100 matches the failing run; other training defaults use the preset.
 # Log CUDA memory at steps 0, 100, 200, ... and around each fold.
-# Allocator/cache behavior is inherited unchanged to observe the failure.
+# Allocator settings are inherited; the CV runner clears unused cache after each fold.
 # JSONL memory records and the failure allocator summary go under the run output.
 # Step samples are after the objective, before backward; peaks are per setting.
 # Cholesky is the default; --gp-computation-backend bbmm applies to training and prediction.
@@ -88,7 +88,10 @@ This launcher uses real prepared inputs and CUDA; missing assets fail explicitly
 Memory logs: stdout and <run>/cuda_memory.jsonl.
 Failure details: <run>/cuda_memory_failure.txt and <run>/failure.json.
 Samples include fold_returned, after the fold function has released its local scope.
-The diagnostic does not force garbage collection, empty the cache, or change allocator settings.
+The CV runner then collects garbage and empties unused CUDA cache after each fold.
+fold_cleanup_complete records memory after cleanup, before the next fold starts.
+The logger itself is passive; allocator settings are inherited from the environment.
+For changing fold sizes, submit with PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True.
 Peaks cover the current setting; step samples are before backward.
 Output root precedence: --output-root PATH, NKN_OUTPUT_ROOT, then results/.
 Relative output roots are resolved from the repository root.
