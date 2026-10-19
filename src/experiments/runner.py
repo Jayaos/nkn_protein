@@ -391,17 +391,25 @@ def _run_fold(
                                                 as_tuple=False).flatten())
         fitted = _fit_with_failure_artifacts(training, config, fold_output, callback, fit_function,
                                              held_out=held_out, validation=validation)
+        if callback is not None:
+            callback({"event": "fold_training_complete"})
         if cancelled is not None and cancelled.is_set():
             raise CancelledError("Fold cancelled after another fold failed or the parent stopped")
         phase = "checkpoint"
         _save_fit(fitted, fold_output, training.num_variants)
         phase = "prediction"
+        if callback is not None:
+            callback({"event": "fold_prediction_start"})
         prediction = fitted.predict(test)
+        if callback is not None:
+            callback({"event": "fold_prediction_complete"})
         rows = _prediction_rows(test, prediction, fitted, fold)
         _write_csv(fold_output / "predictions.csv", rows)
         phase = "evaluation"
         metrics = _evaluate_settings(test, prediction, config, rows, setting, fold)
         _write_json(fold_output / "metrics.json", metrics)
+        if callback is not None:
+            callback({"event": "fold_evaluation_complete"})
         return rows, metrics
     except CancelledError as error:
         _write_json(fold_output / "cancelled.json", {"phase": phase, "error": str(error)})
@@ -628,9 +636,13 @@ def run_cv(
         )
     by_variant: dict[str, dict[str, Any]] = {}
     fold_metrics = []
-    for rows, metrics in fold_results:
+    for result_index, (rows, metrics) in enumerate(fold_results):
         fold_metrics.append(metrics)
         by_variant.update({row["variant_id"]: row for row in rows})
+        if fold_workers == 1 and progress is not None:
+            # _run_fold has returned: its model, predictions, and local tensors
+            # are now out of scope. Observe natural release without forcing GC.
+            progress({"event": "fold_returned", "fold": fold_ids[result_index]})
 
     ordered_rows = [by_variant[variant_id] for variant_id in batch.variant_ids]
     _write_csv(output / "predictions.csv", ordered_rows)

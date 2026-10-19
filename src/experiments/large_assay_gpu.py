@@ -14,6 +14,7 @@ import torch
 
 from config import ExperimentConfig
 from data_loading import load_feature_bundle, load_folds, validate_assay_coverage
+from experiments.cuda_memory import CudaMemoryLogger
 from experiments.runner import _validate_fold_assignments, run_cv
 from experiments.settings import select_setting_batch
 from gp.inference import add_inference_arguments, inference_metadata, resolve_training_config
@@ -38,6 +39,8 @@ def _parser():
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--min-steps", type=int)
     parser.add_argument("--log-every", type=int, default=10)
+    parser.add_argument("--cuda-memory-every", type=int, default=0,
+                        help="Report CUDA memory every N steps and at fold boundaries (0 disables)")
     parser.add_argument("--features", type=Path,
                         help="Prepared feature directory; defaults to data/features/pretrained/singles/ASSAY")
     parser.add_argument("--folds", type=Path,
@@ -57,6 +60,7 @@ def main(argv=None):
         args.folds = (ROOT / "data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions"
                       / f"{assay}.csv")
     output_created = False
+    memory_logger = None
     try:
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is unavailable; use CUDA-enabled PyTorch in a GPU allocation")
@@ -64,6 +68,8 @@ def main(argv=None):
             raise ValueError(f"Output directory already exists: {args.output}")
         if args.log_every < 1:
             raise ValueError("log-every must be positive")
+        if args.cuda_memory_every < 0:
+            raise ValueError("cuda-memory-every must be nonnegative")
         base = ExperimentConfig.load(args.config).for_assay(assay)
         config = replace(base, device="cuda", num_threads=args.num_threads,
                          training=resolve_training_config(base.training, args))
@@ -97,6 +103,12 @@ def main(argv=None):
         settings = SETTINGS if args.selection == "singles" else (args.selection,)
         args.output.mkdir(parents=True, exist_ok=False)
         output_created = True
+        if args.cuda_memory_every:
+            memory_logger = CudaMemoryLogger(args.output, args.cuda_memory_every, torch.cuda)
+            print(f"CUDA memory: every {args.cuda_memory_every} steps and at fold boundaries; "
+                  f"allocator={memory_logger.allocator}; "
+                  f"PYTORCH_CUDA_ALLOC_CONF={memory_logger.allocator_config or '(unset)'}", flush=True)
+            memory_logger.record("run_start")
         _write_json(args.output / "config.json", config.to_dict())
         print("[2/3] Snapshotting and validating published folds", flush=True)
         fold_dir = args.output / "folds"
@@ -142,12 +154,16 @@ def main(argv=None):
             print(f"[3/3] Running {len(fold_ids[setting])}-fold NKN/GP CV on CUDA: {setting}", flush=True)
             torch.cuda.synchronize()
             torch.cuda.reset_peak_memory_stats()
+            if memory_logger is not None:
+                memory_logger.progress(setting, {"event": "setting_start"})
             started = time.perf_counter()
             with (args.output / f"{setting}.progress.jsonl").open("x", encoding="utf-8") as handle:
                 def progress(event):
                     elapsed = time.perf_counter() - started
                     handle.write(json.dumps({**event, "elapsed_seconds": elapsed}) + "\n")
                     handle.flush()
+                    if memory_logger is not None:
+                        memory_logger.progress(setting, event)
                     if event.get("event") == "fold_start":
                         print(f"Fold {event['fold']}: {event['n_train']} training, "
                               f"{event.get('n_validation', 0)} validation, "
@@ -162,6 +178,8 @@ def main(argv=None):
                     split_source="provided", fold_workers=1, progress=progress,
                 )
             torch.cuda.synchronize()
+            if memory_logger is not None:
+                memory_logger.progress(setting, {"event": "setting_complete"})
             timing = {
                 "cv_seconds": time.perf_counter() - started,
                 "peak_cuda_allocated_bytes": torch.cuda.max_memory_allocated(),
@@ -173,6 +191,8 @@ def main(argv=None):
         print(f"Completed. Results: {args.output}", flush=True)
         return 0
     except (OSError, ValueError, RuntimeError, AssertionError, KeyError, TypeError) as error:
+        if memory_logger is not None:
+            memory_logger.failure()
         if output_created:
             _write_json(args.output / "failure.json", {
                 "error": str(error), "traceback": traceback.format_exc(),
