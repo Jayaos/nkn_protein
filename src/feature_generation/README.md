@@ -263,20 +263,28 @@ absence of a report is not a successful verification.
 
 #### Overall verification summary
 
-Submit the CPU-only summary job from the repository root:
+To run verification for every catalog assay and then summarize automatically,
+submit from the repository root:
 
 ```bash
 sbatch sbatch_run/run_prepare_rep/summarize_msa_verification.sbatch
 ```
 
-This summarizes the latest available run for each assay. Append `--job-id ID`
-to restrict it to one verification array. To run automatically after that array
-finishes, including when some tasks fail:
+The launcher snapshots the reference CSV, counts its rows, submits the full
+verification array (four concurrent tasks by default), and schedules a summary
+with an `afterany` dependency. This includes failed tasks in the final accounting
+and selects only reports from the new array. It prints both job IDs and the
+summary output directory. Use `--reference-csv PATH` or `--max-concurrent N`
+to override the catalog or concurrency. Each submission starts new verification
+work, even if older reports exist.
+
+To summarize existing results without launching verification, use
+`--summary-only`. For example, wait for an already submitted array:
 
 ```bash
 sbatch --dependency=afterany:YOUR_ARRAY_JOB_ID \
   sbatch_run/run_prepare_rep/summarize_msa_verification.sbatch \
-  --job-id YOUR_ARRAY_JOB_ID
+  --summary-only --job-id YOUR_ARRAY_JOB_ID
 ```
 
 The summary job requests one CPU, 2 GB RAM, and ten minutes. It reuses
