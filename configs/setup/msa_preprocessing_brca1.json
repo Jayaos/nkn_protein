@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "assay_id": "BRCA1_HUMAN_Findlay_2018",
-  "reference_csv": "data/DMS_substitutions.csv",
+  "reference_csv": "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv",
   "msa_folder": "data/msa/DMS_msa_files",
   "weights_folder": "data/msa/DMS_msa_weights",
   "specialized_weights_subfolder": "DMS_msa_weights_for_MSA_Transformer",

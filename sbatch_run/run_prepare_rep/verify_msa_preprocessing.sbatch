@@ -11,6 +11,7 @@
 
 # CPU-only BRCA1 pilot. Requires the manually installed step-1 environment.
 # Submit from the repository or a subdirectory. No checkpoint inference is run.
+# Optional: sbatch .../verify_msa_preprocessing.sbatch --reference-csv /path/to/DMS_substitutions.csv
 set -eo pipefail
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
 while [[ ! -f "$project_root/env_msa_transformer.yaml" ]]; do
@@ -36,4 +37,4 @@ export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 export NUMBA_NUM_THREADS="$OMP_NUM_THREADS"
 python -u "$project_root/sbatch_run/run_prepare_rep/verify_msa_preprocessing.py" \
   --config "$project_root/configs/setup/msa_preprocessing_brca1.json" \
-  --cpus "$OMP_NUM_THREADS"
+  --cpus "$OMP_NUM_THREADS" "$@"

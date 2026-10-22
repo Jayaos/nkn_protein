@@ -72,8 +72,29 @@ def write_alignment(path, rows):
             handle.write(f"{name}\n{sequence}\n")
 
 
-def load_inputs(config):
-    reference = PROJECT_ROOT / config["reference_csv"]
+def resolve_reference(configured, override=None):
+    requested = PROJECT_ROOT / (override if override is not None else configured)
+    if requested.is_file():
+        return requested.resolve()
+    candidates = [PROJECT_ROOT / "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv",
+                  PROJECT_ROOT / "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv",
+                  PROJECT_ROOT / "data/DMS_substitutions.csv"]
+    # An explicit CLI path must not silently select a different dataset.
+    existing = [path for path in candidates if path.is_file()] if override is None else []
+    if existing:
+        if len({sha256(path) for path in existing}) != 1:
+            raise ValueError("Multiple different reference CSVs found; select one with --reference-csv PATH: "
+                             + ", ".join(str(path) for path in existing))
+        print(f"Configured reference missing; using {existing[0]}", flush=True)
+        return existing[0].resolve()
+    checked = [requested] if override is not None else list(dict.fromkeys([requested, *candidates]))
+    raise FileNotFoundError("Assay reference CSV not found. Checked:\n  "
+                            + "\n  ".join(str(path) for path in checked)
+                            + "\nSync the reference CSV to Phoenix or pass --reference-csv PATH.")
+
+
+def load_inputs(config, reference_csv=None):
+    reference = resolve_reference(config["reference_csv"], reference_csv)
     with reference.open(newline="", encoding="utf-8-sig") as handle:
         matches = [row for row in csv.DictReader(handle) if row["DMS_id"] == config["assay_id"]]
     if len(matches) != 1:
@@ -184,10 +205,10 @@ def check_runtime(runtime):
     return MSA_processing, hhfilter, source, installed
 
 
-def run_verification(config_path, cpus):
+def run_verification(config_path, cpus, reference_csv=None):
     config = json.loads(config_path.read_text(encoding="utf-8"))
     runtime = json.loads(RUNTIME_CONFIG.read_text(encoding="utf-8"))
-    metadata, paths, raw, normalized = load_inputs(config)
+    metadata, paths, raw, normalized = load_inputs(config, reference_csv)
     # This pilot uses all query residue columns. Other column recipes require
     # explicit coordinate handling before they can be verified by this script.
     if config["msa_processing"]["threshold_focus_cols_frac_gaps"] != 1.0:
@@ -288,10 +309,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "configs/setup/msa_preprocessing_brca1.json")
     parser.add_argument("--cpus", type=int, default=1)
+    parser.add_argument("--reference-csv", type=Path,
+                        help="Reference CSV override; relative paths resolve from the repository root")
     args = parser.parse_args()
     if args.cpus < 1:
         parser.error("--cpus must be positive")
-    report = run_verification(args.config.resolve(), args.cpus)
+    report = run_verification(args.config.resolve(), args.cpus, args.reference_csv)
     print(f"Result: {report['status']}. Historical row identity remains unverified.", flush=True)
     return 0 if report["status"] == "weights_reproduced" else 2
 

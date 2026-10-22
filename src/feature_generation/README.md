@@ -177,7 +177,20 @@ sbatch sbatch_run/run_prepare_rep/verify_msa_preprocessing.sbatch
 ```
 
 The pilot uses `configs/setup/msa_preprocessing_brca1.json` and the
-`BRCA1_HUMAN_Findlay_2018` row in `data/DMS_substitutions.csv`. It checks that
+`BRCA1_HUMAN_Findlay_2018` row in
+`data/DMS_ProteinGym_substitutions/DMS_substitutions.csv`.
+If the configured reference is missing, it checks this location, the older
+`data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv`, and
+`data/DMS_substitutions.csv`; conflicting fallback copies require an explicit
+selection. To use a different location, submit:
+
+```bash
+sbatch sbatch_run/run_prepare_rep/verify_msa_preprocessing.sbatch \
+  --reference-csv /path/to/DMS_substitutions.csv
+```
+
+An explicit path must exist; the report records the resolved path and file hash.
+The pilot checks that
 the alignment query matches the reference interval, normalizes dots to gaps
 and uppercases the input (including headers, following the upstream procedure),
 then runs HHfilter 3.3.0 with coverage 75, maximum pairwise identity 90, and
@@ -825,6 +838,40 @@ The default `max_length=1022` is an operational guard, not a ProSST architecture
 limit. Extraction never crops structures or sequences. Increase the batching budget
 if one sequence plus its two special tokens exceeds `max_tokens_per_batch`.
 This initial ProSST recipe uses float32 inference and output only.
+
+### ProSST Slurm preparation pilot
+
+[`prepare_prosst.sbatch`](../../sbatch_run/run_prepare_rep/prepare_prosst.sbatch)
+prepares all single substitutions for `FKBP3_HUMAN_Tsuboyama_2023_2KFV` using
+ProSST's **K=2048 structure vocabulary**. This launcher is scoped to that human
+protein; its task selection does not expand to the complete ProteinGym catalog.
+
+```bash
+sbatch sbatch_run/run_prepare_rep/prepare_prosst.sbatch
+```
+
+The job follows the ESM2 launcher's repository discovery, `nkn_protein` Conda
+activation, and V100/16 GiB host-memory allocation. Its separate
+[`prosst_2048_singles.json`](../../configs/extraction/prosst_2048_singles.json)
+preset writes to `data/features/pretrained/singles`, preserving the original
+ProSST preset's output location. It uses a 2,048-token batching budget, independent
+of K, and keeps the 1,022-residue and 4 GiB output guards.
+
+The job verifies or downloads the pinned model and quantizer, reuses a registered
+reference structure (or registers it from the pinned archive), generates structure
+tokens, extracts embeddings with `--resume` semantics, and validates the completed
+cache. A failed stage returns a nonzero job status. Shared downloads and duplicate
+FKBP3 preparations use filesystem locks. The structure must cover the complete
+reference with finite N/CA/C/O coordinates; fragments are unsupported.
+
+Use `--config PATH` or `PROSST_CONFIG=PATH` to override paths, layer, batching, or
+resource guards; `--config` takes precedence, and the target remains FKBP3.
+Relative config paths resolve from the repository root. A Slurm array is
+unnecessary; if supplied, only task `0` is accepted. Model assets and structure
+tokens are cached independently of the embedding output directory.
+
+The job prepares embeddings for `sequence_site` and `sequence_global`. GP mean
+scores remain independently configured; it does not produce ProSST mean scores.
 
 ## Notebook extraction and inspection
 

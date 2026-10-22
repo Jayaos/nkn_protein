@@ -24,6 +24,47 @@ verification = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(verification)
 
 
+class ReferenceResolutionTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.nested = self.root / "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv"
+        self.nested.parent.mkdir(parents=True)
+        self.nested.write_text("nested reference")
+        self.legacy = self.root / "data/DMS_substitutions.csv"
+        patcher = patch.object(verification, "PROJECT_ROOT", self.root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_missing_legacy_path_uses_existing_pipeline_reference(self):
+        self.assertEqual(verification.resolve_reference("data/DMS_substitutions.csv"), self.nested.resolve())
+
+    def test_existing_configured_file_takes_precedence(self):
+        self.legacy.write_text("different legacy reference")
+        self.assertEqual(verification.resolve_reference(self.legacy), self.legacy.resolve())
+
+    def test_missing_explicit_path_does_not_fall_back(self):
+        with self.assertRaisesRegex(FileNotFoundError, "Sync the reference CSV"):
+            verification.resolve_reference(self.nested, Path("wrong.csv"))
+
+    def test_explicit_override_wins(self):
+        self.legacy.write_text("explicit reference")
+        self.assertEqual(verification.resolve_reference(self.nested, self.legacy), self.legacy.resolve())
+
+    def test_conflicting_fallbacks_require_explicit_selection(self):
+        self.legacy.write_text("different legacy reference")
+        with self.assertRaisesRegex(ValueError, "Multiple different reference"):
+            verification.resolve_reference("missing.csv")
+
+    def test_missing_reference_reports_checked_locations(self):
+        self.nested.unlink()
+        with self.assertRaises(FileNotFoundError) as error:
+            verification.resolve_reference("missing.csv")
+        self.assertIn(str(self.nested), str(error.exception))
+        self.assertIn("--reference-csv PATH", str(error.exception))
+
+
 class WeightComparisonTests(unittest.TestCase):
     def compare(self, calculated, supplied):
         return verification.compare_weights(calculated, supplied, rtol=1e-10, atol=1e-12)

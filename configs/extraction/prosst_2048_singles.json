@@ -1,0 +1,19 @@
+{
+  "feature_type": "sequence",
+  "model_family": "prosst",
+  "model_id": "AI4Protein/ProSST-2048",
+  "revision": "e94ffee7846d7f55c1bf5efa8ec7372a336ac4b8",
+  "model_dir": "data/models/prosst",
+  "output_root": "data/features/pretrained/singles",
+  "assay_index": "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv",
+  "structure_manifest_dir": "data/structures/manifests",
+  "structure_token_dir": "data/structures/tokens/prosst",
+  "layer": 12,
+  "device": "auto",
+  "inference_dtype": "float32",
+  "output_dtype": "float32",
+  "max_length": 1022,
+  "max_tokens_per_batch": 2048,
+  "max_output_gib": 4.0,
+  "quantizer_batch_size": 32
+}
