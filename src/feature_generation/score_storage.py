@@ -17,7 +17,7 @@ from .inverse_storage import _resume_configs_match, _validate_assay
 from .storage import _assay_lock, _ensure_assay, _inside, _read_json, _write_json
 from .structure_inputs import validate_structure_metadata
 
-FAMILIES = ("proteinmpnn", "esm2")
+FAMILIES = ("proteinmpnn", "esm2", "prosst")
 SCORE_DESCRIPTOR = {"file": "mean_score.csv", "id_column": "variant_id", "score_column": "score"}
 
 
@@ -48,7 +48,7 @@ def make_score_config(
         "mean_score": dict(SCORE_DESCRIPTOR),
         "score_direction": "higher_is_more_likely",
     }
-    if model_family == "proteinmpnn":
+    if model_family in ("proteinmpnn", "prosst"):
         config["structure"] = structure_metadata
     elif structure_metadata is not None:
         raise ValueError("ESM2 mean scores do not use structure metadata")
@@ -68,6 +68,32 @@ def _validate_config(config: dict, model_family: str, cache_id: str) -> None:
     }
     if any(config.get(key) != value for key, value in expected.items()):
         raise ValueError("Score configuration does not match its cache directory or format")
+    if model_family == "prosst":
+        from .prosst_structure import validate_structure_token_metadata
+
+        recipe = {
+            "scoring_recipe_version": 1, "score_definition": "sum_masked_marginal_log_odds",
+            "conditioning_mode": "masked_wild_type_and_fixed_reference_structure",
+            "inference_method": "masked_marginals", "normalization": "model_vocabulary",
+            "output_dtype": "float32", "scoring_window": "full", "truncation": "reject",
+            "masking": "one_wild_type_residue_at_a_time", "structure_masking": "none",
+            "wild_type_subtraction": True, "residue_aggregation": "sum_over_mutations",
+            "alphabet": "ACDEFGHIKLMNPQRSTVWY", "precision_policy": "float32_log_softmax",
+        }
+        if any(type(config.get(key)) is not type(value) or config.get(key) != value
+               for key, value in recipe.items()):
+            raise ValueError("Unsupported ProSST mean-score recipe")
+        structure, tokens = config.get("structure"), config.get("structure_tokens")
+        if not isinstance(structure, dict) or not isinstance(tokens, dict):
+            raise ValueError("ProSST scores require structure and structure-token metadata")
+        validate_structure_metadata(structure, structure.get("reference_sequence"))
+        if any("O" not in row["backbone_atoms"] for row in structure["residue_mapping"]):
+            raise ValueError("ProSST scores require backbone oxygen at every residue")
+        validate_structure_token_metadata(tokens, structure)
+        if (config.get("structure_input_signature") != structure["input_signature"]
+            or config.get("structure_token_input_signature") != tokens["input_signature"]):
+            raise ValueError("ProSST score structure or structure-token identity mismatch")
+        return
     if model_family == "esm2":
         recipe = {
             "score_definition": "sum_masked_marginal_log_odds",
@@ -148,10 +174,13 @@ def _validate_provenance(provenance: dict, config: dict) -> None:
     if (
         not isinstance(provenance, dict)
         or provenance.get("uses_dms_labels") is not False
-        or (config["model_family"] == "proteinmpnn"
+        or (config["model_family"] in ("proteinmpnn", "prosst")
             and provenance.get("structure_input_signature") != config["structure"]["input_signature"])
     ):
         raise ValueError("Mean-score provenance mismatch")
+    if (config["model_family"] == "prosst" and
+        provenance.get("structure_token_input_signature") != config["structure_token_input_signature"]):
+        raise ValueError("ProSST score structure-token provenance mismatch")
 
 
 def check_existing(
@@ -164,7 +193,7 @@ def check_existing(
 ) -> bool:
     root = Path(root).resolve()
     _validate_config(config, model_family, cache_id)
-    if model_family == "proteinmpnn":
+    if model_family in ("proteinmpnn", "prosst"):
         validate_structure_metadata(config["structure"], inputs.reference_sequence)
     with _assay_lock(root):
         _ensure_assay(root, inputs)
@@ -191,7 +220,7 @@ def write_score_cache(
     """Publish complete scores in immutable variant order under a distinct leaf."""
     root = Path(root).resolve()
     _validate_config(config, model_family, cache_id)
-    if model_family == "proteinmpnn":
+    if model_family in ("proteinmpnn", "prosst"):
         validate_structure_metadata(config["structure"], inputs.reference_sequence)
     _validate_scores(scores, len(inputs.rows))
     _validate_provenance(provenance, config)
@@ -220,7 +249,7 @@ def write_score_cache(
             "config_signature": _signature(config),
             "files_sha256": files,
         }
-        if model_family == "proteinmpnn":
+        if model_family in ("proteinmpnn", "prosst"):
             completion["structure_input_signature"] = config["structure"]["input_signature"]
         _write_json(pending / "completion.json", completion)
         pending.rename(leaf)
@@ -271,11 +300,11 @@ def validate_score_cache(root: str | Path, model_family: str = "proteinmpnn", ca
         raise ValueError("Assay variant checksum mismatch")
     config = _read_json(_inside(leaf, "config.json"))
     _validate_config(config, model_family, cache_id)
-    if model_family == "proteinmpnn":
+    if model_family in ("proteinmpnn", "prosst"):
         validate_structure_metadata(config["structure"], metadata["reference_sequence"])
     if (
         completion.get("config_signature") != _signature(config)
-        or (model_family == "proteinmpnn"
+        or (model_family in ("proteinmpnn", "prosst")
             and completion.get("structure_input_signature") != config["structure"]["input_signature"])
     ):
         raise ValueError("Mean-score checkpoint, configuration, or structure identity mismatch")
@@ -306,6 +335,6 @@ def validate_score_cache(root: str | Path, model_family: str = "proteinmpnn", ca
         "input_signature": metadata["input_signature"],
         "config_signature": _signature(config),
     }
-    if model_family == "proteinmpnn":
+    if model_family in ("proteinmpnn", "prosst"):
         report["structure_input_signature"] = config["structure"]["input_signature"]
     return report

@@ -29,6 +29,20 @@ class ProSSTCLITests(unittest.TestCase):
             status = main([str(value) for value in arguments])
         return status, output.getvalue(), errors.getvalue()
 
+    def test_score_routes_prosst_config_and_structure_token_override(self):
+        with patch("feature_generation.score_runner.score", return_value=[{"status": "completed"}]) as scoring:
+            status, _, errors = self.invoke([
+                "score", "--config", self.config, "--assay", "tiny", "--singles-only", "--resume",
+                "--structure-token-dir", self.root / "score-tokens", "--max-tokens-per-batch", "512",
+            ])
+        self.assertEqual(status, 0, errors)
+        config, assays = scoring.call_args.args
+        self.assertIsInstance(config, ProSSTConfig)
+        self.assertEqual(assays, ["tiny"])
+        self.assertEqual(config.structure_token_dir, (self.root / "score-tokens").resolve())
+        self.assertTrue(scoring.call_args.kwargs["singles_only"])
+        self.assertTrue(scoring.call_args.kwargs["resume"])
+
     def test_download_selects_prosst_pinned_configuration_and_downloader(self):
         with patch("feature_generation.prosst_checkpoints.download", return_value=self.root / "checkpoint") as prosst, patch(
             "feature_generation.checkpoints.download"

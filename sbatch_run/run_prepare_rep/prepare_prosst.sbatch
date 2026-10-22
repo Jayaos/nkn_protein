@@ -11,7 +11,7 @@
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%A_%a.out
 
-# Prepare ProSST K=2048 single-substitution embeddings for every assay in the
+# Prepare ProSST K=2048 single-substitution embeddings and GP mean scores for every assay in the
 # configured DMS_substitutions.csv, in catalog order, without assay-count limits.
 # Requires the nkn_protein environment and catalog/variant CSV files.
 # Existing structures and completed matching caches are reused. Missing structures
@@ -145,7 +145,7 @@ print(f"Quantizer runtime: {_runtime_versions()}")
 PY
 
 if [[ "$model_ready" == 0 ]]; then
-printf '[1/4] Downloading/verifying ProSST model, tokenizer, and K=2048 quantizer\n'
+printf '[1/6] Downloading/verifying ProSST model, tokenizer, and K=2048 quantizer\n'
 python -u - "$config" <<'PY' || return $?
 import fcntl
 import sys
@@ -169,6 +169,8 @@ import sys
 from data_loading.catalog import AssayCatalog
 from feature_generation.prosst_config import ProSSTConfig
 from feature_generation.prosst_runner import extract
+from feature_generation.score_runner import score, default_cache_id
+from feature_generation.score_storage import validate_score_cache
 from feature_generation.storage import validate_sequence_cache
 from feature_generation.structure_inputs import download_proteingym_structure, load_structure
 
@@ -178,7 +180,7 @@ config.device = "cuda"
 config.structure_manifest_dir.mkdir(parents=True, exist_ok=True)
 with (config.structure_manifest_dir / f".{assay}.prosst.lock").open("a+b") as lock:
     fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-    print("[2/4] Preparing/verifying the full reference structure", flush=True)
+    print("[2/6] Preparing/verifying the full reference structure", flush=True)
     reference = AssayCatalog(config.assay_index).get(assay).reference_sequence
     manifest = config.structure_manifest_dir / f"{assay}.json"
     if not manifest.exists():
@@ -188,7 +190,7 @@ with (config.structure_manifest_dir / f".{assay}.prosst.lock").open("a+b") as lo
     load_structure(manifest, reference, require_oxygen=True)
     print(f"{assay}: structure verified: {manifest}", flush=True)
 
-    print("[3/4] Preparing structure tokens and extracting ProSST embeddings", flush=True)
+    print("[3/6] Preparing structure tokens and extracting ProSST embeddings", flush=True)
     from feature_generation.cli import _progress
 
     results = extract(config, [assay], singles_only=True, resume=True, progress=_progress)
@@ -196,10 +198,18 @@ with (config.structure_manifest_dir / f".{assay}.prosst.lock").open("a+b") as lo
         raise SystemExit(f"error: ProSST extraction did not complete: {results}")
     print(f"Extraction: {results[0]['status']}", flush=True)
 
-    print("[4/4] Validating the ProSST embedding cache", flush=True)
+    print("[4/6] Validating the ProSST embedding cache", flush=True)
     report = validate_sequence_cache(config.output_root / assay, config.cache_id, model_family="prosst")
     print(f"Validated {report['num_variants']} variants; embedding dimension: {report['embedding_dim']}")
     print(f"Cache: {report['path']}")
+
+    print("[5/6] Preparing ProSST masked-marginal GP mean scores", flush=True)
+    results = score(config, [assay], singles_only=True, resume=True, progress=_progress)
+    if len(results) != 1 or results[0].get("status") not in ("completed", "skipped"):
+        raise SystemExit(f"error: ProSST scoring did not complete: {results}")
+    print("[6/6] Validating the ProSST mean-score cache", flush=True)
+    report = validate_score_cache(config.output_root / assay, "prosst", default_cache_id(config))
+    print(f"Validated {report['num_variants']} scores; cache: {report['path']}")
 PY
 }
 

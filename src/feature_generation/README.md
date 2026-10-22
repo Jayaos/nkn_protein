@@ -839,39 +839,65 @@ limit. Extraction never crops structures or sequences. Increase the batching bud
 if one sequence plus its two special tokens exceeds `max_tokens_per_batch`.
 This initial ProSST recipe uses float32 inference and output only.
 
-### ProSST Slurm preparation pilot
+### ProSST Slurm preparation and GP mean scores
 
 [`prepare_prosst.sbatch`](../../sbatch_run/run_prepare_rep/prepare_prosst.sbatch)
-prepares all single substitutions for `FKBP3_HUMAN_Tsuboyama_2023_2KFV` using
-ProSST's **K=2048 structure vocabulary**. This launcher is scoped to that human
-protein; its task selection does not expand to the complete ProteinGym catalog.
+prepares single-substitution embeddings and GP mean scores for every assay in the
+configured `DMS_substitutions.csv`, in catalog order. It uses ProSST's K=2048
+structure vocabulary. Without an array it runs sequentially; `--array=0-(N-1)`
+selects one assay per task. Obtain N with `list_assays.py --config <preset> --count`.
 
 ```bash
 sbatch sbatch_run/run_prepare_rep/prepare_prosst.sbatch
 ```
 
-The job follows the ESM2 launcher's repository discovery, `nkn_protein` Conda
-activation, and V100/16 GiB host-memory allocation. Its separate
-[`prosst_2048_singles.json`](../../configs/extraction/prosst_2048_singles.json)
-preset writes to `data/features/pretrained/singles`, preserving the original
-ProSST preset's output location. It uses a 2,048-token batching budget, independent
-of K, and keeps the 1,022-residue and 4 GiB output guards.
+The job uses the `nkn_protein` Conda environment and a V100/16 GiB allocation.
+The [`prosst_2048_singles.json`](../../configs/extraction/prosst_2048_singles.json)
+preset writes to `data/features/pretrained/singles`. It keeps the 2,048-token
+batching budget, 1,022-residue guard, and 4 GiB embedding-output guard. Failed
+assays are reported and later assays are attempted; any failure makes the job
+exit nonzero. The job verifies both embedding and score caches. Shared downloads
+and duplicate assay preparations use filesystem locks.
 
-The job verifies or downloads the pinned model and quantizer, reuses a registered
-reference structure (or registers it from the pinned archive), generates structure
-tokens, extracts embeddings with `--resume` semantics, and validates the completed
-cache. A failed stage returns a nonzero job status. Shared downloads and duplicate
-FKBP3 preparations use filesystem locks. The structure must cover the complete
-reference with finite N/CA/C/O coordinates; fragments are unsupported.
-
+The job reuses registered structures or downloads them from the pinned archive.
+Structures must cover the full reference with finite N/CA/C/O coordinates.
 Use `--config PATH` or `PROSST_CONFIG=PATH` to override paths, layer, batching, or
-resource guards; `--config` takes precedence, and the target remains FKBP3.
-Relative config paths resolve from the repository root. A Slurm array is
-unnecessary; if supplied, only task `0` is accepted. Model assets and structure
-tokens are cached independently of the embedding output directory.
+resource guards; `--config` takes precedence. Relative paths use the repository
+root. Model assets and structure tokens are cached separately from embeddings.
 
-The job prepares embeddings for `sequence_site` and `sequence_global`. GP mean
-scores remain independently configured; it does not produce ProSST mean scores.
+ProSST scoring uses the same masked-marginal formula as ESM2: for each mutated
+position, mask that WT amino acid, retain all fixed reference structure tokens,
+and subtract the WT log probability from the mutant log probability. Sum these
+contributions for multi-substitution variants; WT scores are zero. This is a
+model log-odds score, not a calibrated fitness prediction. Scoring uses full
+reference context, float32 log-softmax over the model vocabulary, and no DMS
+labels. It does not crop structures or use ESM2's centered windows.
+
+After preparing structures, scores can also be generated independently:
+
+```bash
+python -m feature_generation.cli score \
+  --config configs/extraction/prosst_2048_singles.json \
+  --all-assays --singles-only --device cuda --resume --continue-on-error
+```
+
+Each assay gets a separate score leaf:
+
+```text
+data/features/pretrained/singles/<assay>/scores/prosst/
+  ProSST-2048-masked_marginals-fixed-backbone-float32-e94ffee7846d/
+    mean_score.csv
+    config.json
+    provenance.json
+    completion.json
+```
+
+`mean_score.csv` contains `variant_id,score`. To use it for the GP mean, set
+`score_sources` to
+`["scores/prosst/ProSST-2048-masked_marginals-fixed-backbone-float32-e94ffee7846d"]`.
+Embedding selection remains independent. The score recipe does not depend on the
+embedding layer; resume verifies checkpoint, variant coverage, structure and
+structure-token identities, and file checksums.
 
 ## Notebook extraction and inspection
 

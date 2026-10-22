@@ -1,4 +1,4 @@
-"""Prepare variant-level GP mean scores with frozen ProteinMPNN or ESM2 inference."""
+"""Prepare variant-level GP mean scores with frozen ProteinMPNN, ESM2, or ProSST inference."""
 
 from __future__ import annotations
 
@@ -11,12 +11,13 @@ import torch
 from .config import ExtractionConfig
 from .inputs import prepare_assay, safe_component
 from .inverse_config import InverseFoldingConfig
+from .prosst_config import ProSSTConfig
 from .score_storage import check_existing, make_score_config, write_score_cache
 from .storage import ensure_assay
 from .structure_inputs import load_structure
 
 
-def default_cache_id(config: InverseFoldingConfig | ExtractionConfig, num_orders: int = 1) -> str:
+def default_cache_id(config: InverseFoldingConfig | ExtractionConfig | ProSSTConfig, num_orders: int = 1) -> str:
     """Keep score recipes independent of representation-layer/cache selections."""
     family = getattr(config, "model_family", "esm2")
     if family == "esm2":
@@ -27,8 +28,10 @@ def default_cache_id(config: InverseFoldingConfig | ExtractionConfig, num_orders
         if config.scoring_window == "centered":
             cache_id += f"-centered{config.max_length}"
         return cache_id
+    if family == "prosst":
+        return f"ProSST-2048-masked_marginals-fixed-backbone-{config.inference_dtype}-{config.revision[:12]}"
     if family != "proteinmpnn":
-        raise ValueError("Mean scoring currently supports only ProteinMPNN and ESM2")
+        raise ValueError("Mean scoring currently supports ProteinMPNN, ESM2, and ProSST")
     return (
         f"{config.model_id.split('/')[-1]}-sequence_log_likelihood-"
         f"orders{num_orders}-seed{config.seed}-{config.revision[:12]}"
@@ -36,7 +39,7 @@ def default_cache_id(config: InverseFoldingConfig | ExtractionConfig, num_orders
 
 
 def score(
-    config: InverseFoldingConfig | ExtractionConfig,
+    config: InverseFoldingConfig | ExtractionConfig | ProSSTConfig,
     assay_ids: Sequence[str],
     *,
     batch_size: int = 8,
@@ -48,6 +51,7 @@ def score(
     continue_on_error: bool = False,
     progress: Callable[[dict], None] | None = None,
     adapter_factory=None,
+    token_factory=None,
 ) -> list[dict]:
     """Score variants with the selected pretrained recipe, without labels.
 
@@ -55,19 +59,20 @@ def score(
     ESM2 evaluates masked WT positions and sums mutation log-odds, optionally
     using centered WT windows for long references. The extraction config supplies
     checkpoint, paths and scoring_window; embedding layer selections are ignored.
+    ProSST uses full masked WT context and fixed reference structure tokens.
     Scoring has a separate cache identity and never edits representation leaves.
     """
     family = getattr(config, "model_family", "esm2")
-    if family not in ("proteinmpnn", "esm2"):
-        raise ValueError("Mean scoring currently supports only ProteinMPNN and ESM2")
+    if family not in ("proteinmpnn", "esm2", "prosst"):
+        raise ValueError("Mean scoring currently supports ProteinMPNN, ESM2, and ProSST")
     centered = family == "esm2" and config.scoring_window == "centered"
     if not assay_ids or len(set(assay_ids)) != len(assay_ids):
         raise ValueError("Select at least one unique assay")
     for name, value in (("batch_size", batch_size), ("num_orders", num_orders)):
         if type(value) is not int or value < 1:
             raise ValueError(f"{name} must be a positive integer")
-    if family == "esm2" and num_orders != 1:
-        raise ValueError("num_orders does not apply to ESM2 masked-marginal scoring")
+    if family in ("esm2", "prosst") and num_orders != 1:
+        raise ValueError("num_orders does not apply to masked-marginal scoring")
     if limit is not None and (type(limit) is not int or limit < 1):
         raise ValueError("limit must be a positive integer")
     cache_id = default_cache_id(config, num_orders) if cache_id is None else cache_id
@@ -77,10 +82,18 @@ def score(
             from .adapters.proteinmpnn import ProteinMPNNAdapter
 
             adapter_factory = ProteinMPNNAdapter
+        elif family == "prosst":
+            from .adapters.prosst_scoring import ProSSTScoreAdapter
+
+            adapter_factory = ProSSTScoreAdapter
         else:
             from .adapters.esm2_scoring import ESM2ScoreAdapter
 
             adapter_factory = ESM2ScoreAdapter
+    if family == "prosst" and token_factory is None:
+        from .prosst_structure import prepare_structure_tokens
+
+        token_factory = prepare_structure_tokens
     adapter = adapter_factory(config)
     loaded = False
     model_metadata = None
@@ -101,23 +114,41 @@ def score(
                     "structures and sequences are never truncated"
                 )
             structure = None
-            if family == "proteinmpnn":
+            if family in ("proteinmpnn", "prosst"):
                 manifest_root = config.structure_manifest_dir.resolve()
                 manifest_path = (manifest_root / f"{assay_id}.json").resolve()
                 if not manifest_path.is_relative_to(manifest_root):
                     raise ValueError("Structure manifest path escapes structure_manifest_dir")
                 structure = load_structure(manifest_path, inputs.reference_sequence, require_oxygen=True)
-            elif (min(inputs.length, config.max_length) if centered else inputs.length) + 2 > config.max_tokens_per_batch:
+            if family != "proteinmpnn" and (min(inputs.length, config.max_length) if centered else inputs.length) + 2 > config.max_tokens_per_batch:
                 raise ValueError("One sequence exceeds max_tokens_per_batch, including BOS/EOS tokens")
             if model_metadata is None:
                 model_metadata = (adapter.score_metadata(num_orders=num_orders) if family == "proteinmpnn"
                                   else adapter.score_metadata())
-            leaf_config = make_score_config(cache_id, family, model_metadata,
-                                            structure.metadata if structure is not None else None)
             root = (config.output_root / assay_id).resolve()
             if not root.is_relative_to(config.output_root.resolve()):
                 raise ValueError("Assay path escapes output_root")
             ensure_assay(root, inputs)
+            assay_metadata = dict(model_metadata)
+            if family == "prosst":
+                from .prosst_structure import token_ids_sha256
+
+                structure_tokens = token_factory(config, structure)
+                tokens = structure_tokens.tokens
+                if (not isinstance(tokens, torch.Tensor) or tokens.device.type != "cpu"
+                    or tokens.dtype != torch.long or tuple(tokens.shape) != (inputs.length,)
+                    or (tokens < 0).any() or (tokens >= 2048).any()):
+                    raise ValueError("ProSST structure tokens must be CPU int64 [L] with IDs in 0..2047")
+                if (structure_tokens.input_signature != structure_tokens.metadata.get("input_signature")
+                    or token_ids_sha256(tokens) != structure_tokens.metadata.get("token_ids_sha256")):
+                    raise ValueError("ProSST structure-token identity or checksum mismatch")
+                assay_metadata.update(
+                    structure_input_signature=structure.input_signature,
+                    structure_tokens=structure_tokens.metadata,
+                    structure_token_input_signature=structure_tokens.input_signature,
+                )
+            leaf_config = make_score_config(cache_id, family, assay_metadata,
+                                            structure.metadata if structure is not None else None)
             n = len(inputs.variant_ids)
             source = f"scores/{family}/{cache_id}"
             if check_existing(root, family, cache_id, inputs, leaf_config, resume=resume):
@@ -143,6 +174,8 @@ def score(
             if not loaded:
                 adapter.load()
                 loaded = True
+            if family == "prosst":
+                adapter.set_structure_tokens(structure_tokens.tokens)
             scores = torch.empty(n, dtype=torch.float32)
             seen = torch.zeros(n, dtype=torch.bool)
             with torch.inference_mode():
@@ -185,7 +218,10 @@ def score(
                     structure_manifest=str(manifest_path), structure_sha256=structure.structure_sha256,
                     structure_input_signature=structure.input_signature,
                 )
-            else:
+            if family == "prosst":
+                provenance.update(structure_token_cache=str(structure_tokens.path),
+                                  structure_token_input_signature=structure_tokens.input_signature)
+            if family != "proteinmpnn":
                 provenance["max_tokens_per_batch"] = config.max_tokens_per_batch
                 provenance["num_masked_positions"] = event["num_masked_positions"]
             leaf = write_score_cache(root, family, cache_id, inputs, leaf_config, scores, provenance)

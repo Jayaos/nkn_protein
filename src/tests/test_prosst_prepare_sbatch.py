@@ -136,6 +136,16 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
                 record('validate', path=str(path), cache_id=cache_id, model_family=model_family)
                 return {'path': str(path), 'num_variants': 1, 'embedding_dim': 768}
 
+            def score(config, assays, *, singles_only, resume, progress):
+                require_lock()
+                record('score', assays=assays, singles_only=singles_only, resume=resume)
+                return [{'status': os.environ.get('TEST_SCORE_STATUS', 'completed')}]
+
+            def validate_scores(path, model_family, cache_id):
+                require_lock()
+                record('validate-scores', path=str(path), model_family=model_family, cache_id=cache_id)
+                return {'path': str(path), 'num_variants': 1}
+
             def module(name, **attributes):
                 stub = ModuleType(name)
                 stub.__dict__.update(attributes)
@@ -153,6 +163,8 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
             module('feature_generation.structure_inputs',
                    download_proteingym_structure=download_structure, load_structure=load_structure)
             module('feature_generation.prosst_runner', extract=extract)
+            module('feature_generation.score_runner', score=score, default_cache_id=lambda config: 'score-recipe')
+            module('feature_generation.score_storage', validate_score_cache=validate_scores)
             module('feature_generation.storage', validate_sequence_cache=validate)
             module('feature_generation.cli', _progress=lambda event: None)
             sys.argv = args
@@ -163,7 +175,7 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
         self.records.unlink(missing_ok=True)
         env = os.environ.copy()
         for name in ("PROSST_CONFIG", "SLURM_ARRAY_TASK_ID", "TEST_FAIL_STAGE",
-                     "TEST_NO_CUDA", "TEST_EXTRACT_STATUS", "TEST_FAIL_ASSAY"):
+                     "TEST_NO_CUDA", "TEST_EXTRACT_STATUS", "TEST_FAIL_ASSAY", "TEST_SCORE_STATUS"):
             env.pop(name, None)
         env.update(BASH_ENV=self.bootstrap.as_posix(), TEST_ROOT=self.root.as_posix(),
                    TEST_PYTHON=Path(sys.executable).as_posix(),
@@ -179,7 +191,8 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         stages = [r['kind'] for r in records]
         self.assertEqual(stages, ['inputs', 'runtime', 'lock', 'download', 'lock',
-                                  'structure-download', 'structure-verify', 'extract', 'validate'])
+                                  'structure-download', 'structure-verify', 'extract', 'validate',
+                                  'score', 'validate-scores'])
         extraction = next(r for r in records if r['kind'] == 'extract')
         self.assertEqual(extraction['assays'], [ASSAY])
         self.assertTrue(extraction['singles_only'])
@@ -187,7 +200,7 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
         self.assertEqual(extraction['device'], 'cuda')
         self.assertEqual(Path(extraction['output_root']), self.root / 'data/features/pretrained/singles')
         self.assertEqual(extraction['layer'], 12)
-        validation = records[-1]
+        validation = next(r for r in records if r['kind'] == 'validate')
         self.assertEqual(validation['cache_id'], extraction['cache_id'])
         self.assertEqual(validation['model_family'], 'prosst')
         self.assertEqual(Path(validation['path']), Path(extraction['output_root']) / ASSAY)
@@ -220,7 +233,7 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
                 self.assertEqual(manifest.read_text(), 'registered structure')
 
     def test_stage_failures_stop_later_stages_and_return_nonzero(self):
-        order = ['runtime', 'download', 'structure-verify', 'extract', 'validate']
+        order = ['runtime', 'download', 'structure-verify', 'extract', 'validate', 'score', 'validate-scores']
         for index, stage in enumerate(order):
             with self.subTest(stage=stage):
                 result, records = self.invoke(environment={'TEST_FAIL_STAGE': stage})
@@ -232,7 +245,7 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
     def test_resumed_cache_is_still_validated_and_failed_result_is_not(self):
         result, records = self.invoke(environment={'TEST_EXTRACT_STATUS': 'skipped'})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(records[-1]['kind'], 'validate')
+        self.assertEqual(records[-1]['kind'], 'validate-scores')
         result, records = self.invoke(environment={'TEST_EXTRACT_STATUS': 'failed'})
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn('validate', [r['kind'] for r in records])
@@ -293,9 +306,15 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual([r['assays'] for r in records if r['kind'] == 'extract'],
                          [[ASSAY], ['SECOND_ASSAY']])
-        self.assertEqual(records[-1]['kind'], 'validate')
+        self.assertEqual(records[-1]['kind'], 'validate-scores')
         self.assertEqual(Path(records[-1]['path']).name, 'SECOND_ASSAY')
         self.assertIn('Failed assays (1)', result.stderr)
+
+    def test_failed_score_is_reported_without_score_validation(self):
+        result, records = self.invoke(environment={'TEST_SCORE_STATUS': 'failed'})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('validate', [r['kind'] for r in records])
+        self.assertNotIn('validate-scores', [r['kind'] for r in records])
 
     def test_help_requires_no_runtime_or_downloads(self):
         result, records = self.invoke(('--help',))
