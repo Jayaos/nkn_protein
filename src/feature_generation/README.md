@@ -261,6 +261,55 @@ Identity/preprocessing failures also stop their individual task. Check the
 Slurm logs for tasks that fail before a report is created or exceed resources;
 absence of a report is not a successful verification.
 
+#### Overall verification summary
+
+Submit the CPU-only summary job from the repository root:
+
+```bash
+sbatch sbatch_run/run_prepare_rep/summarize_msa_verification.sbatch
+```
+
+This summarizes the latest available run for each assay. Append `--job-id ID`
+to restrict it to one verification array. To run automatically after that array
+finishes, including when some tasks fail:
+
+```bash
+sbatch --dependency=afterany:YOUR_ARRAY_JOB_ID \
+  sbatch_run/run_prepare_rep/summarize_msa_verification.sbatch \
+  --job-id YOUR_ARRAY_JOB_ID
+```
+
+The summary job requests one CPU, 2 GB RAM, and ten minutes. It reuses
+`nkn_msa_transformer` and logs totals to `summary_msa_verification-<job>.out`.
+For job-specific summaries, task logs are searched in the submission directory;
+override this with `--logs-dir PATH` if the array was submitted elsewhere.
+
+Summarize all expected assays in one command after the array finishes (or rerun
+it while jobs are in progress). This uses only Python's standard library:
+
+```bash
+python sbatch_run/run_prepare_rep/summarize_msa_verification.py --job-id YOUR_ARRAY_JOB_ID
+```
+
+Replace `YOUR_ARRAY_JOB_ID` with the numeric ID printed by `sbatch`. The tool
+uses `verify_msa_all-<job>_<index>.out` to locate the reports from that specific
+array. Use `--logs-dir /submission/directory` if the array was submitted outside
+the repository root. `--reference-csv PATH` overrides the reference CSV.
+
+The terminal prints overall counts; `data/msa/verification/summary_<job>/`
+contains `verification_summary.csv` (one row per expected assay with counts,
+differences, report/log paths, and status) and `verification_summary.json`
+(totals and reference hash). Missing reports stay in the denominator and are
+never treated as matches. They can indicate pending/running jobs, early failures,
+or jobs terminated by Slurm; this tool does not query the scheduler.
+
+Without `--job-id`, the tool selects the latest available run directory for each
+assay and writes `summary_latest/`. This can mix arrays and cannot detect a newer
+attempt that failed before creating a directory; use job-specific summaries for
+full-catalog verification. Duplicate run counts are reported. Malformed reports,
+wrong assay IDs, and reports from a different reference-file hash do not pass.
+Re-running the summary refreshes its CSV/JSON without modifying individual runs.
+
 ## Inverse folding: ProteinMPNN and ESM-IF1
 
 The CLI is the main workflow. Both models write one `[L, 20]` distribution for
