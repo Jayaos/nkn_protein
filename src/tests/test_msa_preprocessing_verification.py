@@ -209,12 +209,99 @@ These tests check orchestration, not the upstream filtering/weighting algorithm.
         verification.write_alignment(command[command.index("-o") + 1], [rows[0], rows[2]])
 
     def run_pipeline(self, processor=None, **options):
-        with patch.object(verification, "PROJECT_ROOT", self.root), \
+        with patch.object(sys, "path", [str(ROOT / "sbatch_run/run_prepare_rep"), *sys.path]), \
+             patch.object(verification, "PROJECT_ROOT", self.root), \
              patch.object(verification, "RUNTIME_CONFIG", self.runtime_config), \
              patch.object(verification, "check_runtime", return_value=(processor or self.processor,
                           sys.executable, self.source, {})), \
              patch.object(verification.subprocess, "run", side_effect=self.hhfilter):
             return verification.run_verification(self.config_path, 1, **options)
+
+    def test_generation_does_not_require_downloaded_weight_files_or_config(self):
+        (self.root / "weights/weights.npy").unlink()
+        (self.root / "weights/specialized/weights.npy").unlink()
+        config = json.loads(self.config_path.read_text())
+        for key in ("weights_folder", "specialized_weights_subfolder", "comparison"):
+            del config[key]
+        self.config_path.write_text(json.dumps(config))
+        report = self.run_pipeline(generate_only=True)
+        self.assertEqual(report["status"], "generated")
+        self.assertTrue(report["generated_pair_validated"])
+        self.assertEqual(set(report["inputs"]), {"reference", "msa"})
+        self.assertEqual(report["comparisons"], {})
+        output = next((self.root / "output").iterdir())
+        for name in ("alignment.a2m", "weights.npy", "rows.csv", "columns.csv", "manifest.json"):
+            self.assertTrue((output / name).is_file(), name)
+        module = sys.modules["generated_msa"]
+        rows, weights = module.validate_pair(output)
+        self.assertEqual([name for name, _ in rows], [">QUERY", ">B"])
+        self.assertEqual(weights.tolist(), [1.0, 1.0])
+
+    def test_generated_pair_rejects_modified_weights(self):
+        self.run_pipeline(generate_only=True)
+        output = next((self.root / "output").iterdir())
+        np.save(output / "weights.npy", [1.0, 0.5])
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            sys.modules["generated_msa"].validate_pair(output)
+
+    def test_generated_pair_rejects_reordered_rows_even_with_updated_file_hash(self):
+        self.run_pipeline(generate_only=True)
+        output = next((self.root / "output").iterdir())
+        path = output / "alignment.a2m"
+        verification.write_alignment(path, list(reversed(verification.read_alignment(path))))
+        manifest = json.loads((output / "manifest.json").read_text())
+        manifest["artifacts"]["alignment.a2m"] = verification.sha256(path)
+        with self.assertRaisesRegex(ValueError, "correspondence mismatch"):
+            sys.modules["generated_msa"].validate_pair(output, manifest)
+
+    def test_invalid_generated_weights_never_publish_manifest(self):
+        def invalid(**kwargs):
+            result = self.processor(**kwargs)
+            result.weights[0] = float("nan")
+            np.save(kwargs["weights_location"], result.weights)
+            return result
+        with self.assertRaisesRegex(ValueError, "Generated weights are invalid"):
+            self.run_pipeline(processor=invalid, generate_only=True)
+        output = next((self.root / "output").iterdir())
+        self.assertFalse((output / "manifest.json").exists())
+        self.assertEqual(json.loads((output / "generation_report.json").read_text())["status"], "failed")
+
+    def test_generation_batch_summary_validates_pairs_and_rejects_corruption(self):
+        self.run_pipeline(generate_only=True)
+        (self.root / "output").rename(self.root / "assays")
+        (self.root / "DMS_substitutions.csv").write_bytes((self.root / "reference.csv").read_bytes())
+        module = sys.modules["generated_msa"]
+        summary = module.summarize_batch(self.root)
+        self.assertTrue(summary["all_assays_generated"])
+        output = next((self.root / "assays").iterdir())
+        (output / "weights.npy").write_bytes(b"corrupted")
+        summary = module.summarize_batch(self.root)
+        self.assertEqual(summary["counts"], {"invalid": 1})
+        self.assertFalse(summary["all_assays_generated"])
+
+    def test_generation_batch_summary_includes_missing_assays(self):
+        reference = self.root / "reference.csv"
+        with reference.open("a") as handle:
+            handle.write("missing,input.a2m,weights.npy,1,3,0.2,ACD\n")
+        self.run_pipeline(generate_only=True)
+        (self.root / "output").rename(self.root / "assays")
+        (self.root / "DMS_substitutions.csv").write_bytes(reference.read_bytes())
+        summary = sys.modules["generated_msa"].summarize_batch(self.root)
+        self.assertEqual(summary["expected_assays"], 2)
+        self.assertEqual(summary["counts"], {"generated": 1, "no_report": 1})
+        self.assertEqual(summary["assays_needing_attention"], 1)
+        self.assertFalse(summary["all_assays_generated"])
+
+    def test_generation_batch_summary_records_malformed_failure_report(self):
+        self.run_pipeline(generate_only=True)
+        (self.root / "output").rename(self.root / "assays")
+        (self.root / "DMS_substitutions.csv").write_bytes((self.root / "reference.csv").read_bytes())
+        output = next((self.root / "assays").iterdir())
+        (output / "manifest.json").unlink()
+        (output / "generation_report.json").write_text("[]")
+        summary = sys.modules["generated_msa"].summarize_batch(self.root)
+        self.assertEqual(summary["counts"], {"invalid": 1})
+        self.assertFalse(summary["all_assays_generated"])
 
     def test_catalog_task_runs_only_specialized_comparison(self):
         report = self.run_pipeline(assay_index=0, specialized_only=True)

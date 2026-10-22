@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "assay_id": "BRCA1_HUMAN_Findlay_2018",
+  "reference_csv": "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv",
+  "msa_folder": "data/msa/DMS_msa_files",
+  "output_folder": "data/msa/DMS_msa_weights_generated",
+  "hhfilter": {
+    "min_coverage": 75,
+    "max_pairwise_identity": 90,
+    "min_query_identity": 0
+  },
+  "msa_processing": {
+    "theta": 0.2,
+    "preprocess_MSA": true,
+    "threshold_sequence_frac_gaps": 0.5,
+    "threshold_focus_cols_frac_gaps": 1.0,
+    "remove_sequences_with_indeterminate_AA_in_focus_cols": true,
+    "weights_calc_method": "eve"
+  }
+}

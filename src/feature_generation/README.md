@@ -318,6 +318,69 @@ full-catalog verification. Duplicate run counts are reported. Malformed reports,
 wrong assay IDs, and reports from a different reference-file hash do not pass.
 Re-running the summary refreshes its CSV/JSON without modifying individual runs.
 
+### MSA Transformer: generate paired alignments and weights
+
+To calculate our own weights for every assay in the reference CSV, submit from
+the synced Phoenix repository:
+
+```bash
+sbatch sbatch_run/run_prepare_rep/generate_msa_weights.sbatch
+```
+
+This uses the existing `nkn_msa_transformer` environment and pinned ProteinGym
+checkout. No GPU is required. The coordinator snapshots the catalog and
+`configs/setup/msa_generation.json`, submits one CPU task per assay (eight CPUs,
+64 GB, twelve hours per task; four concurrent tasks), then schedules an overall
+summary after all tasks finish, including failed tasks. Pass `--reference-csv PATH`
+or `--max-concurrent N` to override the catalog or concurrency. The default catalog
+is `data/DMS_ProteinGym_substitutions/DMS_substitutions.csv`.
+
+Generation applies the same normalization, HHfilter settings (`-cov 75 -id 90
+-qid 0`), and pinned ProteinGym postprocessing used in the specialized-weight
+verification. It calculates fresh EVE weights with theta 0.2 directly from the
+retained rows. Downloaded weights are neither read nor required, so a previous
+count mismatch does not block generation. Outputs are saved directly in
+`data/msa/DMS_msa_weights_generated/`, without a `batch_<id>` directory.
+The output directory must be empty when starting generation; a nonempty directory
+is rejected to prevent mixing runs or overwriting results. Use `--output-dir PATH`
+to select another empty destination for a new run.
+
+```text
+data/msa/DMS_msa_weights_generated/
+  DMS_substitutions.csv            # exact catalog snapshot
+  config.json                     # recipe and output paths
+  generation_summary.csv          # status and directory for every expected assay
+  generation_summary.json         # overall counts, completeness and reference hash
+  assays/<DMS_id>_<run_id>/
+    alignment.a2m                 # final ordered alignment, query first
+    weights.npy                   # weights[i] belongs to alignment row i
+    rows.csv                      # original row/header, sequence hashes, index, weight
+    columns.csv                   # final column -> raw column -> target position
+    manifest.json                 # completed pair, checksums and provenance
+    generation_report.json        # success/failure diagnostics
+```
+
+Each assay directory also retains the normalized and HHfilter alignments, the
+HHfilter log, and a table showing which original rows were removed. A completion
+manifest is published only after reading the saved pair back and validating its
+dimensions, weights, ordered sequence identities, row indices and checksums.
+`validate_pair` in `sbatch_run/run_prepare_rep/generated_msa.py` provides the same
+checks for subsequent readers and returns the alignment and weight vector.
+
+The query has weight index zero and is included in the saved vector and Neff.
+For later MSA Transformer sampling, retain the query separately and normalize
+the non-query weights over eligible homologs. Query-only outputs are counted in
+the summary so an inference policy can handle them explicitly. These files are
+preprocessing inputs; embeddings and mutation scores still need a later step.
+
+The summary validates every completed pair again and counts missing, failed,
+incomplete, corrupt or ambiguous runs as needing attention. To refresh it without
+launching generation again:
+
+```bash
+sbatch sbatch_run/run_prepare_rep/generate_msa_weights.sbatch --summarize
+```
+
 ## Inverse folding: ProteinMPNN and ESM-IF1
 
 The CLI is the main workflow. Both models write one `[L, 20]` distribution for
@@ -391,6 +454,27 @@ python -m feature_generation.cli extract --config configs/extraction/esm_if1_142
 python -m feature_generation.cli validate --features "data/features/pretrained/singles/$assay" --feature-type inverse_folding --model-family proteinmpnn --cache-id v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb
 python -m feature_generation.cli validate --features "data/features/pretrained/$assay" --feature-type inverse_folding --model-family esm_if1
 ```
+
+For Slurm preparation, [`prepare_esm_if1.sbatch`](../../sbatch_run/run_prepare_rep/prepare_esm_if1.sbatch)
+uses `esm_if1_142m.json` and explicitly saves single-mutant caches under
+`data/features/pretrained/singles/`. It downloads/verifies the pinned model and
+reference structures, extracts WT-prefix distributions, and validates each cache.
+It preserves registered structure manifests and requires N/CA/C coordinates.
+The job prepares kernel features only; ESM-IF1 GP mean scoring is not implemented.
+
+```bash
+sbatch sbatch_run/run_prepare_rep/prepare_esm_if1.sbatch
+# Alternatively, one assay per array task in the configured catalog order:
+n=$(python sbatch_run/run_prepare_rep/list_assays.py --config configs/extraction/esm_if1_142m.json --count)
+sbatch --array="0-$((n - 1))" sbatch_run/run_prepare_rep/prepare_esm_if1.sbatch
+```
+
+Without an array, the job processes the full catalog sequentially. References
+longer than 1,022 residues fail explicitly, including those with fragments; array
+indices are never filtered or renumbered. Other assays continue, and any failed
+stage gives the job a nonzero exit status. Resubmission reuses verified downloads
+and resumes matching completed caches. These normalized ESM-IF1 probabilities
+require `inverse_folding_policy="normalized"` when selecting them for NKN kernels.
 
 The optional legacy backbone-only recipe uses the same downloaded checkpoint.
 To prepare it for experiments that still select that cache, run it separately:

@@ -1,4 +1,4 @@
-"""Reconstruct a filtered MSA and compare freshly calculated sequence weights.
+"""Reconstruct a filtered MSA and generate or compare sequence weights.
 
 Uses the pinned ProteinGym MSA_processing implementation. Every run writes to a
 new directory; supplied alignments and weight files are never modified.
@@ -93,7 +93,7 @@ def resolve_reference(configured, override=None):
                             + "\nSync the reference CSV to Phoenix or pass --reference-csv PATH.")
 
 
-def load_inputs(config, reference_csv=None, check_reference_theta=True):
+def load_inputs(config, reference_csv=None, check_reference_theta=True, require_weights=True):
     reference = resolve_reference(config["reference_csv"], reference_csv)
     with reference.open(newline="", encoding="utf-8-sig") as handle:
         matches = [row for row in csv.DictReader(handle) if row["DMS_id"] == config["assay_id"]]
@@ -101,12 +101,11 @@ def load_inputs(config, reference_csv=None, check_reference_theta=True):
         raise ValueError("Expected exactly one reference row for the requested assay")
     metadata = matches[0]
     msa = PROJECT_ROOT / config["msa_folder"] / metadata["MSA_filename"]
-    weight_root = PROJECT_ROOT / config["weights_folder"]
-    paths = {
-        "reference": reference, "msa": msa,
-        "general_weights": weight_root / metadata["weight_file_name"],
-        "specialized_weights": weight_root / config["specialized_weights_subfolder"] / metadata["weight_file_name"],
-    }
+    paths = {"reference": reference, "msa": msa}
+    if require_weights:
+        weight_root = PROJECT_ROOT / config["weights_folder"]
+        paths.update(general_weights=weight_root / metadata["weight_file_name"],
+                     specialized_weights=weight_root / config["specialized_weights_subfolder"] / metadata["weight_file_name"])
     for path in paths.values():
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -205,7 +204,8 @@ def check_runtime(runtime):
     return MSA_processing, hhfilter, source, installed
 
 
-def run_verification(config_path, cpus, reference_csv=None, assay_index=None, specialized_only=False):
+def run_verification(config_path, cpus, reference_csv=None, assay_index=None, specialized_only=False,
+                     generate_only=False):
     config = json.loads(config_path.read_text(encoding="utf-8"))
     runtime = json.loads(RUNTIME_CONFIG.read_text(encoding="utf-8"))
     if assay_index is not None:
@@ -215,15 +215,17 @@ def run_verification(config_path, cpus, reference_csv=None, assay_index=None, sp
         if not 0 <= assay_index < len(catalog):
             raise ValueError(f"Assay index {assay_index} is outside 0..{len(catalog) - 1}")
         config["assay_id"] = catalog[assay_index]["DMS_id"]
-    metadata, paths, raw, normalized = load_inputs(config, reference_csv, not specialized_only)
+    specialized_only = specialized_only or generate_only
+    metadata, paths, raw, normalized = load_inputs(config, reference_csv, not specialized_only,
+                                                  require_weights=not generate_only)
     # This pilot uses all query residue columns. Other column recipes require
     # explicit coordinate handling before they can be verified by this script.
     if config["msa_processing"]["threshold_focus_cols_frac_gaps"] != 1.0:
         raise ValueError("This pilot requires all query residue columns")
     processor, hhfilter, source, installed = check_runtime(runtime)
     import numpy as np
-    supplied = {kind: np.load(paths[f"{kind}_weights"], allow_pickle=False)
-                for kind in ("general", "specialized")}
+    supplied = {} if generate_only else {kind: np.load(paths[f"{kind}_weights"], allow_pickle=False)
+                                         for kind in ("general", "specialized")}
     if any(array.ndim != 1 or array.dtype.kind != "f" for array in supplied.values()):
         raise ValueError("Expected one-dimensional floating-point weight arrays")
     output_root = PROJECT_ROOT / config["output_folder"]
@@ -243,13 +245,16 @@ def run_verification(config_path, cpus, reference_csv=None, assay_index=None, sp
         "raw_rows": len(raw), "raw_columns": len(raw[0][1]),
         "assay_index_zero_based": assay_index,
         "specialized_only": specialized_only,
+        "generate_only": generate_only,
         "reference_theta": float(metadata["MSA_theta"]),
         "query_matches_reference": True,
         "historical_row_identity_verified": False,
         "interpretation": "Agreement establishes numerical consistency with this recipe, not unique historical row identity.",
     }
-    report_path = output / "verification_report.json"
-    print(f"Verification output: {output}", flush=True)
+    if generate_only:
+        report["interpretation"] = "Weights computed from the saved ordered alignment; downloaded weights were not read."
+    report_path = output / ("generation_report.json" if generate_only else "verification_report.json")
+    print(f"{'Generation' if generate_only else 'Verification'} output: {output}", flush=True)
     try:
         normalized_path = output / "normalized.a2m"
         write_alignment(normalized_path, normalized)
@@ -269,23 +274,32 @@ def run_verification(config_path, cpus, reference_csv=None, assay_index=None, sp
         for kind, alignment in comparisons:
             print(f"Recomputing {kind} weights using pinned ProteinGym code", flush=True)
             # Fresh path is essential: MSA_processing loads existing weights otherwise.
-            weight_path = output / f"{kind}_recomputed_weights.npy"
+            weight_path = output / ("weights.npy" if generate_only else f"{kind}_recomputed_weights.npy")
             processed = processor(MSA_location=str(alignment), use_weights=True,
                                   weights_location=str(weight_path), skip_one_hot_encodings=True,
                                   num_cpus=cpus, **config["msa_processing"])
             rows = [(name, "".join(seq)) for name, seq in processed.seq_name_to_sequence.items()]
             mapping, columns = retained_rows(raw, normalized,
                                             normalized if kind == "general" else filtered, rows)
-            comparison = compare_weights(processed.weights, supplied[kind],
-                                         config["comparison"]["relative_tolerance"],
-                                         config["comparison"]["absolute_tolerance"])
-            report["comparisons"][kind] = comparison
-            write_alignment(output / f"{kind}_processed.a2m", rows)
+            if generate_only:
+                weights = np.asarray(processed.weights)
+                if (weights.shape != (len(rows),) or not np.isfinite(weights).all()
+                        or not (weights > 0).all() or not (weights <= 1).all()):
+                    raise ValueError("Generated weights are invalid or do not match the final alignment rows")
+                report.update(processed_rows=len(rows), processed_columns=len(rows[0][1]),
+                              neff=float(weights.sum()), has_homologs=len(rows) > 1)
+            else:
+                comparison = compare_weights(processed.weights, supplied[kind],
+                                             config["comparison"]["relative_tolerance"],
+                                             config["comparison"]["absolute_tolerance"])
+                report["comparisons"][kind] = comparison
+            write_alignment(output / ("alignment.a2m" if generate_only else f"{kind}_processed.a2m"), rows)
             for i, entry in enumerate(mapping):
                 entry["recomputed_weight"] = float(processed.weights[i])
                 # Positional candidate, never described as a proven historical pairing.
-                entry["supplied_weight_at_index"] = float(supplied[kind][i]) if comparison["counts_match"] else ""
-            with (output / f"{kind}_rows.csv").open("w", newline="", encoding="utf-8") as handle:
+                if not generate_only:
+                    entry["supplied_weight_at_index"] = float(supplied[kind][i]) if comparison["counts_match"] else ""
+            with (output / ("rows.csv" if generate_only else f"{kind}_rows.csv")).open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.DictWriter(handle, fieldnames=list(mapping[0]))
                 writer.writeheader()
                 writer.writerows(mapping)
@@ -302,10 +316,19 @@ def run_verification(config_path, cpus, reference_csv=None, assay_index=None, sp
                     writer = csv.writer(handle)
                     writer.writerow(["processed_column_one_based", "raw_column_one_based", "target_position_one_based"])
                     writer.writerows((i + 1, column + 1, int(metadata["MSA_start"]) + i) for i, column in enumerate(columns))
-            print(f"{kind}: {json.dumps(comparison)}", flush=True)
+            if not generate_only:
+                print(f"{kind}: {json.dumps(comparison)}", flush=True)
         agreed = all(value["values_match_in_order"] for value in report["comparisons"].values())
-        report["status"] = "weights_reproduced" if agreed else "weight_mismatch"
+        report["status"] = "generated" if generate_only else "weights_reproduced" if agreed else "weight_mismatch"
         report["artifacts"] = {path.name: sha256(path) for path in output.iterdir() if path.is_file()}
+        if generate_only:
+            # Publish a manifest only after a read-back check of the stored pair.
+            from generated_msa import validate_pair
+            validate_pair(output, report)
+            report["generated_pair_validated"] = True
+            temporary = output / "manifest.json.tmp"
+            temporary.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+            temporary.replace(output / "manifest.json")
     except Exception as error:
         report["status"] = "failed"
         report["error"] = f"{type(error).__name__}: {error}"
@@ -323,15 +346,19 @@ def main():
     parser.add_argument("--assay-index", type=int, help="Zero-based row index in the reference CSV")
     parser.add_argument("--specialized-only", action="store_true",
                         help="Compare only specialized weights using the pinned scoring recipe (theta 0.2)")
+    parser.add_argument("--generate-only", action="store_true",
+                        help="Save an independently generated alignment/weight pair without reading downloaded weights")
     parser.add_argument("--reference-csv", type=Path,
                         help="Reference CSV override; relative paths resolve from the repository root")
     args = parser.parse_args()
     if args.cpus < 1:
         parser.error("--cpus must be positive")
     report = run_verification(args.config.resolve(), args.cpus, args.reference_csv,
-                              args.assay_index, args.specialized_only)
-    print(f"Result: {report['status']}. Historical row identity remains unverified.", flush=True)
-    return 0 if report["status"] == "weights_reproduced" else 2
+                              args.assay_index, args.specialized_only, args.generate_only)
+    detail = ("Saved alignment/weight correspondence verified." if args.generate_only
+              else "Historical row identity remains unverified.")
+    print(f"Result: {report['status']}. {detail}", flush=True)
+    return 0 if report["status"] in ("weights_reproduced", "generated") else 2
 
 
 if __name__ == "__main__":
