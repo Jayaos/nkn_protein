@@ -168,6 +168,54 @@ job report before moving to MSA preprocessing. The pinned source is a reference
 implementation; it is not evidence that the historical filtering recipe has
 already been reproduced.
 
+### MSA Transformer: BRCA1 preprocessing verification (step 2)
+
+After step 1 passes, sync the repository to Phoenix and submit this CPU-only job:
+
+```bash
+sbatch sbatch_run/run_prepare_rep/verify_msa_preprocessing.sbatch
+```
+
+The pilot uses `configs/setup/msa_preprocessing_brca1.json` and the
+`BRCA1_HUMAN_Findlay_2018` row in `data/DMS_substitutions.csv`. It checks that
+the alignment query matches the reference interval, normalizes dots to gaps
+and uppercases the input (including headers, following the upstream procedure),
+then runs HHfilter 3.3.0 with coverage 75, maximum pairwise identity 90, and
+minimum query identity 0. Lowercase residues are retained, not stripped as
+A3M insertions. ProteinGym's pinned `MSA_processing` implementation performs
+the remaining cleaning and computes new EVE-style weights with theta 0.2.
+One-hot encodings are skipped to reduce memory use; sequence weighting still
+uses the upstream implementation.
+
+Two comparisons are made: the normalized alignment after basic cleaning against
+the general weights (a control), and the HHfiltered alignment after cleaning
+against the specialized MSA Transformer weights. Each comparison checks counts,
+finite positive values, and agreement in row order (rtol 1e-10, atol 1e-12).
+No filtering parameters are adjusted to force a matching count. Original inputs
+are never overwritten; every submission creates a fresh run directory under
+`data/msa/verification/BRCA1_HUMAN_Findlay_2018_*`.
+
+The job prints the report path. Its artifacts include:
+
+- `verification_report.json`: recipe, source/input hashes, counts, comparisons,
+  and overall result; `hhfilter.log` contains the external tool's output.
+- `normalized.a2m`, `hhfiltered.a2m`, and `specialized_processed.a2m`: the
+  alignment at each stage, with the last file containing the final retained rows.
+- `specialized_recomputed_weights.npy`: weights freshly calculated for those rows.
+- `specialized_rows.csv`: original row/header, final row/header, sequence hashes,
+  recomputed weight, and the supplied weight at that index when counts match.
+- `specialized_row_disposition.csv`: retained/removed status for every raw row;
+  `columns.csv` maps final columns to raw columns and reference positions.
+- Corresponding `general_*` files record the control comparison.
+
+`weights_reproduced` means both ordered weight vectors agree with the downloads;
+`weight_mismatch` exits with code 2 and preserves diagnostics. An execution or
+identity-check error is reported as `failed`. Numerical agreement establishes
+consistency with this recorded recipe, not unique historical row identity:
+multiple sequences can have identical weights. Accordingly,
+`historical_row_identity_verified` remains false. This pilot neither generates
+embeddings/scores nor establishes preprocessing for the remaining assays.
+
 ## Inverse folding: ProteinMPNN and ESM-IF1
 
 The CLI is the main workflow. Both models write one `[L, 20]` distribution for
