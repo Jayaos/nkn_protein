@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=nkn_gpu_a100_40G
 #SBATCH --account=gts-yxie77-paid
-#SBATCH --array=0-4
+#SBATCH --array=0-6
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:a100:1
-#SBATCH --constraint=A100-40GB
+#SBATCH --constraint="A100-40GB|A100-80GB"
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=192G
 #SBATCH --time=03:00:00
@@ -14,8 +14,8 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
-# 5 assays with 10,000 < n < 12,000 single-mutant variants; array indices 0-4.
-# GPU: A100 with 40GB VRAM.
+# 7 assays with 12,000 < n <= 15,000 single-mutant variants; array indices 0-6.
+# GPU: A100 with 40GB or 80GB VRAM.
 # Same default four-branch NKN preset as run_nkn_assays.sbatch:
 # initial noise variance 0.5, in float64.
 # Load prepared features/scores and published singles assignments; run populated folds.
@@ -36,14 +36,16 @@
 # NKN_PYTHON may name an existing interpreter; otherwise activate nkn_protein.
 set -eo pipefail
 
-# 10000 < DMS_number_single_mutants < 12000, in catalog order, from
+# 12000 < DMS_number_single_mutants <= 15000, in catalog order, from
 # data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv.
 assays=(
-  "A0A2Z5U3Z0_9INFA_Doud_2016"
-  "C6KNH7_9INFA_Lee_2018"
-  "S22A1_HUMAN_Yee_2023_activity"
-  "SC6A4_HUMAN_Young_2021"
-  "SHOC2_HUMAN_Kwon_2022"
+  "A0A192B1T2_9HIV1_Haddox_2018"
+  "A4D664_9INFA_Soh_2019"
+  "ENV_HV1BR_Haddox_2016"
+  "HSP82_YEAST_Flynn_2019"
+  "MTHR_HUMAN_Weile_2021"
+  "Q2N0S5_9HIV1_Haddox_2018"
+  "RDRP_I33A0_Li_2023"
 )
 
 assay_count="${#assays[@]}"
@@ -68,8 +70,8 @@ Default singles runs all three sequentially, using each scheme's populated folds
 Default config: configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json
 Initial noise variance: 0.5; same model/training defaults as run_nkn_assays.sbatch.
 Config precedence: --config PATH, NKN_CONFIG, then the default above.
-Default: 5 ProteinGym assays with 10,000 < n < 12,000 single-mutant variants.
-GPU request: A100 with 40GB VRAM (A100-40GB).
+Default: 7 ProteinGym assays with 12,000 < n <= 15,000 single-mutant variants.
+GPU request: A100 with 40GB or 80GB VRAM (A100-40GB|A100-80GB).
 Set the Slurm array range to match the list; current entries are shown below.
 Prepared features and scores: data/features/pretrained/singles/<assay>/
 Published folds: data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/<assay>.csv
@@ -82,7 +84,7 @@ Options: --config PATH --max-steps N --min-steps N --log-every N
          --bbmm-num-trace-samples N --bbmm-max-lanczos-iterations N
          --bbmm-preconditioner-size N --bbmm-probe-seed N
 This launcher uses real prepared inputs and CUDA; missing assets fail explicitly.
-Assays are selected in catalog order by 10000 < DMS_number_single_mutants < 12000.
+Assays are selected in catalog order by 12000 < DMS_number_single_mutants <= 15000.
 Output root precedence: --output-root PATH, NKN_OUTPUT_ROOT, then results/.
 Relative output roots are resolved from the repository root.
 Results grouping: --experiment-suffix NAME inserts one folder below that root.

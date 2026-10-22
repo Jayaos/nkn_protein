@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=nkn_gpu_v100_16G
 #SBATCH --account=gts-yxie77-paid
-#SBATCH --array=0-43
+#SBATCH --array=0-60
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:v100:1
-#SBATCH --constraint=V100-16GB
+#SBATCH --constraint="V100-16GB|V100-32GB"
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=192G
 #SBATCH --time=03:00:00
@@ -14,8 +14,8 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
-# 44 assays with 2,000 < n < 6,000 single-mutant variants; array indices 0-43.
-# GPU: V100 with 16GB VRAM.
+# 61 assays with 2,000 < n <= 8,000 single-mutant variants; array indices 0-60.
+# GPU: V100 with 16GB or 32GB VRAM.
 # Same default four-branch NKN preset as run_nkn_assays.sbatch:
 # initial noise variance 0.5, in float64.
 # Load prepared features/scores and published singles assignments; run populated folds.
@@ -36,19 +36,25 @@
 # NKN_PYTHON may name an existing interpreter; otherwise activate nkn_protein.
 set -eo pipefail
 
-# 2000 < DMS_number_single_mutants < 6000, in catalog order, from
+# 2000 < DMS_number_single_mutants <= 8000, in catalog order, from
 # data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv.
 assays=(
   "A0A2Z5U3Z0_9INFA_Wu_2014"
   "A4GRB6_PSEAI_Chen_2020"
   "ACE2_HUMAN_Chan_2020"
+  "ADRB2_HUMAN_Jones_2020"
+  "AMIE_PSEAE_Wrenbeck_2017"
   "ANCSZ_Hobbs_2022"
   "BLAT_ECOLX_Deng_2012"
   "BLAT_ECOLX_Firnberg_2014"
   "BLAT_ECOLX_Stiffler_2015"
   "CAR11_HUMAN_Meitlis_2020_gof"
   "CAR11_HUMAN_Meitlis_2020_lof"
+  "CBS_HUMAN_Sun_2020"
+  "CCR5_HUMAN_Gill_2023"
   "CD19_HUMAN_Klesmith_2019_FMC_singles"
+  "CP2C9_HUMAN_Amorosi_2021_abundance"
+  "CP2C9_HUMAN_Amorosi_2021_activity"
   "DYR_ECOLI_Nguyen_2023"
   "DYR_ECOLI_Thompson_2019"
   "ESTA_BACSU_Nutschel_2020"
@@ -57,13 +63,24 @@ assays=(
   "HSP82_YEAST_Mishra_2016"
   "KCNE1_HUMAN_Muhammad_2023_expression"
   "KCNE1_HUMAN_Muhammad_2023_function"
+  "KCNJ2_MOUSE_Coyote-Maestas_2022_function"
+  "KCNJ2_MOUSE_Coyote-Maestas_2022_surface"
   "KKA2_KLEPN_Melnikov_2014"
+  "LGK_LIPST_Klesmith_2015"
   "MET_HUMAN_Estevam_2023"
+  "MK01_HUMAN_Brenan_2016"
   "MLAC_ECOLI_MacRae_2023"
   "NUD15_HUMAN_Suiter_2020"
+  "OXDA_RHOTO_Vanella_2023_activity"
+  "OXDA_RHOTO_Vanella_2023_expression"
+  "P53_HUMAN_Giacomelli_2018_Null_Etoposide"
+  "P53_HUMAN_Giacomelli_2018_Null_Nutlin"
+  "P53_HUMAN_Giacomelli_2018_WT_Nutlin"
   "PAI1_HUMAN_Huttinger_2021"
   "PHOT_CHLRE_Chen_2023"
+  "PPM1D_HUMAN_Miller_2022"
   "PTEN_HUMAN_Matreyek_2021"
+  "PTEN_HUMAN_Mighell_2018"
   "Q53Z42_HUMAN_McShan_2019_binding-TAPBPR"
   "Q53Z42_HUMAN_McShan_2019_expression"
   "Q59976_STRSQ_Romero_2015"
@@ -107,8 +124,8 @@ Default singles runs all three sequentially, using each scheme's populated folds
 Default config: configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json
 Initial noise variance: 0.5; same model/training defaults as run_nkn_assays.sbatch.
 Config precedence: --config PATH, NKN_CONFIG, then the default above.
-Default: 44 ProteinGym assays with 2,000 < n < 6,000 single-mutant variants.
-GPU request: V100 with 16GB VRAM (V100-16GB).
+Default: 61 ProteinGym assays with 2,000 < n <= 8,000 single-mutant variants.
+GPU request: V100 with 16GB or 32GB VRAM (V100-16GB|V100-32GB).
 Set the Slurm array range to match the list; current entries are shown below.
 Prepared features and scores: data/features/pretrained/singles/<assay>/
 Published folds: data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/<assay>.csv
@@ -121,7 +138,7 @@ Options: --config PATH --max-steps N --min-steps N --log-every N
          --bbmm-num-trace-samples N --bbmm-max-lanczos-iterations N
          --bbmm-preconditioner-size N --bbmm-probe-seed N
 This launcher uses real prepared inputs and CUDA; missing assets fail explicitly.
-Assays are selected in catalog order by 2000 < DMS_number_single_mutants < 6000.
+Assays are selected in catalog order by 2000 < DMS_number_single_mutants <= 8000.
 Output root precedence: --output-root PATH, NKN_OUTPUT_ROOT, then results/.
 Relative output roots are resolved from the repository root.
 Results grouping: --experiment-suffix NAME inserts one folder below that root.

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "environment_name": "nkn_msa_transformer",
+  "python_version": "3.10",
+  "proteingym_repository": "https://github.com/OATML-Markslab/ProteinGym.git",
+  "proteingym_commit": "144fe22b07dfaeec2b366f2346203a9838a55b4c",
+  "upstream_environment": "environments/proteingym_env.txt",
+  "hhfilter_version": "3.3.0",
+  "cuda_runtime": "11.7",
+  "packages": {
+    "torch": "1.13.1+cu117",
+    "numpy": "1.24.4",
+    "pandas": "1.5.1",
+    "numba": "0.58.1",
+    "scipy": "1.10.1",
+    "biopython": "1.82",
+    "tqdm": "4.66.1",
+    "typing_extensions": "4.9.0"
+  },
+  "checkpoint": {
+    "model_id": "esm_msa1b_t12_100M_UR50S",
+    "filename": "esm_msa1b_t12_100M_UR50S.pt",
+    "url": "https://dl.fbaipublicfiles.com/fair-esm/models/esm_msa1b_t12_100M_UR50S.pt",
+    "size_bytes": 1387625262,
+    "num_layers": 12,
+    "embedding_dim": 768,
+    "checksum_policy": "Record SHA-256 after the first complete official HTTPS download; require it on reuse. No independently published SHA-256 is asserted."
+  },
+  "historical_msa_filtering_verified": false
+}

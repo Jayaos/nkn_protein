@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=nkn_gpu_v100_32G
 #SBATCH --account=gts-yxie77-paid
-#SBATCH --array=0-25
+#SBATCH --array=0-13
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:v100:1
@@ -14,7 +14,7 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
-# 26 assays with 6,000 < n < 10,000 single-mutant variants; array indices 0-25.
+# 14 assays with 8,000 < n <= 12,000 single-mutant variants; array indices 0-13.
 # GPU: V100 with 32GB VRAM.
 # Same default four-branch NKN preset as run_nkn_assays.sbatch:
 # initial noise variance 0.5, in float64.
@@ -36,35 +36,23 @@
 # NKN_PYTHON may name an existing interpreter; otherwise activate nkn_protein.
 set -eo pipefail
 
-# 6000 < DMS_number_single_mutants < 10000, in catalog order, from
+# 8000 < DMS_number_single_mutants <= 12000, in catalog order, from
 # data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv.
 assays=(
   "A0A140D2T1_ZIKV_Sourisseau_2019"
-  "ADRB2_HUMAN_Jones_2020"
-  "AMIE_PSEAE_Wrenbeck_2017"
+  "A0A2Z5U3Z0_9INFA_Doud_2016"
+  "C6KNH7_9INFA_Lee_2018"
   "CAS9_STRP1_Spencer_2017_positive"
-  "CBS_HUMAN_Sun_2020"
-  "CCR5_HUMAN_Gill_2023"
-  "CP2C9_HUMAN_Amorosi_2021_abundance"
-  "CP2C9_HUMAN_Amorosi_2021_activity"
   "HXK4_HUMAN_Gersing_2022_activity"
   "HXK4_HUMAN_Gersing_2023_abundance"
   "I6TAH8_I68A0_Doud_2015"
-  "KCNJ2_MOUSE_Coyote-Maestas_2022_function"
-  "KCNJ2_MOUSE_Coyote-Maestas_2022_surface"
-  "LGK_LIPST_Klesmith_2015"
-  "MK01_HUMAN_Brenan_2016"
   "NCAP_I34A1_Doud_2015"
-  "OXDA_RHOTO_Vanella_2023_activity"
-  "OXDA_RHOTO_Vanella_2023_expression"
-  "P53_HUMAN_Giacomelli_2018_Null_Etoposide"
-  "P53_HUMAN_Giacomelli_2018_Null_Nutlin"
-  "P53_HUMAN_Giacomelli_2018_WT_Nutlin"
   "PPARG_HUMAN_Majithia_2016"
-  "PPM1D_HUMAN_Miller_2022"
   "PRKN_HUMAN_Clausen_2023"
-  "PTEN_HUMAN_Mighell_2018"
   "S22A1_HUMAN_Yee_2023_abundance"
+  "S22A1_HUMAN_Yee_2023_activity"
+  "SC6A4_HUMAN_Young_2021"
+  "SHOC2_HUMAN_Kwon_2022"
 )
 
 assay_count="${#assays[@]}"
@@ -89,7 +77,7 @@ Default singles runs all three sequentially, using each scheme's populated folds
 Default config: configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json
 Initial noise variance: 0.5; same model/training defaults as run_nkn_assays.sbatch.
 Config precedence: --config PATH, NKN_CONFIG, then the default above.
-Default: 26 ProteinGym assays with 6,000 < n < 10,000 single-mutant variants.
+Default: 14 ProteinGym assays with 8,000 < n <= 12,000 single-mutant variants.
 GPU request: V100 with 32GB VRAM (V100-32GB).
 Set the Slurm array range to match the list; current entries are shown below.
 Prepared features and scores: data/features/pretrained/singles/<assay>/
@@ -103,7 +91,7 @@ Options: --config PATH --max-steps N --min-steps N --log-every N
          --bbmm-num-trace-samples N --bbmm-max-lanczos-iterations N
          --bbmm-preconditioner-size N --bbmm-probe-seed N
 This launcher uses real prepared inputs and CUDA; missing assets fail explicitly.
-Assays are selected in catalog order by 6000 < DMS_number_single_mutants < 10000.
+Assays are selected in catalog order by 8000 < DMS_number_single_mutants <= 12000.
 Output root precedence: --output-root PATH, NKN_OUTPUT_ROOT, then results/.
 Relative output roots are resolved from the repository root.
 Results grouping: --experiment-suffix NAME inserts one folder below that root.

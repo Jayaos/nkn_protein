@@ -102,6 +102,59 @@ including Transformers 4.48.1, huggingface-hub 0.29.3, and safetensors. Run the
 source directly with `src/` on `PYTHONPATH`; set it in each new PowerShell session.
 This implementation was tested with Python 3.10 and PyTorch 2.5.1.
 
+### MSA Transformer: Phoenix runtime setup (step 1)
+
+From the synced repository on Phoenix, install the environment manually first
+(no GPU is needed for installation):
+
+```bash
+# If conda is not already available:
+module load anaconda3
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda env create --file env_msa_transformer.yaml
+conda activate nkn_msa_transformer
+```
+
+Then submit the download and GPU validation job:
+
+```bash
+sbatch sbatch_run/run_prepare_rep/setup_msa_transformer.sbatch
+```
+
+The job requires the separate `nkn_msa_transformer` environment installed from
+`env_msa_transformer.yaml`; it exits with installation instructions if the
+environment is missing or cannot run Python. It uses Python 3.10, with direct inference package
+versions from ProteinGym's published environment: PyTorch 1.13.1 (CUDA 11.7),
+NumPy 1.24.4, Pandas 1.5.1, Numba 0.58.1, and Biopython 1.82. HH-suite 3.3.0
+provides `hhfilter`. The existing NKN environment is not updated. An existing
+MSA environment is reused only if validation finds the required versions;
+the job does not automatically repair a conflicting environment.
+
+`configs/setup/msa_transformer_runtime.json` pins the ProteinGym source commit.
+The job checks out that source under `data/models/msa_transformer/`, uses its
+bundled ESM implementation, and downloads the official
+`esm_msa1b_t12_100M_UR50S.pt` checkpoint (1,387,625,262 bytes). The first complete
+HTTPS download establishes the SHA-256 in `checkpoint_manifest.json`; later
+runs require that checksum. This is a recorded download fingerprint, not an
+independently published upstream checksum. Incomplete or inconsistent existing
+checkpoint/manifest pairs are rejected instead of overwritten.
+
+The GPU check uses a tiny artificial MSA and checks finite layer-12 embeddings
+and language-model logits. Success writes `runtime_report.json`,
+`conda-explicit.txt`, and `pip-freeze.txt` under the runtime directory. A CPU
+check can be run manually with the helper's `validate --device cpu`, but does
+not establish GPU readiness. The upstream local loader may warn about missing
+contact-regression weights; this setup tests embeddings/logits and does not
+request contact predictions.
+
+This is runtime setup only: it does not filter assay MSAs, establish the
+historical row-to-weight mapping, generate embeddings/scores, or add an MSA
+backend to the feature CLI. Source and checkpoint downloads require outbound
+HTTPS, and GPU validation must run inside an allocation. Record the successful
+job report before moving to MSA preprocessing. The pinned source is a reference
+implementation; it is not evidence that the historical filtering recipe has
+already been reproduced.
+
 ## Inverse folding: ProteinMPNN and ESM-IF1
 
 The CLI is the main workflow. Both models write one `[L, 20]` distribution for

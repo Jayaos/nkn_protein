@@ -1,0 +1,27 @@
+name: nkn_msa_transformer
+
+# Linux/Phoenix only. Keep separate from the PyTorch 2.5 NKN environment.
+# Direct inference dependencies match the pinned ProteinGym environment.
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+
+dependencies:
+  - python=3.10
+  - pip=24.0
+  - git>=2.25
+  - hhsuite=3.3.0
+  - pip:
+      - "--extra-index-url https://download.pytorch.org/whl/cu117"
+      - torch==1.13.1+cu117
+      - numpy==1.24.4
+      - pandas==1.5.1
+      - numba==0.58.1
+      - scipy==1.10.1
+      - biopython==1.82
+      - tqdm==4.66.1
+      - typing_extensions==4.9.0
+
+# Use ProteinGym's bundled esm package from the pinned source checkout.
+# A separately installed fair-esm/esm package is not needed.
