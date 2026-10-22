@@ -29,6 +29,15 @@ class ProSSTCLITests(unittest.TestCase):
             status = main([str(value) for value in arguments])
         return status, output.getvalue(), errors.getvalue()
 
+    def test_prosst_scoring_progress_uses_masked_positions(self):
+        from feature_generation.cli import _progress
+
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            _progress({"assay_id": "tiny", "status": "scoring", "model_family": "prosst",
+                       "num_variants": 4, "num_masked_positions": 2})
+        self.assertIn("ProSST masked marginals at 2 WT positions", errors.getvalue())
+
     def test_score_routes_prosst_config_and_structure_token_override(self):
         with patch("feature_generation.score_runner.score", return_value=[{"status": "completed"}]) as scoring:
             status, _, errors = self.invoke([
