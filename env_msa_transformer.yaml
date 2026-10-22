@@ -20,6 +20,8 @@ dependencies:
       - numba==0.58.1
       - scipy==1.10.1
       - biopython==1.82
+      # ProteinGym's package initialization imports its download utilities.
+      - pooch==1.8.0
       - tqdm==4.66.1
       - typing_extensions==4.9.0
 

@@ -130,6 +130,19 @@ provides `hhfilter`. The existing NKN environment is not updated. An existing
 MSA environment is reused only if validation finds the required versions;
 the job does not automatically repair a conflicting environment.
 
+ProteinGym's package initialization imports its download utilities during model
+loading, so `pooch==1.8.0` is also required and checked by runtime validation.
+For an environment created before this dependency was added, install it manually
+and resubmit the job:
+
+```bash
+conda activate nkn_msa_transformer
+python -m pip install pooch==1.8.0
+sbatch sbatch_run/run_prepare_rep/setup_msa_transformer.sbatch
+```
+
+The completed checkpoint and its manifest are verified and reused on resubmission.
+
 `configs/setup/msa_transformer_runtime.json` pins the ProteinGym source commit.
 The job checks out that source under `data/models/msa_transformer/`, uses its
 bundled ESM implementation, and downloads the official
