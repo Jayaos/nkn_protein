@@ -208,13 +208,26 @@ These tests check orchestration, not the upstream filtering/weighting algorithm.
         rows = verification.read_alignment(command[command.index("-i") + 1])
         verification.write_alignment(command[command.index("-o") + 1], [rows[0], rows[2]])
 
-    def run_pipeline(self, processor=None):
+    def run_pipeline(self, processor=None, **options):
         with patch.object(verification, "PROJECT_ROOT", self.root), \
              patch.object(verification, "RUNTIME_CONFIG", self.runtime_config), \
              patch.object(verification, "check_runtime", return_value=(processor or self.processor,
                           sys.executable, self.source, {})), \
              patch.object(verification.subprocess, "run", side_effect=self.hhfilter):
-            return verification.run_verification(self.config_path, 1)
+            return verification.run_verification(self.config_path, 1, **options)
+
+    def test_catalog_task_runs_only_specialized_comparison(self):
+        report = self.run_pipeline(assay_index=0, specialized_only=True)
+        self.assertEqual(report["assay_id"], "test")
+        self.assertEqual(set(report["comparisons"]), {"specialized"})
+        self.assertEqual(report["status"], "weights_reproduced")
+        self.assertEqual(report["assay_index_zero_based"], 0)
+        output = next((self.root / "output").iterdir())
+        self.assertFalse((output / "general_recomputed_weights.npy").exists())
+
+    def test_catalog_task_rejects_out_of_range_index(self):
+        with self.assertRaisesRegex(ValueError, "outside"):
+            self.run_pipeline(assay_index=1, specialized_only=True)
 
     def test_report_mapping_and_repeated_run_preserve_original_inputs(self):
         input_paths = [self.root / "msa/input.a2m", self.root / "weights/weights.npy",

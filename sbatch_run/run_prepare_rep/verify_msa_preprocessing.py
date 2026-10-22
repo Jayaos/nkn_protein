@@ -93,7 +93,7 @@ def resolve_reference(configured, override=None):
                             + "\nSync the reference CSV to Phoenix or pass --reference-csv PATH.")
 
 
-def load_inputs(config, reference_csv=None):
+def load_inputs(config, reference_csv=None, check_reference_theta=True):
     reference = resolve_reference(config["reference_csv"], reference_csv)
     with reference.open(newline="", encoding="utf-8-sig") as handle:
         matches = [row for row in csv.DictReader(handle) if row["DMS_id"] == config["assay_id"]]
@@ -120,7 +120,7 @@ def load_inputs(config, reference_csv=None):
     query = normalized[0][1].replace("-", "")
     if query != metadata["target_seq"][start - 1:end].upper():
         raise ValueError("MSA query does not match the reference sequence interval")
-    if float(metadata["MSA_theta"]) != config["msa_processing"]["theta"]:
+    if check_reference_theta and float(metadata["MSA_theta"]) != config["msa_processing"]["theta"]:
         raise ValueError("Reference weighting theta differs from this verification recipe")
     return metadata, paths, raw, normalized
 
@@ -205,10 +205,17 @@ def check_runtime(runtime):
     return MSA_processing, hhfilter, source, installed
 
 
-def run_verification(config_path, cpus, reference_csv=None):
+def run_verification(config_path, cpus, reference_csv=None, assay_index=None, specialized_only=False):
     config = json.loads(config_path.read_text(encoding="utf-8"))
     runtime = json.loads(RUNTIME_CONFIG.read_text(encoding="utf-8"))
-    metadata, paths, raw, normalized = load_inputs(config, reference_csv)
+    if assay_index is not None:
+        reference = resolve_reference(config["reference_csv"], reference_csv)
+        with reference.open(newline="", encoding="utf-8-sig") as handle:
+            catalog = list(csv.DictReader(handle))
+        if not 0 <= assay_index < len(catalog):
+            raise ValueError(f"Assay index {assay_index} is outside 0..{len(catalog) - 1}")
+        config["assay_id"] = catalog[assay_index]["DMS_id"]
+    metadata, paths, raw, normalized = load_inputs(config, reference_csv, not specialized_only)
     # This pilot uses all query residue columns. Other column recipes require
     # explicit coordinate handling before they can be verified by this script.
     if config["msa_processing"]["threshold_focus_cols_frac_gaps"] != 1.0:
@@ -234,6 +241,9 @@ def run_verification(config_path, cpus, reference_csv=None):
         "hhfilter_sha256": sha256(hhfilter),
         "inputs": {key: {"path": str(path), "sha256": sha256(path)} for key, path in paths.items()},
         "raw_rows": len(raw), "raw_columns": len(raw[0][1]),
+        "assay_index_zero_based": assay_index,
+        "specialized_only": specialized_only,
+        "reference_theta": float(metadata["MSA_theta"]),
         "query_matches_reference": True,
         "historical_row_identity_verified": False,
         "interpretation": "Agreement establishes numerical consistency with this recipe, not unique historical row identity.",
@@ -255,7 +265,8 @@ def run_verification(config_path, cpus, reference_csv=None):
         filtered = read_alignment(filtered_path)
         report["hhfilter_rows"] = len(filtered)
         report["comparisons"] = {}
-        for kind, alignment in (("general", normalized_path), ("specialized", filtered_path)):
+        comparisons = [("specialized", filtered_path)] if specialized_only else [("general", normalized_path), ("specialized", filtered_path)]
+        for kind, alignment in comparisons:
             print(f"Recomputing {kind} weights using pinned ProteinGym code", flush=True)
             # Fresh path is essential: MSA_processing loads existing weights otherwise.
             weight_path = output / f"{kind}_recomputed_weights.npy"
@@ -309,12 +320,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "configs/setup/msa_preprocessing_brca1.json")
     parser.add_argument("--cpus", type=int, default=1)
+    parser.add_argument("--assay-index", type=int, help="Zero-based row index in the reference CSV")
+    parser.add_argument("--specialized-only", action="store_true",
+                        help="Compare only specialized weights using the pinned scoring recipe (theta 0.2)")
     parser.add_argument("--reference-csv", type=Path,
                         help="Reference CSV override; relative paths resolve from the repository root")
     args = parser.parse_args()
     if args.cpus < 1:
         parser.error("--cpus must be positive")
-    report = run_verification(args.config.resolve(), args.cpus, args.reference_csv)
+    report = run_verification(args.config.resolve(), args.cpus, args.reference_csv,
+                              args.assay_index, args.specialized_only)
     print(f"Result: {report['status']}. Historical row identity remains unverified.", flush=True)
     return 0 if report["status"] == "weights_reproduced" else 2
 

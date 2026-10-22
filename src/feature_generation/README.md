@@ -229,6 +229,38 @@ multiple sequences can have identical weights. Accordingly,
 `historical_row_identity_verified` remains false. This pilot neither generates
 embeddings/scores nor establishes preprocessing for the remaining assays.
 
+### MSA Transformer: full-catalog verification
+
+From the repository root on Phoenix, activate the setup environment and submit
+one CPU task per reference CSV row, with at most four concurrent tasks:
+
+```bash
+conda activate nkn_msa_transformer
+reference=data/DMS_ProteinGym_substitutions/DMS_substitutions.csv
+count=$(python -c 'import csv,sys; print(sum(1 for _ in csv.DictReader(open(sys.argv[1]))))' "$reference")
+sbatch --array="0-$((count - 1))%4" \
+  sbatch_run/run_prepare_rep/verify_msa_all.sbatch --reference-csv "$reference"
+```
+
+Keep the reference CSV unchanged while the array runs. The array uses its actual
+row count, not a hard-coded assay count. Each task writes a fresh assay-specific
+directory under `data/msa/verification/` and logs to
+`verify_msa_all-<job>_<index>.out`. Assays sharing an alignment are tested
+independently. The job requests 8 CPUs, 64 GB RAM, and 12 hours per task; large
+alignments may require more time or memory, and generated alignments require
+additional disk space.
+
+This run uses `--specialized-only`: it omits the expensive general-weight
+recomputation on raw alignments. The fixed recipe is HHfilter 75/90/0 followed
+by the pinned scoring code's default theta 0.2. The reference CSV's theta is
+recorded separately, since it may describe the general weights. Settings are
+not adjusted per assay to force agreement. A match therefore establishes
+numerical reproduction for this recipe; mismatches need investigation. For
+these tasks, `weights_reproduced` refers only to the specialized comparison.
+Identity/preprocessing failures also stop their individual task. Check the
+Slurm logs for tasks that fail before a report is created or exceed resources;
+absence of a report is not a successful verification.
+
 ## Inverse folding: ProteinMPNN and ESM-IF1
 
 The CLI is the main workflow. Both models write one `[L, 20]` distribution for
