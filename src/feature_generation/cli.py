@@ -54,7 +54,7 @@ def _parser() -> argparse.ArgumentParser:
     validation = commands.add_parser("validate", help="Validate one cache without requiring other feature modalities")
     validation.add_argument("--features", required=True, type=Path, help="Assay directory containing assay.json")
     validation.add_argument("--feature-type", choices=("sequence", "inverse_folding", "scores"), help="Use scores for mean_score.csv; otherwise inferred from --model-family")
-    validation.add_argument("--model-family", choices=("esm2", "prosst", "proteinmpnn", "esm_if1"))
+    validation.add_argument("--model-family", choices=("esm2", "prosst", "msa_transformer", "proteinmpnn", "esm_if1"))
     validation.add_argument("--cache-id", help="Model recipe directory; defaults to the selected feature descriptor")
     for command, help_text in (
         ("prepare-structure", "Validate a local PDB/mmCIF and register its reference-residue mapping"),
@@ -160,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(report, indent=2))
                 return 0
             family_type = ("inverse_folding" if args.model_family in ("proteinmpnn", "esm_if1")
-                           else "sequence" if args.model_family in ("esm2", "prosst") else None)
+                           else "sequence" if args.model_family in ("esm2", "prosst", "msa_transformer") else None)
             feature_type = args.feature_type or family_type or "sequence"
             if family_type is not None and feature_type != family_type:
                 raise ValueError("--feature-type and --model-family select different feature types")

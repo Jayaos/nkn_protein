@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -33,7 +34,7 @@ def _inside(root: Path, relative: str) -> Path:
     return path
 
 
-SEQUENCE_FAMILIES = ("esm2", "prosst")
+SEQUENCE_FAMILIES = ("esm2", "prosst", "msa_transformer")
 
 
 def _family(value: str) -> str:
@@ -207,6 +208,9 @@ def _validate_config(config: dict, cache_id: str, model_family: str | None = Non
         raise ValueError("Feature configuration requires a positive integer hidden_size")
     compact_sequence_recipe(config)
     pooled_sequence_recipe(config)
+    if model_family == "msa_transformer":
+        from .msa_config import validate_msa_metadata
+        validate_msa_metadata(config)
     if model_family == "prosst":
         from .structure_inputs import validate_structure_metadata
         from .prosst_structure import validate_structure_token_metadata
@@ -507,7 +511,8 @@ def validate_sequence_cache(root: str | Path, cache_id: str | None = None, model
         _validate_prosst_provenance(_read_json(_inside(leaf, "provenance.json")), config)
     store = torch.load(
         _inside(leaf, "features.pt"), map_location="cpu", weights_only=True,
-        **({"mmap": True} if compact_sequence_recipe(config) is not None else {}),
+        **({"mmap": True} if compact_sequence_recipe(config) is not None
+           and "mmap" in inspect.signature(torch.load).parameters else {}),
     )
     embeddings = _validate_payload(store, metadata, rows, config)
     return {

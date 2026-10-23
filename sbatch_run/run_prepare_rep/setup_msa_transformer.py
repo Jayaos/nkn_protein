@@ -90,7 +90,7 @@ def download_checkpoint(runtime_dir, spec):
         temporary.unlink(missing_ok=True)
 
 
-def validate_runtime(runtime_dir, config, device):
+def validate_runtime(runtime_dir, config, device, *, return_model=False):
     if f"{sys.version_info.major}.{sys.version_info.minor}" != config["python_version"]:
         raise ValueError(f"Activate {config['environment_name']}: Python {config['python_version']} is required")
     installed = {name: importlib.metadata.version(name) for name in config["packages"]}
@@ -152,6 +152,10 @@ def validate_runtime(runtime_dir, config, device):
         "environment_file_sha256": sha256(PROJECT_ROOT / "env_msa_transformer.yaml"),
         "historical_msa_filtering_verified": False,
     }
+    if return_model:
+        # Preparation arrays reuse the validated model without racing to rewrite
+        # the shared setup report or loading a second checkpoint into GPU memory.
+        return report, model, alphabet
     write_json(runtime_dir / "runtime_report.json", report)
     return report
 

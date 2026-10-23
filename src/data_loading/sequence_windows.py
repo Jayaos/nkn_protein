@@ -52,11 +52,11 @@ def mean_sequence_recipe(config: Mapping, reference_length: int | None = None) -
     if not windowed and config.get("pooling") != "mean" and config.get("truncation") != "prefix":
         return None
     if (
-        config.get("model_family") != "esm2"
+        config.get("model_family") not in ("esm2", "msa_transformer")
         or config.get("pooling") != "mean"
         or config.get("includes_special_tokens") is not False
     ):
-        raise ValueError("Mean sequence caches require ESM2 residue-mean pooling without special tokens")
+        raise ValueError("Mean sequence caches require ESM2/MSA Transformer residue-mean pooling without special tokens")
     if windowed:
         if any(config.get(key) != value for key, value in _GLOBAL_WINDOW_METADATA.items()) or config.get("truncation") != "none":
             raise ValueError("Full sequence means require non_overlapping windows, length_weighted_mean aggregation, and no truncation")
@@ -98,11 +98,11 @@ def compact_sequence_recipe(config: Mapping, reference_length: int | None = None
     if not declared:
         return None
     if (
-        config.get("model_family") != "esm2"
+        config.get("model_family") not in ("esm2", "msa_transformer")
         or config.get("site_embeddings") != "centered"
         or any(config.get(key) != value for key, value in _COMPACT_METADATA.items())
     ):
-        raise ValueError("Incomplete or inconsistent compact centered-site ESM2 recipe")
+        raise ValueError("Incomplete or inconsistent compact centered-site sequence recipe")
     mean_recipe = mean_sequence_recipe(config, reference_length)
     if mean_recipe is None:
         raise ValueError("Compact centered-site caches require a mean sequence recipe")

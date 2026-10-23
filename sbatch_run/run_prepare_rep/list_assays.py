@@ -42,7 +42,11 @@ def list_assays(config_path: Path) -> list[str]:
             if not assay_path.is_relative_to(index_path.parent):
                 raise ValueError(f"Assay filename leaves the catalog directory: {filename}")
             if not assay_path.is_file():
-                raise ValueError(f"Assay CSV does not exist: {assay_path}")
+                candidate = (index_path.parent / "raw_substitutions" / filename).resolve()
+                if not candidate.is_relative_to(index_path.parent):
+                    raise ValueError(f"Assay filename leaves the catalog directory: {filename}")
+                if not candidate.is_file():
+                    raise ValueError(f"Assay CSV does not exist: {assay_path} or {candidate}")
             assays.append(assay)
             filenames.add(filename)
     if not assays:

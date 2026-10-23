@@ -48,7 +48,14 @@ class AssayCatalog:
             if not filename or not path.is_relative_to(self.index_path.parent):
                 raise ValueError("Assay filename must stay inside the index directory")
             if not path.is_file():
-                raise FileNotFoundError(path)
+                # ProteinGym may keep its catalog above the individual assay CSVs.
+                candidate = (self.index_path.parent / "raw_substitutions" / filename).resolve()
+                if not candidate.is_relative_to(self.index_path.parent):
+                    raise ValueError("Assay filename must stay inside the index directory")
+                if candidate.is_file():
+                    path = candidate
+                else:
+                    raise FileNotFoundError(f"Assay CSV not found: {path} or {candidate}")
             parse_substitutions("WT", reference, reference)
             if row.get("seq_len") and int(row["seq_len"]) != len(reference):
                 raise ValueError(f"Reference length mismatch: {assay_id}")

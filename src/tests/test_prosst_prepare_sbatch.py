@@ -38,7 +38,7 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
         (self.root / "src/feature_generation/cli.py").touch()
         raw = self.root / "data/DMS_ProteinGym_substitutions/raw_substitutions"
         raw.mkdir(parents=True)
-        with (raw / "DMS_substitutions.csv").open("w", newline="", encoding="utf-8") as handle:
+        with (raw.parent / "DMS_substitutions.csv").open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=("DMS_id", "DMS_filename", "target_seq"))
             writer.writeheader()
             writer.writerow(dict(DMS_id=ASSAY, DMS_filename=f"{ASSAY}.csv", target_seq="ACD"))
@@ -279,7 +279,7 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
 
     def add_second_assay(self):
         raw = self.root / "data/DMS_ProteinGym_substitutions/raw_substitutions"
-        with (raw / "DMS_substitutions.csv").open("a", newline="", encoding="utf-8") as handle:
+        with (raw.parent / "DMS_substitutions.csv").open("a", newline="", encoding="utf-8") as handle:
             csv.writer(handle).writerow(["SECOND_ASSAY", "SECOND_ASSAY.csv", "ACD"])
         (raw / "SECOND_ASSAY.csv").write_text("mutant,mutated_sequence,DMS_score\nA1C,CCD,1.0\n")
 

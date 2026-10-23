@@ -5,7 +5,7 @@
   "revision": "e94ffee7846d7f55c1bf5efa8ec7372a336ac4b8",
   "model_dir": "data/models/prosst",
   "output_root": "data/features/pretrained/singles",
-  "assay_index": "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv",
+  "assay_index": "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv",
   "structure_manifest_dir": "data/structures/manifests",
   "structure_token_dir": "data/structures/tokens/prosst",
   "layer": 12,

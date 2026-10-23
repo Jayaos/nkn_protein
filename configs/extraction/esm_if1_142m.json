@@ -6,7 +6,7 @@
   "cache_id": "esm_if1_gvp4_t16_142M_UR50-reference_prefix-2b369911bb5b",
   "model_dir": "data/models/esm_if1",
   "output_root": "data/features/pretrained",
-  "assay_index": "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv",
+  "assay_index": "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv",
   "structure_manifest_dir": "data/structures/manifests",
   "conditioning_mode": "reference_prefix",
   "device": "auto",

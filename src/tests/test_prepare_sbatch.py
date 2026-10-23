@@ -70,6 +70,9 @@ class PreparationFixture(unittest.TestCase):
             writer = csv.DictWriter(handle, fieldnames=("DMS_id", "DMS_filename", "target_seq", "UniProt_ID"))
             writer.writeheader()
             writer.writerows(self.rows)
+        # ESM-IF1 uses the top-level catalog with per-assay CSVs below it.
+        (self.raw.parent / "DMS_substitutions.csv").write_bytes(
+            (self.raw / "DMS_substitutions.csv").read_bytes())
 
 
 class PreparationTargetTests(PreparationFixture):

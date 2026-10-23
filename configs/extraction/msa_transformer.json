@@ -1,0 +1,20 @@
+{
+  "model_family": "msa_transformer",
+  "cache_id": "msa1b-layer12-depth400-seeds1-5-full1022-sites-v2",
+  "score_cache_id": "msa1b-depth400-seeds1-5-proteingym-masked-marginals-v2",
+  "assay_index": "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv",
+  "msa_root": "data/msa/DMS_msa_weights_generated",
+  "msa_reference_csv": "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv",
+  "runtime_dir": "data/models/msa_transformer",
+  "runtime_config": "configs/setup/msa_transformer_runtime.json",
+  "output_root": "data/features/pretrained/singles",
+  "max_length": 1022,
+  "max_depth": 400,
+  "seeds": [1, 2, 3, 4, 5],
+  "sampling": "proteingym_sequence_reweighting_with_replacement",
+  "scoring_token_window": 1024,
+  "max_tokens_per_msa": 16384,
+  "max_output_gib": 32.0,
+  "uncovered_positions": "full_query_gap_padded_homologs",
+  "device": "cuda"
+}

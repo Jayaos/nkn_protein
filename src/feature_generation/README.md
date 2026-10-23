@@ -4,6 +4,8 @@ The CLI downloads pinned ESM-2, ProSST, ProteinMPNN, and ESM-IF1 checkpoints and
 representations into the project's schema-v2/layout-v1 cache. Models run
 locally with frozen parameters in evaluation/inference mode. DMS labels are
 copied into the assay table but are never supplied to the representation models.
+MSA Transformer uses the dedicated `prepare_msa_transformer.sbatch` workflow
+below and writes the same cache schema from validated alignment/weight pairs.
 
 The ESM2 and ProteinMPNN presets write to
 `data/features/pretrained/singles/<assay>/`. Both preparation jobs pass
@@ -371,7 +373,7 @@ The query has weight index zero and is included in the saved vector and Neff.
 For later MSA Transformer sampling, retain the query separately and normalize
 the non-query weights over eligible homologs. Query-only outputs are counted in
 the summary so an inference policy can handle them explicitly. These files are
-preprocessing inputs; embeddings and mutation scores still need a later step.
+preprocessing inputs for the preparation job below.
 
 The summary validates every completed pair again and counts missing, failed,
 incomplete, corrupt or ambiguous runs as needing attention. To refresh it without
@@ -379,6 +381,131 @@ launching generation again:
 
 ```bash
 sbatch sbatch_run/run_prepare_rep/generate_msa_weights.sbatch --summarize
+```
+
+### MSA Transformer: prepare sequence features and mean scores
+
+After runtime setup and pair generation succeed, submit from the repository:
+
+```bash
+sbatch sbatch_run/run_prepare_rep/prepare_msa_transformer.sbatch
+```
+
+This processes every assay in the extraction catalog, in catalog order, and
+selects the same single mutants as `prepare_esm2.sbatch`. For one GPU job per
+assay, with at most four concurrent jobs:
+
+```bash
+n=$(python sbatch_run/run_prepare_rep/prepare_msa_transformer.py --count)
+sbatch --array="0-$((n-1))%4" sbatch_run/run_prepare_rep/prepare_msa_transformer.sbatch
+```
+
+The count command needs only the standard library. The batch job activates
+`nkn_msa_transformer` and verifies the existing pinned runtime and checkpoint.
+It performs no downloads. To check the example first:
+
+```bash
+sbatch sbatch_run/run_prepare_rep/prepare_msa_transformer.sbatch --assay YAP1_HUMAN_Araya_2012
+```
+
+Configuration precedence is `--config PATH`, `MSA_TRANSFORMER_CONFIG`, then
+`configs/extraction/msa_transformer.json`. The preset uses layer 12 (768
+dimensions), 400 MSA rows including the query, and sampling seeds 1, 2, 3, 4, 5.
+For each seed, Python's `random.choices` draws 399 homolog rows **with
+replacement** using normalized non-query weights. Duplicate rows and draw order
+are preserved, including when the source alignment has fewer than 400 rows.
+Each sampled context is reused across variants and windows. Query-only
+alignments use depth 1. Scores are averaged arithmetically over the five samples.
+These defaults match the pinned ProteinGym
+[scoring launcher](https://github.com/OATML-Markslab/ProteinGym/blob/144fe22b07dfaeec2b366f2346203a9838a55b4c/scripts/scoring_DMS_zero_shot/scoring_MSA_transformer_substitutions.sh)
+and [sampler/scorer](https://github.com/OATML-Markslab/ProteinGym/blob/144fe22b07dfaeec2b366f2346203a9838a55b4c/proteingym/baselines/esm/compute_fitness.py).
+
+Each assay must have exactly one `assays/<DMS_id>_<run_id>/` directory under
+`msa_root`. Preparation verifies the manifest, saved alignment/weight pair and
+column mapping. The generation catalog snapshot is checked against the manifest;
+if it was not copied, `msa_reference_csv` must match the recorded checksum.
+Missing, ambiguous, corrupt or mismatched pairs fail that assay. For a CPU
+input check, without loading a model or writing caches:
+
+```bash
+conda activate nkn_msa_transformer
+python sbatch_run/run_prepare_rep/prepare_msa_transformer.py --assay YAP1_HUMAN_Araya_2012 --validate-inputs-only
+```
+
+Mutation scoring crops the WT query and homologs to the catalog's MSA interval,
+then tokenizes the complete interval. It masks one query residue at a time,
+keeps homologs unchanged, and subtracts WT from mutant log probabilities.
+Each required position is evaluated once per seed and reused across variants.
+For long alignments, scoring slices existing tokens into ProteinGym's optimal
+1,024-token windows. It preserves upstream's `MSA length + 2` window calculation,
+including clipped tail windows; interior slices do not insert a new BOS token.
+The output averages float32 per-seed log-odds in float64, as ProteinGym does.
+Mutation sites outside the MSA interval fail score preparation rather than
+producing a complete score cache. Input preflight checks this coverage too.
+
+The global/site embeddings are an NKN extension, averaged over the same five
+sampled contexts. They keep the full reference or mutant query. Homologs are
+mapped through `columns.csv` and gap-padded outside MSA coverage, preserving
+sequence context at those positions. Global embeddings average query residues
+across fixed nonoverlapping windows of at most 1,022 residues, weighted by
+window length. Site embeddings use centered windows around each mutation in
+the mutated query. Special tokens and homolog rows are excluded from pooling.
+The embedding `max_length` and `uncovered_positions` settings do not change the
+ProteinGym scoring windows or coverage.
+
+Preparation consumes the project's generated MSA/weight pairs. Matching scoring
+settings alone does not reproduce published ProteinGym numbers: that also
+requires the same alignments, preprocessing, sequence weights and checkpoint.
+
+Outputs share the existing immutable single-mutant assay table:
+
+```text
+data/features/pretrained/singles/<assay>/
+  sequence/msa_transformer/msa1b-layer12-depth400-seeds1-5-full1022-sites-v2/features.pt
+  scores/msa_transformer/msa1b-depth400-seeds1-5-proteingym-masked-marginals-v2/mean_score.csv
+```
+
+Both leaves include configuration, provenance and completion checksums.
+`--resume` is enabled by the sbatch script and validates completed leaves before
+skipping them. Feature and score stages resume independently; failed assays do
+not stop later assays, but any failure makes the job exit nonzero. Changing the
+checkpoint, pair, sampled rows or recipe requires new cache IDs. Existing v1
+caches remain readable and are separate from the new v2 selections. The
+16,384-token setting controls upstream axial-attention chunking; it does not
+truncate the alignment. Reducing depth creates a custom recipe that differs
+from ProteinGym's default and requires new cache IDs.
+
+Use `configs/msa_transformer_proteinmpnn_nkn.json` to replace ESM-2 in the existing
+NKN sequence branches and GP mean, keeping the ProteinMPNN and structure branches.
+Those branches still require their usual prepared inputs. For sequence-only
+experiments use `configs/msa_transformer_nkn.json`. Neither preset changes the
+existing ESM-2 selection. Check the NKN inputs in the usual NKN environment:
+
+```bash
+python -m experiments.cli validate --features data/features/pretrained/singles/YAP1_HUMAN_Araya_2012 --config configs/msa_transformer_nkn.json --no-output
+```
+
+Use the same `--config` with the normal NKN `cv` command and published folds.
+The MSA environment is for feature preparation; run NKN in its usual environment.
+In a custom experiment config, select:
+
+```json
+{
+  "feature_selection": {
+    "sequence": "msa_transformer/msa1b-layer12-depth400-seeds1-5-full1022-sites-v2"
+  },
+  "score_sources": [
+    "scores/msa_transformer/msa1b-depth400-seeds1-5-proteingym-masked-marginals-v2"
+  ]
+}
+```
+
+Validate saved leaves in either the MSA environment or the NKN environment:
+
+```bash
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+python -m feature_generation.cli validate --features data/features/pretrained/singles/YAP1_HUMAN_Araya_2012 --model-family msa_transformer --cache-id msa1b-layer12-depth400-seeds1-5-full1022-sites-v2
+python -m feature_generation.cli validate --features data/features/pretrained/singles/YAP1_HUMAN_Araya_2012 --feature-type scores --model-family msa_transformer --cache-id msa1b-depth400-seeds1-5-proteingym-masked-marginals-v2
 ```
 
 ## Inverse folding: ProteinMPNN and ESM-IF1

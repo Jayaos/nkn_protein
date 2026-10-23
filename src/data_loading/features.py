@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import inspect
 import json
 import math
 import re
@@ -208,7 +209,8 @@ def _load_leaf(root: Path, source: str, assay_id: str, schema: int) -> tuple[dic
     compact = compact_sequence_recipe(config) if name == "sequence" else None
     store = torch.load(
         _inside(root, f"{source}/features.pt"), map_location="cpu", weights_only=True,
-        **({"mmap": True} if compact is not None else {}),
+        **({"mmap": True} if compact is not None
+           and "mmap" in inspect.signature(torch.load).parameters else {}),
     )
     if not isinstance(store, Mapping) or store.get("assay_id") != assay_id or store.get("schema_version") != schema:
         raise ValueError(f"Feature cache metadata mismatch: {leaf}")

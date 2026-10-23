@@ -17,7 +17,7 @@ from .inverse_storage import _resume_configs_match, _validate_assay
 from .storage import _assay_lock, _ensure_assay, _inside, _read_json, _write_json
 from .structure_inputs import validate_structure_metadata
 
-FAMILIES = ("proteinmpnn", "esm2", "prosst")
+FAMILIES = ("proteinmpnn", "esm2", "prosst", "msa_transformer")
 SCORE_DESCRIPTOR = {"file": "mean_score.csv", "id_column": "variant_id", "score_column": "score"}
 
 
@@ -68,6 +68,14 @@ def _validate_config(config: dict, model_family: str, cache_id: str) -> None:
     }
     if any(config.get(key) != value for key, value in expected.items()):
         raise ValueError("Score configuration does not match its cache directory or format")
+    if model_family == "msa_transformer":
+        from .msa_config import LEGACY_SCORE_RECIPE, SCORE_RECIPE, validate_msa_metadata
+        validate_msa_metadata(config)
+        recipe = LEGACY_SCORE_RECIPE if config["msa_recipe_version"] == 1 else SCORE_RECIPE
+        if any(type(config.get(key)) is not type(value) or config.get(key) != value
+               for key, value in recipe.items()) or "structure" in config:
+            raise ValueError("Unsupported MSA Transformer mean-score recipe")
+        return
     if model_family == "prosst":
         from .prosst_structure import validate_structure_token_metadata
 

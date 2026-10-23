@@ -13,9 +13,10 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
-# Prerequisites: the nkn_protein Conda environment, the ProteinGym assay catalog
-# and assay CSVs in data/DMS_ProteinGym_substitutions/raw_substitutions/, and outbound HTTPS access
-# from the allocated compute node. Checkpoint/source and structures are prepared here.
+# Prerequisites: the nkn_protein Conda environment and the ProteinGym catalog at
+# data/DMS_ProteinGym_substitutions/DMS_substitutions.csv. Individual assay CSVs
+# may be beside the catalog or in its raw_substitutions/ subdirectory. Requires
+# outbound HTTPS access from the allocated compute node. Checkpoint/source and structures are prepared here.
 # Uses the pinned esm_if1_142m.json recipe: WT reference-prefix conditioning,
 # float32 inference, and normalized probabilities over the 20 canonical residues.
 # Selects single mutants only, saved under data/features/pretrained/singles/.
