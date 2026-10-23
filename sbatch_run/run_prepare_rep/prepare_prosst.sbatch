@@ -6,7 +6,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=V100
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
+#SBATCH --mem=64G
 #SBATCH --time=04:00:00
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%A_%a.out
