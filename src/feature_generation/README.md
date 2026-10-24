@@ -532,11 +532,12 @@ The checkpoint is shared with the backbone-only recipe; its output cache is
 separate. Sequence generation is not implemented. ProteinMPNN variant sequence
 likelihoods are prepared separately with the `score` command below.
 
-The ProteinMPNN presets set `max_length: null`, so extraction and scoring have
-no sequence-length cap. A positive integer can impose an optional operational
-limit. ESM-IF1 retains its maximum of 1,022 residues. These inverse-folding
-workflows never truncate model inputs. Explicit fragment manifests supply each
-registered piece separately; `max_length` still limits the full assay reference.
+The ProteinMPNN and ESM-IF1 presets set `max_length: null`, so inverse-folding
+extraction and ProteinMPNN scoring have no sequence-length cap. A positive integer
+can impose an optional operational limit, including values above 1,022. Long
+inputs require sufficient memory and runtime. These workflows never truncate
+model inputs. Explicit fragment manifests supply each registered piece separately;
+an explicit `max_length` still limits the full assay reference.
 
 Install/update from `env.yaml`, or use `python -m pip install -r requirements.txt`
 in a Python 3.10 venv. Added inference dependencies are Biopython, Biotite, SciPy,
@@ -585,9 +586,12 @@ python -m feature_generation.cli validate --features "data/features/pretrained/$
 For Slurm preparation, [`prepare_esm_if1.sbatch`](../../sbatch_run/run_prepare_rep/prepare_esm_if1.sbatch)
 uses `esm_if1_142m.json` and explicitly saves single-mutant caches under
 `data/features/pretrained/singles/`. It downloads/verifies the pinned model and
-reference structures, extracts WT-prefix distributions, and validates each cache.
-It preserves registered structure manifests and requires N/CA/C coordinates.
-The job prepares kernel features only; ESM-IF1 GP mean scoring is not implemented.
+reference structures, extracts WT-prefix distributions, scores complete variants,
+and validates both caches. It preserves registered structure manifests and requires
+N/CA/C coordinates. Mean scoring uses the ProteinGym recipe described below, one
+variant per batch. Full-sequence scores require one backbone covering the entire
+reference; partial structures and independent fragments cannot supply that score.
+Their kernel features remain available even if the separate scoring stage fails.
 
 ```bash
 sbatch sbatch_run/run_prepare_rep/prepare_esm_if1.sbatch
@@ -596,11 +600,13 @@ n=$(python sbatch_run/run_prepare_rep/list_assays.py --config configs/extraction
 sbatch --array="0-$((n - 1))" sbatch_run/run_prepare_rep/prepare_esm_if1.sbatch
 ```
 
-Without an array, the job processes the full catalog sequentially. References
-longer than 1,022 residues fail explicitly, including those with fragments; array
-indices are never filtered or renumbered. Other assays continue, and any failed
-stage gives the job a nonzero exit status. Resubmission reuses verified downloads
-and resumes matching completed caches. These normalized ESM-IF1 probabilities
+Without an array, the job processes the full catalog sequentially, with no default
+reference-length cap. Array indices are never filtered or renumbered. Other assays
+continue after a failure, and any failed stage gives the job a nonzero exit status.
+Resubmission reuses verified downloads and resumes matching completed caches,
+including those saved under the previous 1,022-residue guard. Changing only this
+operational guard preserves cache compatibility and leaves saved provenance intact.
+These normalized ESM-IF1 probabilities
 require `inverse_folding_policy="normalized"` when selecting them for NKN kernels.
 
 The optional legacy backbone-only recipe uses the same downloaded checkpoint.
@@ -863,6 +869,57 @@ This choice is independent of `model.enabled_branches`.
 Recipe references: [official ESM variant scoring](https://github.com/facebookresearch/esm/blob/main/examples/variant-prediction/predict.py),
 [Kermut ESM2 scoring](https://github.com/petergroth/kermut/blob/main/kermut/cmdline/preprocess_data/extract_esm2_zero_shots.py).
 
+## ESM-IF1 scores for the GP mean
+
+The `score` command implements ProteinGym's `esmif1_ll` recipe on the fixed
+reference backbone. For each complete variant sequence `s`, it computes
+`mean_i log p(s_i | backbone, s_<i)` using that variant's causal prefix, in N-to-C
+order. Every residue contributes, including unchanged residues. Cross entropy
+uses the full native output vocabulary; padding is excluded from the mean.
+There is no WT subtraction or additional normalization over the 20 canonical
+amino acids. Higher scores indicate greater model likelihood.
+
+These scores require a separate forward pass for each variant (or variant batch).
+The shared WT-prefix, 20-way kernel distributions cannot reproduce them. Model
+weights stay frozen, and experimental labels are never passed to the scorer.
+
+```bash
+python -m feature_generation.cli score --config configs/extraction/esm_if1_142m.json --output-root data/features/pretrained/singles --assay YAP1_HUMAN_Araya_2012 --singles-only --device cuda --batch-size 1 --resume
+python -m feature_generation.cli validate --features data/features/pretrained/singles/YAP1_HUMAN_Araya_2012 --feature-type scores --model-family esm_if1 --cache-id esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b
+```
+
+The existing extraction config supplies the checkpoint, paths and optional
+`max_length` guard; its `reference_prefix` conditioning identifies kernel features,
+while the score cache records `sequence_autoregressive` and `prefix_sequence=variant`.
+No sequence-length cap is applied by default. Scoring uses float32 and defaults to
+one variant per batch; `--batch-size` can increase this when memory permits.
+`--num-orders` is specific to ProteinMPNN and does not apply to ESM-IF1.
+The N/CA/C backbone must cover the entire reference in one coordinate frame.
+Unsupported fragments or partial mappings fail explicitly without cropping or
+aggregating fragment scores.
+
+Scores are saved as `variant_id,score` in a separate `mean_score.csv`, with recipe,
+checkpoint, structure and checksum metadata. `--resume` validates and reuses
+completed caches independently of kernel-feature caches. The same output root
+and variant selection must be used for scores and features. The preparation job
+above runs both stages and validates both even when another stage fails.
+
+To use this score in NKN, select the following source in the experiment config,
+either alone or alongside existing ESM2/ProteinMPNN sources:
+
+```json
+"score_sources": [
+  "scores/esm_if1/esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b"
+]
+```
+
+The cached values are raw log-likelihoods. Existing GP preprocessing standardizes
+each score column using the training fold only, then applies those statistics to
+validation/test variants. The GP learns its intercept and each score coefficient.
+This choice is independent of the kernel-feature selection.
+
+Recipe reference: [ProteinGym ESM-IF1 scoring](https://github.com/OATML-Markslab/ProteinGym/blob/main/proteingym/baselines/esm/compute_fitness_esm_if1.py).
+
 ## ProteinMPNN scores for the GP mean
 
 The `score` command runs the pinned official ProteinMPNN forward pass on every
@@ -1052,7 +1109,8 @@ both ESM2 stages cover mutation positions beyond residue 1,022. ProteinMPNN's
 default presets also have no reference-length cap, but still require a valid
 full-reference structure. Its job requests 16 GiB host RAM and one hour, and
 scores one variant per batch; long references may need more memory or time.
-ESM-IF1 retains its 1,022-residue limit.
+ESM-IF1's default preset also has no sequence-length cap; long references may
+require more memory or time than its preparation job requests.
 
 To prepare optional legacy pooled prefix embeddings, pass the pooled preset:
 
@@ -1074,7 +1132,8 @@ These pooled caches cannot supply NKN's `sequence_site` branch.
 
 The `prosst_2048.json` preset uses [AI4Protein/ProSST-2048](https://huggingface.co/AI4Protein/ProSST-2048)
 at revision `e94ffee7846d7f55c1bf5efa8ec7372a336ac4b8`. It saves the final
-layer (12) as float32 `embeddings[N, L, 768]`, excluding special tokens and padding.
+layer (12) as float32 global `embeddings[N, 768]` and packed mutation-site
+vectors `[number_of_mutations, 768]`, excluding special tokens and padding.
 Each unmasked variant sequence is paired with the **same reference backbone**.
 These are joint sequence/structure representations for substitution variants;
 this recipe does not calculate candidate probabilities or mean scores.
@@ -1107,7 +1166,8 @@ python -m feature_generation.cli validate --features "data/features/pretrained/$
 
 For a small CLI smoke test, append `--limit 4 --output-root data/features/prosst_smoke`
 to extraction and validate that output root. The expected pilot shape is
-`[4, 161, 768]`. Use a separate output root when changing the variant subset.
+`[4, 768]` for globals, plus one site vector per annotated mutation.
+Use a separate output root when changing the variant subset.
 
 ```text
 data/models/prosst/ProSST-2048/<revision>/        # weights, codebook, verified source
@@ -1129,15 +1189,33 @@ The quantizer cache directory can be overridden with `--structure-token-dir`.
 ESM-2 and ProSST can coexist within one assay when their output root and variant
 selection match. The first sequence recipe remains
 the default. To use ProSST in a GP experiment, select
-`feature_selection["sequence"] = "prosst/ProSST-2048-layer12-fixed-backbone-e94ffee7846d"`.
-The existing loader accepts the same `[N,L,D]` sequence contract. A full GP run still
+`feature_selection["sequence"] = "prosst/ProSST-2048-layer12-fixed-backbone-e94ffee7846d-mean-all-nonoverlap2046-centered-sites"`.
+The loader supplies both global and mutation-site sequence branches from this compact cache. A full GP run still
 requires the other configured modalities and scores. This recipe supplies the
 variant sequence feature branch; it does not supply a separate WT structure cache.
 
-The default `max_length=1022` is an operational guard, not a ProSST architecture
-limit. Extraction never crops structures or sequences. Increase the batching budget
-if one sequence plus its two special tokens exceeds `max_tokens_per_batch`.
-This initial ProSST recipe uses float32 inference and output only.
+Both ProSST presets use `max_length=2046` residues per model window and
+`max_tokens_per_batch=2048`: 2046 residues plus BOS/EOS gives 2048 total tokens. The [paper, Appendix A.2](https://proceedings.neurips.cc/paper_files/paper/2024/file/3ed57b293db0aab7cc30c44f45262348-Paper-Conference.pdf)
+reports removing proteins longer than 2048 residues during pre-training. This
+recipe uses a 2048-token cap including special tokens, within that training range. The model name's `2048`
+separately denotes the structure codebook size.
+
+Global embeddings use non-overlapping windows covering every residue and a
+length-weighted mean, so a shorter final window gets its correct weight.
+Mutation-site embeddings use the same centered, clamped windows as ESM2,
+with up to 2046 residues of the actual unmasked variant. Short proteins use
+one full-reference window. The full backbone is quantized once; both amino-acid
+and structure-token streams then use identical slices. This preserves the
+quantizer's full-structure neighborhoods, but attention cannot cross window
+boundaries. Long-protein outputs are therefore an approximation to full-context
+inference. Inference and output remain float32; peak GPU memory still depends
+on window length, and the token budget is not a GPU-memory guarantee.
+
+New embedding cache IDs end in `-mean-all-nonoverlap2046-centered-sites`; centered
+score IDs end in `-centered2046`. Existing full-residue and full-reference score
+caches remain readable and are separate recipes. To retain the old layout in a
+custom config, use `pooling="none"`, `global_window="prefix"`,
+`truncation="reject"`, `site_embeddings="none"`, and `scoring_window="full"`.
 
 ### ProSST Slurm preparation and GP mean scores
 
@@ -1153,8 +1231,8 @@ sbatch sbatch_run/run_prepare_rep/prepare_prosst.sbatch
 
 The job uses the `nkn_protein` Conda environment and a V100/16 GiB allocation.
 The [`prosst_2048_singles.json`](../../configs/extraction/prosst_2048_singles.json)
-preset writes to `data/features/pretrained/singles`. It keeps the 2,048-token
-batching budget, 1,022-residue guard, and 4 GiB embedding-output guard. Failed
+preset writes to `data/features/pretrained/singles`. It uses a 2,048-token
+batching budget, 2,046-residue windows, and a 4 GiB compact-output guard. Failed
 assays are reported and later assays are attempted; any failure makes the job
 exit nonzero. The job verifies both embedding and score caches. Shared downloads
 and duplicate assay preparations use filesystem locks.
@@ -1166,12 +1244,13 @@ resource guards; `--config` takes precedence. Relative paths use the repository
 root. Model assets and structure tokens are cached separately from embeddings.
 
 ProSST scoring uses the same masked-marginal formula as ESM2: for each mutated
-position, mask that WT amino acid, retain all fixed reference structure tokens,
+position, mask that WT amino acid and retain the aligned, unmasked structure tokens,
 and subtract the WT log probability from the mutant log probability. Sum these
 contributions for multi-substitution variants; WT scores are zero. This is a
-model log-odds score, not a calibrated fitness prediction. Scoring uses full
-reference context, float32 log-softmax over the model vocabulary, and no DMS
-labels. It does not crop structures or use ESM2's centered windows.
+model log-odds score, not a calibrated fitness prediction. Scoring uses centered
+WT windows for long references, full context for short references, float32
+log-softmax over the model vocabulary, and no DMS labels. Each window slices
+the cached full-reference structure tokens at the same bounds as the sequence.
 
 After preparing structures, scores can also be generated independently:
 
@@ -1185,7 +1264,7 @@ Each assay gets a separate score leaf:
 
 ```text
 data/features/pretrained/singles/<assay>/scores/prosst/
-  ProSST-2048-masked_marginals-fixed-backbone-float32-e94ffee7846d/
+  ProSST-2048-masked_marginals-fixed-backbone-float32-e94ffee7846d-centered2046/
     mean_score.csv
     config.json
     provenance.json
@@ -1194,7 +1273,7 @@ data/features/pretrained/singles/<assay>/scores/prosst/
 
 `mean_score.csv` contains `variant_id,score`. To use it for the GP mean, set
 `score_sources` to
-`["scores/prosst/ProSST-2048-masked_marginals-fixed-backbone-float32-e94ffee7846d"]`.
+`["scores/prosst/ProSST-2048-masked_marginals-fixed-backbone-float32-e94ffee7846d-centered2046"]`.
 Embedding selection remains independent. The score recipe does not depend on the
 embedding layer; resume verifies checkpoint, variant coverage, structure and
 structure-token identities, and file checksums.

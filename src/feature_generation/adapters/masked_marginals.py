@@ -19,6 +19,10 @@ class MaskedMarginalScoring:
     def _masked_forward(self, input_ids, attention_mask):
         return self._model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
 
+    def _masked_window_forward(self, input_ids, attention_mask, bounds):
+        """Allow structure-conditioned models to align each row to its window."""
+        return self._masked_forward(input_ids, attention_mask)
+
     def _reference_tokens(self, reference_sequence: str):
         tokens = self._tokenizer(
             [reference_sequence], add_special_tokens=True, padding=True, truncation=False,
@@ -101,7 +105,9 @@ class MaskedMarginalScoring:
         for start in range(0, len(sites), masked_batch_size):
             batch_sites = sites[start:start + masked_batch_size]
             count = len(batch_sites)
+            batch_bounds = []
             if reference_tokens is not None:
+                batch_bounds = [(0, length)] * count
                 input_ids, attention_mask, residue_positions, amino_acid_ids = reference_tokens
                 positions = residue_positions[batch_sites].to(self._device)
                 masked_ids = input_ids.to(self._device).expand(count, -1).clone()
@@ -111,6 +117,7 @@ class MaskedMarginalScoring:
                 token_rows, attention_rows, local_positions = [], [], []
                 for site in batch_sites:
                     bounds = centered_window_bounds(site + 1, length, self.config.max_length)
+                    batch_bounds.append(bounds)
                     if bounds not in window_tokens:
                         window_tokens[bounds] = self._reference_tokens(reference_sequence[bounds[0]:bounds[1]])
                     input_ids, attention_mask, residue_positions, amino_acid_ids = window_tokens[bounds]
@@ -123,7 +130,7 @@ class MaskedMarginalScoring:
             rows = torch.arange(count, device=self._device)
             masked_ids[rows, positions] = self._tokenizer.mask_token_id
             with torch.inference_mode():
-                output = self._masked_forward(masked_ids, batch_attention)
+                output = self._masked_window_forward(masked_ids, batch_attention, batch_bounds)
                 logits = output.logits
                 if tuple(logits.shape) != (count, represented_length + 2, self._model.config.vocab_size):
                     raise ValueError("Masked language model returned an unexpected masked-language-model logits shape")

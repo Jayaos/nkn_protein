@@ -80,14 +80,6 @@ class ProteinMPNNLengthConfigurationTests(unittest.TestCase):
             with self.subTest(limit=limit), self.assertRaises(ValueError):
                 InverseFoldingConfig(max_length=limit)
 
-    def test_esm_if1_default_and_explicit_limits_are_unchanged(self):
-        self.assertEqual(InverseFoldingConfig(model_family="esm_if1").max_length, 1022)
-        self.assertEqual(InverseFoldingConfig(model_family="esm_if1", max_length=None).max_length, 1022)
-        self.assertEqual(InverseFoldingConfig(model_family="esm_if1", max_length=512).max_length, 512)
-        for limit in (1023, 3423, 0, True):
-            with self.subTest(limit=limit), self.assertRaises(ValueError):
-                InverseFoldingConfig(model_family="esm_if1", max_length=limit)
-
 
 class LongProteinMPNNPipelineTests(unittest.TestCase):
     def setUp(self):
@@ -216,8 +208,8 @@ class LongProteinMPNNPipelineTests(unittest.TestCase):
             with self.subTest(shape=bad_coords.shape), self.assertRaises(ValueError):
                 value._coords(SimpleNamespace(reference_sequence=self.reference, coords=bad_coords), 4)
 
-    def test_esm_if1_still_rejects_long_reference_before_loading_weights_or_structure(self):
-        config = InverseFoldingConfig(model_family="esm_if1", device="cpu")
+    def test_esm_if1_explicit_cap_rejects_long_reference_before_loading_weights_or_structure(self):
+        config = InverseFoldingConfig(model_family="esm_if1", device="cpu", max_length=1022)
         value = ESMIF1Adapter(config)
         value.load = Mock(side_effect=AssertionError("long ESM-IF1 reference must fail before load"))
         with self.assertRaisesRegex(ValueError, "max_length=1022"):

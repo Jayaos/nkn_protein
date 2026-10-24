@@ -32,8 +32,8 @@ def _parser() -> argparse.ArgumentParser:
     extraction.add_argument("--resume", action="store_true", help="Reuse only matching, fully validated completed caches")
     extraction.add_argument("--continue-on-error", action="store_true", help="Report failed assays and continue; exit status remains nonzero")
     extraction.add_argument("--quiet", action="store_true")
-    scoring = commands.add_parser("score", help="Prepare ProteinMPNN, ESM2, or ProSST mean_score.csv for the GP mean")
-    scoring.add_argument("--config", required=True, type=Path, help="ESM2, ProSST, or ProteinMPNN extraction config supplies checkpoint and paths")
+    scoring = commands.add_parser("score", help="Prepare ProteinMPNN, ESM-IF1, ESM2, or ProSST mean_score.csv for the GP mean")
+    scoring.add_argument("--config", required=True, type=Path, help="Extraction config supplies checkpoint and paths")
     score_assays = scoring.add_mutually_exclusive_group(required=True)
     score_assays.add_argument("--assay", action="append", help="Assay ID; repeat to select several assays")
     score_assays.add_argument("--all-assays", action="store_true")
@@ -42,7 +42,7 @@ def _parser() -> argparse.ArgumentParser:
     scoring.add_argument("--structure-manifest-dir", type=Path)
     scoring.add_argument("--structure-token-dir", type=Path)
     scoring.add_argument("--device", choices=("auto", "cpu", "cuda"))
-    scoring.add_argument("--batch-size", type=int, default=8, help="Variant sequences (ProteinMPNN) or masked WT copies (ESM2/ProSST) per forward pass")
+    scoring.add_argument("--batch-size", type=int, help="Variants (ProteinMPNN/ESM-IF1) or masked WT copies (ESM2/ProSST) per forward pass; default 1 for ESM-IF1, 8 otherwise")
     scoring.add_argument("--num-orders", type=int, help="ProteinMPNN only: random decoding orders to average; default 1")
     scoring.add_argument("--max-tokens-per-batch", type=int, help="ESM2/ProSST: token budget including BOS/EOS")
     scoring.add_argument("--cache-id", help="Score recipe directory; default identifies checkpoint and scoring settings")
@@ -88,6 +88,8 @@ def _progress(event: dict) -> None:
             detail = f"{label} masked marginals at {event['num_masked_positions']} WT positions"
             if event.get("scoring_window") == "centered":
                 detail += f", centered windows of {event['window_length']} residues"
+        elif event.get("model_family") == "esm_if1":
+            detail = "ESM-IF1 native log-likelihood, fixed N-to-C order"
         else:
             detail = f"{event['num_orders']} decoding orders"
         print(f"{assay}: scoring {event['num_variants']} variants ({detail})", file=sys.stderr)

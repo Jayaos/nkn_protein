@@ -1,7 +1,5 @@
 """ProSST masked-WT log odds conditioned on the fixed reference backbone."""
 
-import torch
-
 from .masked_marginals import CANONICAL_ALPHABET, MaskedMarginalScoring
 from .prosst import ProSSTAdapter
 
@@ -10,7 +8,9 @@ class ProSSTScoreAdapter(MaskedMarginalScoring, ProSSTAdapter):
     def score_metadata(self):
         metadata = self.metadata()
         for name in ("checkpoint", "layer", "embedding_dim", "hidden_size", "pooling",
-                     "includes_special_tokens", "amino_acid_masking"):
+                     "includes_special_tokens", "amino_acid_masking", "site_embeddings",
+                     "cache_layout", "site_context", "window_policy", "window_indexing",
+                     "global_window", "global_window_aggregation", "structure_window"):
             metadata.pop(name, None)
         metadata.update(
             feature_type="scores", score_definition="sum_masked_marginal_log_odds",
@@ -23,6 +23,13 @@ class ProSSTScoreAdapter(MaskedMarginalScoring, ProSSTAdapter):
             precision_policy="float32_log_softmax", scoring_window="full", truncation="reject",
             structure_masking="none",
         )
+        metadata["max_length_policy"] = "configured_memory_guard"
+        if self.config.scoring_window == "centered":
+            metadata.update(
+                scoring_recipe_version=2, scoring_window="centered", truncation="centered",
+                window_policy="centered_clamped", window_indexing="zero_based_half_open",
+                max_length_policy="residue_window", structure_window="aligned_full_reference_tokens",
+            )
         return metadata
 
     def load(self):
@@ -31,8 +38,8 @@ class ProSSTScoreAdapter(MaskedMarginalScoring, ProSSTAdapter):
             raise ValueError("ProSST model and tokenizer disagree on the mask token")
 
     def iter_scores(self, reference_sequence, sequences, *, batch_size=8):
-        # Validate full-reference alignment and memory guards before model I/O.
-        list(self._batches([reference_sequence]))
+        # Validate full-reference alignment before slicing either input stream.
+        self._validate_sequences([reference_sequence], windowed=self.config.scoring_window == "centered")
         yield from super().iter_scores(reference_sequence, sequences, batch_size=batch_size)
 
     def _reference_tokens(self, reference_sequence):
@@ -45,9 +52,16 @@ class ProSSTScoreAdapter(MaskedMarginalScoring, ProSSTAdapter):
         return result
 
     def _masked_forward(self, input_ids, attention_mask):
-        structure_ids = torch.cat((torch.tensor([1]), self._structure_tokens + 3, torch.tensor([2])))
+        return self._masked_window_forward(
+            input_ids, attention_mask, [(0, self._structure_tokens.numel())] * input_ids.shape[0],
+        )
+
+    def _masked_window_forward(self, input_ids, attention_mask, bounds):
+        structure_ids = self._structure_window_ids(bounds)
+        if structure_ids.shape != input_ids.shape:
+            raise ValueError("ProSST masked sequence and structure windows must align")
         return self._model(
             input_ids=input_ids, attention_mask=attention_mask,
-            ss_input_ids=structure_ids.unsqueeze(0).expand(input_ids.shape[0], -1).to(self._device),
+            ss_input_ids=structure_ids.to(self._device),
             return_dict=True,
         )

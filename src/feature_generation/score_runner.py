@@ -1,4 +1,4 @@
-"""Prepare variant-level GP mean scores with frozen ProteinMPNN, ESM2, or ProSST inference."""
+"""Prepare variant-level GP mean scores with frozen pretrained models."""
 
 from __future__ import annotations
 
@@ -29,9 +29,16 @@ def default_cache_id(config: InverseFoldingConfig | ExtractionConfig | ProSSTCon
             cache_id += f"-centered{config.max_length}"
         return cache_id
     if family == "prosst":
-        return f"ProSST-2048-masked_marginals-fixed-backbone-{config.inference_dtype}-{config.revision[:12]}"
+        cache_id = f"ProSST-2048-masked_marginals-fixed-backbone-{config.inference_dtype}-{config.revision[:12]}"
+        if config.scoring_window == "centered":
+            cache_id += f"-centered{config.max_length}"
+        return cache_id
+    if family == "esm_if1":
+        if type(num_orders) is not int or num_orders != 1:
+            raise ValueError("ESM-IF1 scoring uses one fixed N-to-C decoding order")
+        return f"{config.model_id.split('/')[-1]}-sequence_log_likelihood-native-v1-{config.revision[:12]}"
     if family != "proteinmpnn":
-        raise ValueError("Mean scoring currently supports ProteinMPNN, ESM2, and ProSST")
+        raise ValueError("Mean scoring supports ProteinMPNN, ESM-IF1, ESM2, and ProSST")
     return (
         f"{config.model_id.split('/')[-1]}-sequence_log_likelihood-"
         f"orders{num_orders}-seed{config.seed}-{config.revision[:12]}"
@@ -42,7 +49,7 @@ def score(
     config: InverseFoldingConfig | ExtractionConfig | ProSSTConfig,
     assay_ids: Sequence[str],
     *,
-    batch_size: int = 8,
+    batch_size: int | None = None,
     num_orders: int = 1,
     cache_id: str | None = None,
     singles_only: bool = False,
@@ -55,17 +62,20 @@ def score(
 ) -> list[dict]:
     """Score variants with the selected pretrained recipe, without labels.
 
-    ProteinMPNN evaluates full variant sequences on the reference backbone.
+    ProteinMPNN and ESM-IF1 evaluate full variants on the reference backbone.
+    ESM-IF1 uses native-vocabulary log-likelihoods with each variant's prefix.
     ESM2 evaluates masked WT positions and sums mutation log-odds, optionally
     using centered WT windows for long references. The extraction config supplies
     checkpoint, paths and scoring_window; embedding layer selections are ignored.
-    ProSST uses full masked WT context and fixed reference structure tokens.
+    ProSST aligns fixed reference structure tokens with each masked WT window.
     Scoring has a separate cache identity and never edits representation leaves.
     """
     family = getattr(config, "model_family", "esm2")
-    if family not in ("proteinmpnn", "esm2", "prosst"):
-        raise ValueError("Mean scoring currently supports ProteinMPNN, ESM2, and ProSST")
-    centered = family == "esm2" and config.scoring_window == "centered"
+    if family not in ("proteinmpnn", "esm_if1", "esm2", "prosst"):
+        raise ValueError("Mean scoring supports ProteinMPNN, ESM-IF1, ESM2, and ProSST")
+    if batch_size is None:
+        batch_size = 1 if family == "esm_if1" else 8
+    centered = family in ("esm2", "prosst") and config.scoring_window == "centered"
     if not assay_ids or len(set(assay_ids)) != len(assay_ids):
         raise ValueError("Select at least one unique assay")
     for name, value in (("batch_size", batch_size), ("num_orders", num_orders)):
@@ -73,6 +83,8 @@ def score(
             raise ValueError(f"{name} must be a positive integer")
     if family in ("esm2", "prosst") and num_orders != 1:
         raise ValueError("num_orders does not apply to masked-marginal scoring")
+    if family == "esm_if1" and num_orders != 1:
+        raise ValueError("ESM-IF1 scoring uses one fixed N-to-C decoding order")
     if limit is not None and (type(limit) is not int or limit < 1):
         raise ValueError("limit must be a positive integer")
     cache_id = default_cache_id(config, num_orders) if cache_id is None else cache_id
@@ -82,6 +94,10 @@ def score(
             from .adapters.proteinmpnn import ProteinMPNNAdapter
 
             adapter_factory = ProteinMPNNAdapter
+        elif family == "esm_if1":
+            from .adapters.esm_if1 import ESMIF1Adapter
+
+            adapter_factory = ESMIF1Adapter
         elif family == "prosst":
             from .adapters.prosst_scoring import ProSSTScoreAdapter
 
@@ -114,13 +130,13 @@ def score(
                     "structures and sequences are never truncated"
                 )
             structure = None
-            if family in ("proteinmpnn", "prosst"):
+            if family in ("proteinmpnn", "esm_if1", "prosst"):
                 manifest_root = config.structure_manifest_dir.resolve()
                 manifest_path = (manifest_root / f"{assay_id}.json").resolve()
                 if not manifest_path.is_relative_to(manifest_root):
                     raise ValueError("Structure manifest path escapes structure_manifest_dir")
-                structure = load_structure(manifest_path, inputs.reference_sequence, require_oxygen=True)
-            if family != "proteinmpnn" and (min(inputs.length, config.max_length) if centered else inputs.length) + 2 > config.max_tokens_per_batch:
+                structure = load_structure(manifest_path, inputs.reference_sequence, require_oxygen=family != "esm_if1")
+            if family in ("esm2", "prosst") and (min(inputs.length, config.max_length) if centered else inputs.length) + 2 > config.max_tokens_per_batch:
                 raise ValueError("One sequence exceeds max_tokens_per_batch, including BOS/EOS tokens")
             if model_metadata is None:
                 model_metadata = (adapter.score_metadata(num_orders=num_orders) if family == "proteinmpnn"
@@ -162,7 +178,7 @@ def score(
             event = {"assay_id": assay_id, "status": "scoring", "model_family": family, "num_variants": n}
             if family == "proteinmpnn":
                 event["num_orders"] = num_orders
-            else:
+            elif family in ("esm2", "prosst"):
                 event["num_masked_positions"] = len({
                     index for sequence in inputs.sequences
                     for index, (wt, mutant) in enumerate(zip(inputs.reference_sequence, sequence)) if wt != mutant
@@ -179,9 +195,12 @@ def score(
             scores = torch.empty(n, dtype=torch.float32)
             seen = torch.zeros(n, dtype=torch.bool)
             with torch.inference_mode():
-                batches = (adapter.iter_scores(structure, inputs.sequences, batch_size=batch_size, num_orders=num_orders)
-                           if family == "proteinmpnn" else
-                           adapter.iter_scores(inputs.reference_sequence, inputs.sequences, batch_size=batch_size))
+                if family == "proteinmpnn":
+                    batches = adapter.iter_scores(structure, inputs.sequences, batch_size=batch_size, num_orders=num_orders)
+                elif family == "esm_if1":
+                    batches = adapter.iter_scores(structure, inputs.sequences, batch_size=batch_size)
+                else:
+                    batches = adapter.iter_scores(inputs.reference_sequence, inputs.sequences, batch_size=batch_size)
                 for indices, values in batches:
                     if (
                         not isinstance(indices, (list, tuple)) or not indices
@@ -221,7 +240,7 @@ def score(
             if family == "prosst":
                 provenance.update(structure_token_cache=str(structure_tokens.path),
                                   structure_token_input_signature=structure_tokens.input_signature)
-            if family != "proteinmpnn":
+            if family in ("esm2", "prosst"):
                 provenance["max_tokens_per_batch"] = config.max_tokens_per_batch
                 provenance["num_masked_positions"] = event["num_masked_positions"]
             leaf = write_score_cache(root, family, cache_id, inputs, leaf_config, scores, provenance)

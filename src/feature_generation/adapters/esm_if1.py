@@ -1,4 +1,4 @@
-"""Frozen official ESM-IF1 probabilities conditioned on the reference prefix."""
+"""Frozen ESM-IF1 WT-prefix features and full-variant sequence scores."""
 
 import argparse
 import importlib
@@ -8,7 +8,7 @@ import sys
 import torch
 
 from .inverse_base import InverseFoldingAdapter
-from ..inverse_config import ALPHABET, PRESETS
+from ..inverse_config import ALPHABET, ESM_IF1_SCORE_RECIPE, PRESETS
 
 
 def import_pinned_esm(source: Path):
@@ -94,3 +94,57 @@ class ESMIF1Adapter(InverseFoldingAdapter):
         if len(set(indices)) != 20 or any(self._alphabet.get_tok(i) != aa for aa, i in zip(ALPHABET, indices)):
             raise ValueError("ESM-IF1 vocabulary lacks distinct canonical amino-acid tokens")
         return self._probabilities(logits[0].transpose(0, 1), indices, len(sequence))
+
+    def score_metadata(self) -> dict:
+        """Describe ProteinGym scoring independently of WT-prefix features."""
+        return dict(self.metadata(), **ESM_IF1_SCORE_RECIPE,
+                    feature_type="scores", score_direction="higher_is_more_likely")
+
+    def iter_scores(self, structure, sequences, *, batch_size: int = 1):
+        """Yield mean native log-likelihoods using each variant's own prefix.
+
+        Match ProteinGym's score_sequence_batch: cross entropy over the full
+        output vocabulary, averaged over non-padding target residues. The
+        complete reference backbone is fixed; only substitutions are supported.
+        """
+        if type(batch_size) is not int or batch_size < 1:
+            raise ValueError("batch_size must be a positive integer")
+        coords = self._coords(structure, required_atoms=3).cpu().numpy()
+        length = len(structure.reference_sequence)
+        if isinstance(sequences, (str, bytes)):
+            raise ValueError("sequences must be a nonempty collection of full-length sequences")
+        try:
+            sequences = list(sequences)
+        except TypeError as exc:
+            raise ValueError("sequences must be a nonempty collection of full-length sequences") from exc
+        if not sequences:
+            raise ValueError("sequences must be a nonempty collection of full-length sequences")
+        for index, sequence in enumerate(sequences):
+            if not isinstance(sequence, str) or len(sequence) != length or set(sequence) - set(ALPHABET):
+                raise ValueError(f"Sequence {index} must contain exactly {length} canonical amino acids; only substitutions are supported")
+        self.load()
+        indices = [self._alphabet.get_idx(aa) for aa in ALPHABET]
+        if len(set(indices)) != 20 or any(self._alphabet.get_tok(i) != aa for aa, i in zip(ALPHABET, indices)):
+            raise ValueError("ESM-IF1 vocabulary lacks distinct canonical amino-acid tokens")
+        for start in range(0, len(sequences), batch_size):
+            batch = sequences[start:start + batch_size]
+            count = len(batch)
+            batch_coords, confidence, _, tokens, padding = self._converter(
+                [(coords, None, sequence) for sequence in batch], device=self._device,
+            )
+            expected = [[self._alphabet.get_idx(aa) for aa in sequence] for sequence in batch]
+            if tokens.shape != (count, length + 1) or tokens[:, 1:].tolist() != expected:
+                raise ValueError("ESM-IF1 tokenizer does not align with the complete variant sequences")
+            targets = tokens[:, 1:]
+            target_mask = targets != self._alphabet.padding_idx
+            with torch.inference_mode():
+                logits, _ = self._model(batch_coords, padding, confidence, tokens[:, :-1])
+                if tuple(logits.shape) != (count, len(self._alphabet), length) or not torch.isfinite(logits).all():
+                    raise ValueError("ESM-IF1 scoring requires finite native logits with shape [batch, vocabulary, length]")
+                # Keep special-token probability mass and every residue term.
+                losses = torch.nn.functional.cross_entropy(logits.float(), targets, reduction="none")
+                scores = -(losses * target_mask).sum(-1) / target_mask.sum(-1)
+                if not torch.isfinite(scores).all():
+                    raise ValueError("ESM-IF1 returned nonfinite sequence scores")
+                values = scores.detach().to(device="cpu", dtype=torch.float32).contiguous()
+            yield list(range(start, start + count)), values

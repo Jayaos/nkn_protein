@@ -206,6 +206,25 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
         self.assertEqual(Path(validation['path']), Path(extraction['output_root']) / ASSAY)
         self.assertTrue(next(r for r in records if r['kind'] == 'structure-verify')['require_oxygen'])
 
+    def test_windowed_preset_admits_long_references_and_counts_special_tokens(self):
+        catalog = self.root / 'data/DMS_ProteinGym_substitutions/DMS_substitutions.csv'
+        with catalog.open('w', newline='', encoding='utf-8') as handle:
+            writer = csv.DictWriter(handle, fieldnames=('DMS_id', 'DMS_filename', 'target_seq'))
+            writer.writeheader()
+            writer.writerow(dict(DMS_id=ASSAY, DMS_filename=f'{ASSAY}.csv', target_seq='A' * 2049))
+        result, records = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        extraction = next(record for record in records if record['kind'] == 'extract')
+        self.assertEqual(extraction['max_tokens_per_batch'], 2048)
+        self.assertTrue(extraction['cache_id'].endswith('nonoverlap2046-centered-sites'))
+        config = json.loads((self.root / CONFIG).read_text())
+        config['max_tokens_per_batch'] = 2047
+        custom = self.root / 'configs/extraction/too_few_tokens.json'
+        custom.write_text(json.dumps(config))
+        result, records = self.invoke(('--config', str(custom)))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('download', [record['kind'] for record in records])
+
     def test_config_precedence_preserves_registered_structure_and_paths(self):
         custom = self.root / 'configs/extraction/custom paths.json'
         # Exercise real ProSSTConfig defaults, including omitted assay_index.

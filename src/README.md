@@ -304,7 +304,13 @@ Short references use full WT context. Both NKN and Kermut presets select the
 ProteinMPNN's presets now use `max_length: null`, removing its sequence-length
 guard while retaining full-reference structure requirements. Its preparation
 job scores one complete variant per batch; GPU memory and runtime still limit
-practical input sizes. ESM-IF1 retains its 1,022-residue limit.
+practical input sizes. ESM-IF1 also defaults to `max_length: null`, so full inputs
+are admitted subject to available memory and runtime.
+Its preparation job also writes ProteinGym-style native full-variant scores for
+the GP mean. Select the ESM-IF1 `scores/esm_if1/...` source in the experiment's
+`score_sources`; see [ESM-IF1 mean scoring](feature_generation/README.md#esm-if1-scores-for-the-gp-mean)
+for the cache ID and standalone commands. Scores use variant prefixes and are
+standardized by the existing GP preprocessing using training-fold statistics.
 
 The NKN launcher uses the cluster's existing `nkn_protein` Conda environment.
 

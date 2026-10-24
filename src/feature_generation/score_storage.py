@@ -13,11 +13,13 @@ from torch import Tensor
 
 from data_loading.features import read_csv
 from .inputs import AssayInput, safe_component, sha256_file, stable_json
+from .inverse_config import ESM_IF1_SCORE_RECIPE
 from .inverse_storage import _resume_configs_match, _validate_assay
 from .storage import _assay_lock, _ensure_assay, _inside, _read_json, _write_json
 from .structure_inputs import validate_structure_metadata
 
-FAMILIES = ("proteinmpnn", "esm2", "prosst", "msa_transformer")
+FAMILIES = ("proteinmpnn", "esm_if1", "esm2", "prosst", "msa_transformer")
+STRUCTURE_FAMILIES = ("proteinmpnn", "esm_if1", "prosst")
 SCORE_DESCRIPTOR = {"file": "mean_score.csv", "id_column": "variant_id", "score_column": "score"}
 
 
@@ -48,7 +50,7 @@ def make_score_config(
         "mean_score": dict(SCORE_DESCRIPTOR),
         "score_direction": "higher_is_more_likely",
     }
-    if model_family in ("proteinmpnn", "prosst"):
+    if model_family in STRUCTURE_FAMILIES:
         config["structure"] = structure_metadata
     elif structure_metadata is not None:
         raise ValueError("ESM2 mean scores do not use structure metadata")
@@ -68,6 +70,15 @@ def _validate_config(config: dict, model_family: str, cache_id: str) -> None:
     }
     if any(config.get(key) != value for key, value in expected.items()):
         raise ValueError("Score configuration does not match its cache directory or format")
+    if model_family == "esm_if1":
+        if any(type(config.get(key)) is not type(value) or config.get(key) != value
+               for key, value in ESM_IF1_SCORE_RECIPE.items()):
+            raise ValueError("Unsupported ESM-IF1 mean-score recipe")
+        structure = config.get("structure")
+        if not isinstance(structure, dict):
+            raise ValueError("Missing ESM-IF1 score structure metadata")
+        validate_structure_metadata(structure, structure.get("reference_sequence"))
+        return
     if model_family == "msa_transformer":
         from .msa_config import LEGACY_SCORE_RECIPE, SCORE_RECIPE, validate_msa_metadata
         validate_msa_metadata(config)
@@ -88,6 +99,18 @@ def _validate_config(config: dict, model_family: str, cache_id: str) -> None:
             "wild_type_subtraction": True, "residue_aggregation": "sum_over_mutations",
             "alphabet": "ACDEFGHIKLMNPQRSTVWY", "precision_policy": "float32_log_softmax",
         }
+        if type(config.get("scoring_recipe_version")) is int and config["scoring_recipe_version"] == 2:
+            recipe.update(
+                scoring_recipe_version=2, scoring_window="centered", truncation="centered",
+                window_policy="centered_clamped", window_indexing="zero_based_half_open",
+                max_length_policy="residue_window", structure_window="aligned_full_reference_tokens",
+                noncanonical_tokens="retained_in_normalization",
+            )
+            max_length = config.get("max_length")
+            if type(max_length) is not int or not 1 <= max_length <= 2046:
+                raise ValueError("Centered ProSST score max_length must be an integer between 1 and 2046")
+        elif any(key in config for key in ("window_policy", "window_indexing", "structure_window")):
+            raise ValueError("Legacy ProSST mean scores require full-reference context without centered windows")
         if any(type(config.get(key)) is not type(value) or config.get(key) != value
                for key, value in recipe.items()):
             raise ValueError("Unsupported ProSST mean-score recipe")
@@ -182,7 +205,7 @@ def _validate_provenance(provenance: dict, config: dict) -> None:
     if (
         not isinstance(provenance, dict)
         or provenance.get("uses_dms_labels") is not False
-        or (config["model_family"] in ("proteinmpnn", "prosst")
+        or (config["model_family"] in STRUCTURE_FAMILIES
             and provenance.get("structure_input_signature") != config["structure"]["input_signature"])
     ):
         raise ValueError("Mean-score provenance mismatch")
@@ -201,7 +224,7 @@ def check_existing(
 ) -> bool:
     root = Path(root).resolve()
     _validate_config(config, model_family, cache_id)
-    if model_family in ("proteinmpnn", "prosst"):
+    if model_family in STRUCTURE_FAMILIES:
         validate_structure_metadata(config["structure"], inputs.reference_sequence)
     with _assay_lock(root):
         _ensure_assay(root, inputs)
@@ -228,7 +251,7 @@ def write_score_cache(
     """Publish complete scores in immutable variant order under a distinct leaf."""
     root = Path(root).resolve()
     _validate_config(config, model_family, cache_id)
-    if model_family in ("proteinmpnn", "prosst"):
+    if model_family in STRUCTURE_FAMILIES:
         validate_structure_metadata(config["structure"], inputs.reference_sequence)
     _validate_scores(scores, len(inputs.rows))
     _validate_provenance(provenance, config)
@@ -257,7 +280,7 @@ def write_score_cache(
             "config_signature": _signature(config),
             "files_sha256": files,
         }
-        if model_family in ("proteinmpnn", "prosst"):
+        if model_family in STRUCTURE_FAMILIES:
             completion["structure_input_signature"] = config["structure"]["input_signature"]
         _write_json(pending / "completion.json", completion)
         pending.rename(leaf)
@@ -308,11 +331,11 @@ def validate_score_cache(root: str | Path, model_family: str = "proteinmpnn", ca
         raise ValueError("Assay variant checksum mismatch")
     config = _read_json(_inside(leaf, "config.json"))
     _validate_config(config, model_family, cache_id)
-    if model_family in ("proteinmpnn", "prosst"):
+    if model_family in STRUCTURE_FAMILIES:
         validate_structure_metadata(config["structure"], metadata["reference_sequence"])
     if (
         completion.get("config_signature") != _signature(config)
-        or (model_family in ("proteinmpnn", "prosst")
+        or (model_family in STRUCTURE_FAMILIES
             and completion.get("structure_input_signature") != config["structure"]["input_signature"])
     ):
         raise ValueError("Mean-score checkpoint, configuration, or structure identity mismatch")
@@ -343,6 +366,6 @@ def validate_score_cache(root: str | Path, model_family: str = "proteinmpnn", ca
         "input_signature": metadata["input_signature"],
         "config_signature": _signature(config),
     }
-    if model_family in ("proteinmpnn", "prosst"):
+    if model_family in STRUCTURE_FAMILIES:
         report["structure_input_signature"] = config["structure"]["input_signature"]
     return report

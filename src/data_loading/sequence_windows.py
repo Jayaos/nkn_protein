@@ -1,4 +1,4 @@
-"""Window coordinates and the compact ESM2 mutation-site cache contract."""
+"""Window coordinates and the compact sequence mutation-site cache contract."""
 
 from __future__ import annotations
 
@@ -52,19 +52,20 @@ def mean_sequence_recipe(config: Mapping, reference_length: int | None = None) -
     if not windowed and config.get("pooling") != "mean" and config.get("truncation") != "prefix":
         return None
     if (
-        config.get("model_family") not in ("esm2", "msa_transformer")
+        config.get("model_family") not in ("esm2", "prosst", "msa_transformer")
         or config.get("pooling") != "mean"
         or config.get("includes_special_tokens") is not False
     ):
-        raise ValueError("Mean sequence caches require ESM2/MSA Transformer residue-mean pooling without special tokens")
+        raise ValueError("Mean sequence caches require ESM2/ProSST/MSA Transformer residue-mean pooling without special tokens")
     if windowed:
         if any(config.get(key) != value for key, value in _GLOBAL_WINDOW_METADATA.items()) or config.get("truncation") != "none":
             raise ValueError("Full sequence means require non_overlapping windows, length_weighted_mean aggregation, and no truncation")
     elif config.get("truncation") != "prefix":
         raise ValueError("Legacy sequence means require prefix truncation")
     max_length, size = config.get("max_length"), config.get("hidden_size")
-    if type(max_length) is not int or not 1 <= max_length <= 1022:
-        raise ValueError("Mean sequence max_length must be an integer between 1 and 1022")
+    maximum = 2046 if config.get("model_family") == "prosst" else 1022
+    if type(max_length) is not int or not 1 <= max_length <= maximum:
+        raise ValueError(f"Mean sequence max_length must be an integer between 1 and {maximum}")
     if type(size) is not int or size < 1:
         raise ValueError("Mean sequence configuration requires a positive integer hidden_size")
     recipe = {"pooling": "mean", "truncation": "none" if windowed else "prefix", "max_length": max_length}
@@ -88,7 +89,7 @@ def validate_global_window_payload(store: Mapping, recipe: Mapping | None) -> No
 
 
 def compact_sequence_recipe(config: Mapping, reference_length: int | None = None) -> dict | None:
-    """Recognize a centered-site ESM2 cache with a separately declared mean.
+    """Recognize a centered-site sequence cache with a separately declared mean.
 
     Any partial compact declaration is invalid. The config-only string
     ``site_embeddings='centered'`` is not copied into the payload, where that
@@ -98,7 +99,7 @@ def compact_sequence_recipe(config: Mapping, reference_length: int | None = None
     if not declared:
         return None
     if (
-        config.get("model_family") not in ("esm2", "msa_transformer")
+        config.get("model_family") not in ("esm2", "prosst", "msa_transformer")
         or config.get("site_embeddings") != "centered"
         or any(config.get(key) != value for key, value in _COMPACT_METADATA.items())
     ):

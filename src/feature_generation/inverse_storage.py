@@ -30,12 +30,12 @@ def _signature(value: dict) -> str:
 def _resume_configs_match(saved: dict, requested: dict, model_family: str) -> bool:
     """Compare inference identity after validating the original saved artifact.
 
-    ProteinMPNN's max_length only controls admission of a full reference; it
-    does not change model inputs or inference for an admitted structure. Keep
-    the on-disk config and all of its integrity signatures unchanged. Other
-    families, and all other top-level or nested fields, retain exact equality.
+    For both inverse-folding families, max_length only controls admission of
+    a full reference; it does not change inference for an admitted structure.
+    Keep the on-disk config and all of its integrity signatures unchanged.
+    All other top-level or nested fields retain exact equality.
     """
-    if model_family == "proteinmpnn":
+    if model_family in FAMILIES:
         saved = {key: value for key, value in saved.items() if key != "max_length"}
         requested = {key: value for key, value in requested.items() if key != "max_length"}
     return saved == requested

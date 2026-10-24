@@ -20,14 +20,17 @@
 # Uses the pinned esm_if1_142m.json recipe: WT reference-prefix conditioning,
 # float32 inference, and normalized probabilities over the 20 canonical residues.
 # Selects single mutants only, saved under data/features/pretrained/singles/.
-# Prepares inverse-folding kernel features; ESM-IF1 mean scoring is not implemented.
-# The current recipe rejects full assay references longer than 1,022 residues,
-# including references with fragment manifests. No cropping/windowing is applied.
+# Also prepares ProteinGym-style full-variant mean log-likelihoods for the GP mean.
+# Scores use variant prefixes and the native vocabulary, without WT subtraction.
+# Full-sequence scoring requires a single backbone covering the entire reference.
+# The default recipe has no sequence-length cap. An optional max_length can
+# limit full assay references. Long inputs require sufficient memory/runtime.
+# No cropping/windowing is applied.
 # Submit: sbatch sbatch_run/run_prepare_rep/prepare_esm_if1.sbatch
 # Without an array, processes every configured catalog assay sequentially.
 # For one assay per task, pass --array=0-(N-1) to sbatch. Obtain N with:
 #   python sbatch_run/run_prepare_rep/list_assays.py --config configs/extraction/esm_if1_142m.json --count
-# Indices use the full catalog order, including assays exceeding the length limit.
+# Indices use the full catalog order, including assays exceeding an optional limit.
 # Existing verified downloads are reused; --resume validates and skips matching
 # completed caches. Failed assays are reported while remaining assays/stages run.
 # Submit from the repository or a subdirectory; Slurm spools the script, so its
@@ -90,7 +93,10 @@ print(f"Output root: {Path(sys.argv[2]).resolve()}")
 print(f"Cache: {config.cache_id}")
 print(f"Conditioning: {config.conditioning_mode}; seed: {config.seed}")
 print(f"Precision: inference={config.inference_dtype}; output={config.output_dtype}")
-print(f"Length policy: at most {config.max_length} residues in the full assay reference")
+if config.max_length is None:
+    print("Length policy: no sequence-length cap; full inputs require sufficient memory/runtime")
+else:
+    print(f"Length policy: at most {config.max_length} residues in the full assay reference")
 
 import torch
 
@@ -101,7 +107,7 @@ if not torch.cuda.is_available():
 print(f"GPU: {torch.cuda.get_device_name(0)}")
 PY
 
-printf '[1/4] Downloading/verifying ESM-IF1 checkpoint and source\n'
+printf '[1/5] Downloading/verifying ESM-IF1 checkpoint and source\n'
 # Serialize array tasks while staging the shared source directory; inventory
 # verification must not see another task's unfinished download files.
 python -u - "$feature_config" <<'PY'
@@ -119,7 +125,7 @@ with (config.model_dir / ".download.lock").open("a+b") as lock:
 PY
 
 failed=0
-printf '[2/4] Downloading/verifying reference structures and residue mappings\n'
+printf '[2/5] Downloading/verifying reference structures and residue mappings\n'
 if python -u - "$feature_config" "${assays[@]}" <<'PY'
 import sys
 
@@ -134,7 +140,7 @@ failures = []
 for assay_id in sys.argv[2:]:
     try:
         reference = catalog.get(assay_id).reference_sequence
-        if len(reference) > config.max_length:
+        if config.max_length is not None and len(reference) > config.max_length:
             raise ValueError(
                 f"Full reference length {len(reference)} exceeds ESM-IF1 max_length={config.max_length}"
             )
@@ -164,7 +170,7 @@ fi
 # One reference distribution is shared by the selected single-mutant variants.
 # At position i, the decoder sees the backbone and preceding WT residues.
 # The existing adapter writes canonical-AA-normalized probs and log_probs.
-printf '[3/4] Extracting ESM-IF1 reference-prefix amino-acid distributions\n'
+printf '[3/5] Extracting ESM-IF1 reference-prefix amino-acid distributions\n'
 if python -u -m feature_generation.cli extract \
   --config "$feature_config" \
   --output-root "$output_root" \
@@ -178,27 +184,48 @@ else
   failed=1
 fi
 
-printf '[4/4] Validating ESM-IF1 feature caches\n'
+printf '[4/5] Scoring ESM-IF1 variants with native mean log-likelihoods\n'
+# One full variant per forward pass limits peak memory for long references.
+if python -u -m feature_generation.cli score \
+  --config "$feature_config" \
+  --output-root "$output_root" \
+  "${assay_args[@]}" \
+  --singles-only \
+  --batch-size 1 \
+  --device cuda \
+  --resume \
+  --continue-on-error; then
+  :
+else
+  failed=1
+fi
+
+printf '[5/5] Validating ESM-IF1 feature and score caches\n'
 if python -u - "$feature_config" "$output_root" "${assays[@]}" <<'PY'
 from pathlib import Path
 import sys
 
 from feature_generation.inverse_config import InverseFoldingConfig
 from feature_generation.inverse_storage import validate_inverse_cache
+from feature_generation.score_runner import default_cache_id
+from feature_generation.score_storage import validate_score_cache
 
 config = InverseFoldingConfig.load(sys.argv[1])
 output_root = Path(sys.argv[2]).resolve()
 failures = []
+score_cache_id = default_cache_id(config)
 for assay_id in sys.argv[3:]:
-    try:
-        validate_inverse_cache(
-            output_root / assay_id, model_family=config.model_family, cache_id=config.cache_id,
-        )
-        print(f"{assay_id}: feature cache verified")
-    except (OSError, ValueError, RuntimeError, KeyError, ImportError) as error:
-        failures.append(assay_id)
-        print(f"{assay_id}: cache validation failed: {error}", file=sys.stderr)
-print(f"Caches: {len(sys.argv[3:]) - len(failures)} verified; {len(failures)} failed")
+    for kind, validator, cache_id in (
+        ("feature", validate_inverse_cache, config.cache_id),
+        ("score", validate_score_cache, score_cache_id),
+    ):
+        try:
+            validator(output_root / assay_id, model_family=config.model_family, cache_id=cache_id)
+            print(f"{assay_id}: {kind} cache verified")
+        except (OSError, ValueError, RuntimeError, KeyError, ImportError) as error:
+            failures.append((assay_id, kind))
+            print(f"{assay_id}: cache validation failed ({kind}): {error}", file=sys.stderr)
+print(f"Caches: {2 * len(sys.argv[3:]) - len(failures)} verified; {len(failures)} failed")
 raise SystemExit(bool(failures))
 PY
 then

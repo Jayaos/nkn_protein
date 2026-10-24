@@ -59,11 +59,11 @@ def ready_adapter(**kwargs):
 
 class ProSSTBackendTests(unittest.TestCase):
     def test_config_pinned_architecture_and_operational_limit(self):
-        config = ProSSTConfig(max_length=2048)
+        config = ProSSTConfig(max_length=2046)
         self.assertEqual(config.model_id, "AI4Protein/ProSST-2048")
         self.assertEqual(config.layer, 12)
         self.assertEqual(PRESET["hidden_size"], 768)
-        self.assertEqual(config.max_length, 2048)
+        self.assertEqual(config.max_length, 2046)
         self.assertIn("fixed-backbone", config.cache_id)
         self.assertEqual(config.model_dir.name, "prosst")
 

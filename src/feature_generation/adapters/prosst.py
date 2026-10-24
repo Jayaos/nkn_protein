@@ -12,6 +12,8 @@ from types import ModuleType
 import torch
 from torch import Tensor
 
+from .window_embeddings import WindowedEmbeddings
+
 from ..prosst_checkpoints import checkpoint_manifest, checkpoint_path
 from ..prosst_config import PRESET, ProSSTConfig
 
@@ -49,7 +51,7 @@ def import_pinned_model(path: Path, revision: str):
     return sys.modules[f"{package_name}.configuration_prosst"], sys.modules[f"{package_name}.modeling_prosst"]
 
 
-class ProSSTAdapter:
+class ProSSTAdapter(WindowedEmbeddings):
     def __init__(self, config: ProSSTConfig):
         if config.model_family != "prosst":
             raise ValueError("ProSSTAdapter requires model_family=prosst")
@@ -86,7 +88,7 @@ class ProSSTAdapter:
         manifest_digest = hashlib.sha256(
             json.dumps(self._manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
-        return {
+        metadata = {
             "feature_type": "sequence", "model_family": "prosst", "checkpoint": self.config.cache_id,
             "synthetic": False, "generation_method": "pretrained_frozen",
             "model_id": self.config.model_id, "revision": self.config.revision,
@@ -98,8 +100,8 @@ class ProSSTAdapter:
             "quantizer_revision": self._manifest["quantizer_revision"],
             "layer": self.config.layer, "embedding_dim": self.hidden_size, "hidden_size": self.hidden_size,
             "inference_dtype": self.config.inference_dtype, "dtype": self.config.output_dtype,
-            "pooling": "none", "includes_special_tokens": False,
-            "residue_indexing": "one_based_reference_position", "truncation": "reject",
+            "pooling": self.config.pooling, "includes_special_tokens": False,
+            "residue_indexing": "one_based_reference_position", "truncation": self.config.truncation,
             "max_length": self.config.max_length, "max_length_policy": "configured_memory_guard",
             "conditioning_mode": "sequence_and_fixed_reference_structure",
             "inference_method": "unmasked_hidden_states", "amino_acid_masking": "none",
@@ -107,6 +109,18 @@ class ProSSTAdapter:
             "structure_vocab_size": PRESET["structure_vocab_size"],
             "structure_token_offset": 3, "structure_special_tokens": {"pad": 0, "bos": 1, "eos": 2},
         }
+        if self.config.global_window == "non_overlapping":
+            metadata.update(
+                global_window="non_overlapping", global_window_aggregation="length_weighted_mean",
+                max_length_policy="residue_window", structure_window="aligned_full_reference_tokens",
+            )
+        if self.config.site_embeddings == "centered":
+            metadata.update(
+                site_embeddings="centered", cache_layout="mutation_sites_v1",
+                site_context="mutated_sequence", window_policy="centered_clamped",
+                window_indexing="zero_based_half_open",
+            )
+        return metadata
 
     def load(self) -> None:
         if self._model is not None:
@@ -119,7 +133,11 @@ class ProSSTAdapter:
             config_module, model_module = import_pinned_model(path, self.config.revision)
         except ImportError as exc:
             raise ImportError("Install ProSST dependencies from env.yaml or requirements.txt") from exc
-        tokenizer = EsmTokenizer.from_pretrained(str(path), local_files_only=True)
+        # max_length counts residues. Include BOS/EOS in the tokenizer limit
+        # so each model input stays within the configured 2048-token cap.
+        tokenizer = EsmTokenizer.from_pretrained(
+            str(path), local_files_only=True, model_max_length=self.config.max_length + 2,
+        )
         architecture = config_module.ProSSTConfig.from_pretrained(str(path), local_files_only=True)
         if (architecture.hidden_size, architecture.num_hidden_layers, architecture.ss_vocab_size) != (768, 12, 2051):
             raise ValueError("ProSST checkpoint architecture does not match the pinned recipe")
@@ -144,58 +162,87 @@ class ProSSTAdapter:
             raise ValueError("Structure tokens must be raw codebook indices between 0 and 2047")
         self._structure_tokens = tokens.detach().to(device="cpu").clone()
 
-    def _batches(self, sequences: Sequence[str]) -> Iterator[list[int]]:
-        if not sequences:
+    def _validate_sequences(self, sequences: Sequence[str], *, windowed=None) -> int:
+        if isinstance(sequences, (str, bytes)) or not sequences:
             raise ValueError("No sequences supplied for ProSST extraction")
         if self._structure_tokens is None:
             raise ValueError("Bind validated structure tokens before ProSST extraction")
         length = self._structure_tokens.numel()
+        if windowed is None:
+            windowed = self.config.global_window == "non_overlapping"
+        represented_length = min(length, self.config.max_length) if windowed else length
         for sequence in sequences:
             if not isinstance(sequence, str) or not sequence or set(sequence) - ALPHABET:
                 raise ValueError("ProSST requires nonempty canonical amino-acid sequences")
             if len(sequence) != length:
                 raise ValueError("Every substitution sequence must align exactly with the fixed structure tokens")
-            if length > self.config.max_length:
+            if length > self.config.max_length and not windowed:
                 raise ValueError(f"Sequence exceeds max_length={self.config.max_length}; truncation is disabled")
-            if length + 2 > self.config.max_tokens_per_batch:
+            if represented_length + 2 > self.config.max_tokens_per_batch:
                 raise ValueError("One sequence exceeds max_tokens_per_batch, including BOS/EOS tokens")
-        batch_size = self.config.max_tokens_per_batch // (length + 2)
+        return length
+
+    def _batches(self, sequences: Sequence[str]) -> Iterator[list[int]]:
+        length = self._validate_sequences(sequences)
+        batch_size = self.config.max_tokens_per_batch // (min(length, self.config.max_length) + 2)
         for start in range(0, len(sequences), batch_size):
             yield list(range(start, min(start + batch_size, len(sequences))))
 
     def iter_embeddings(self, sequences: Sequence[str]) -> Iterator[tuple[list[int], Tensor]]:
+        if self.config.global_window == "non_overlapping":
+            for index, global_vector, _ in self._iter_window_embeddings(sequences):
+                yield [index], global_vector.unsqueeze(0)
+            return
         batches = list(self._batches(sequences))
         self.load()
         length = self._structure_tokens.numel()
-        structure_ids = torch.cat((torch.tensor([1]), self._structure_tokens + 3, torch.tensor([2])))
         for indices in batches:
             strings = [sequences[index] for index in indices]
-            tokens = self._tokenizer(
-                strings, add_special_tokens=True, padding=True, truncation=False,
-                return_attention_mask=True, return_special_tokens_mask=True, return_tensors="pt",
+            yield indices, self._embed_windows(strings, [(0, length)] * len(strings))
+
+    def _structure_window_ids(self, bounds):
+        rows = []
+        for start, end in bounds:
+            if not 0 <= start < end <= self._structure_tokens.numel():
+                raise ValueError("Structure window must lie within the full reference")
+            rows.append(torch.cat((torch.tensor([1]), self._structure_tokens[start:end] + 3, torch.tensor([2]))))
+        return torch.stack(rows)
+
+    def _embed_windows(self, strings, bounds):
+        length = len(strings[0])
+        if (len(strings) != len(bounds) or any(len(s) != length for s in strings)
+            or any(end - start != length for start, end in bounds)
+            or length > self.config.max_length):
+            raise ValueError("ProSST sequence and structure windows must have matching bounded lengths")
+        if len(strings) * (length + 2) > self.config.max_tokens_per_batch:
+            raise ValueError("Tokenized batch exceeds max_tokens_per_batch")
+        structure_ids = self._structure_window_ids(bounds)
+        tokens = self._tokenizer(
+            strings, add_special_tokens=True, padding=True, truncation=False,
+            return_attention_mask=True, return_special_tokens_mask=True, return_tensors="pt",
+        )
+        input_ids, attention_mask = tokens["input_ids"], tokens["attention_mask"]
+        residue_mask = attention_mask.bool() & ~tokens["special_tokens_mask"].bool()
+        if tuple(input_ids.shape) != (len(strings), length + 2) or input_ids.shape != attention_mask.shape or input_ids.shape != residue_mask.shape:
+            raise ValueError("ProSST tokenizer must yield exactly BOS, L residues, and EOS")
+        if not attention_mask.bool().all() or not torch.all(residue_mask[:, 1:-1]) or residue_mask[:, (0, -1)].any():
+            raise ValueError("ProSST amino-acid and structure special tokens are not aligned")
+        if not torch.all(input_ids[:, 0] == self._tokenizer.cls_token_id) or not torch.all(input_ids[:, -1] == self._tokenizer.eos_token_id):
+            raise ValueError("ProSST amino-acid BOS/EOS tokens are not aligned")
+        for row, sequence in enumerate(strings):
+            if self._tokenizer.convert_ids_to_tokens(input_ids[row, 1:-1].tolist()) != list(sequence):
+                raise ValueError("ProSST tokenizer residues do not match the complete unmasked sequence")
+        with torch.inference_mode():
+            output = self._model.prosst(
+                input_ids=input_ids.to(self._device), attention_mask=attention_mask.to(self._device),
+                ss_input_ids=structure_ids.to(self._device),
+                output_hidden_states=self.config.layer != PRESET["num_layers"], return_dict=True,
             )
-            input_ids, attention_mask = tokens["input_ids"], tokens["attention_mask"]
-            residue_mask = attention_mask.bool() & ~tokens["special_tokens_mask"].bool()
-            if tuple(input_ids.shape) != (len(indices), length + 2) or input_ids.shape != attention_mask.shape or input_ids.shape != residue_mask.shape:
-                raise ValueError("ProSST tokenizer must yield exactly BOS, L residues, and EOS")
-            if not attention_mask.bool().all() or not torch.all(residue_mask[:, 1:-1]) or residue_mask[:, (0, -1)].any():
-                raise ValueError("ProSST amino-acid and structure special tokens are not aligned")
-            if not torch.all(input_ids[:, 0] == self._tokenizer.cls_token_id) or not torch.all(input_ids[:, -1] == self._tokenizer.eos_token_id):
-                raise ValueError("ProSST amino-acid BOS/EOS tokens are not aligned")
-            for row, sequence in enumerate(strings):
-                if self._tokenizer.convert_ids_to_tokens(input_ids[row, 1:-1].tolist()) != list(sequence):
-                    raise ValueError("ProSST tokenizer residues do not match the complete unmasked sequence")
-            with torch.inference_mode():
-                output = self._model.prosst(
-                    input_ids=input_ids.to(self._device), attention_mask=attention_mask.to(self._device),
-                    ss_input_ids=structure_ids.unsqueeze(0).expand(len(indices), -1).to(self._device),
-                    output_hidden_states=self.config.layer != PRESET["num_layers"], return_dict=True,
-                )
-                hidden = output.last_hidden_state if self.config.layer == PRESET["num_layers"] else output.hidden_states[self.config.layer]
-                if hidden.ndim != 3 or tuple(hidden.shape) != (len(indices), length + 2, self.hidden_size):
-                    raise ValueError("ProSST returned an unexpected representation shape")
-                values = hidden[:, 1:-1].detach().to(device="cpu", dtype=torch.float32).clone().contiguous()
-                del hidden, output
-            if not torch.isfinite(values).all():
-                raise ValueError("ProSST embeddings contain nonfinite values")
-            yield indices, values
+            hidden = output.last_hidden_state if self.config.layer == PRESET["num_layers"] else output.hidden_states[self.config.layer]
+            if hidden.ndim != 3 or tuple(hidden.shape) != (len(strings), length + 2, self.hidden_size):
+                raise ValueError("ProSST returned an unexpected representation shape")
+            values = hidden[:, 1:-1].detach().to(device="cpu", dtype=torch.float32).clone().contiguous()
+            del hidden, output
+        if not torch.isfinite(values).all():
+            raise ValueError("ProSST embeddings contain nonfinite values")
+        return values

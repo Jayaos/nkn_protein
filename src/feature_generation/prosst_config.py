@@ -27,8 +27,13 @@ class ProSSTConfig:
     device: str = "auto"
     inference_dtype: str = "float32"
     output_dtype: str = "float32"
-    max_length: int = 1022
-    max_tokens_per_batch: int = 512
+    max_length: int = 2046
+    max_tokens_per_batch: int = 2048
+    pooling: str = "none"
+    global_window: str = "prefix"
+    truncation: str = "reject"
+    site_embeddings: str = "none"
+    scoring_window: str = "full"
     max_output_gib: float = 4.0
     quantizer_batch_size: int = 32
 
@@ -40,8 +45,29 @@ class ProSSTConfig:
                 raise ValueError(f"{name} must be {PRESET[name]!r} for the pinned ProSST recipe")
         if type(self.layer) is not int or not 0 <= self.layer <= PRESET["num_layers"]:
             raise ValueError("layer must be an integer between 0 and 12")
+        if self.pooling not in ("none", "mean"):
+            raise ValueError("pooling must be none or mean")
+        if self.global_window not in ("prefix", "non_overlapping"):
+            raise ValueError("global_window must be prefix or non_overlapping")
+        if self.truncation not in ("reject", "none"):
+            raise ValueError("ProSST truncation must be reject or none")
+        if self.global_window == "non_overlapping":
+            if self.pooling != "mean" or self.truncation != "none":
+                raise ValueError("non_overlapping global windows require mean pooling and truncation=none")
+        elif self.pooling != "none" or self.truncation != "reject":
+            raise ValueError("Full-residue ProSST extraction requires pooling=none and truncation=reject")
+        if self.site_embeddings not in ("none", "centered"):
+            raise ValueError("site_embeddings must be none or centered")
+        if self.site_embeddings == "centered" and self.pooling != "mean":
+            raise ValueError("centered site embeddings require mean pooling")
+        if self.scoring_window not in ("full", "centered"):
+            raise ValueError("scoring_window must be full or centered")
         if self.cache_id is None:
             self.cache_id = f"ProSST-2048-layer{self.layer}-fixed-backbone-{self.revision[:12]}"
+            if self.global_window == "non_overlapping":
+                self.cache_id += f"-mean-all-nonoverlap{self.max_length}"
+            if self.site_embeddings == "centered":
+                self.cache_id += "-centered-sites"
         if not isinstance(self.cache_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", self.cache_id):
             raise ValueError("cache_id must be a safe single directory name")
         reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
@@ -57,10 +83,12 @@ class ProSSTConfig:
             raise ValueError("device must be auto, cpu, or cuda")
         if self.inference_dtype != "float32" or self.output_dtype != "float32":
             raise ValueError("ProSST inference_dtype and output_dtype must be float32")
-        # An operational memory guard, not a claim of a hard architecture limit.
+        # Residues per input; the batch budget separately includes BOS and EOS.
         for name in ("max_length", "max_tokens_per_batch", "quantizer_batch_size"):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")
+        if self.max_length > 2046:
+            raise ValueError("ProSST supports at most 2046 residues per model input (2048 tokens including BOS/EOS)")
         if type(self.max_output_gib) not in (int, float) or not math.isfinite(self.max_output_gib) or self.max_output_gib <= 0:
             raise ValueError("max_output_gib must be finite and positive")
 

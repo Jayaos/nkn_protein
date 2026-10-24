@@ -12,8 +12,13 @@
   "device": "auto",
   "inference_dtype": "float32",
   "output_dtype": "float32",
-  "max_length": 1022,
+  "max_length": 2046,
   "max_tokens_per_batch": 2048,
   "max_output_gib": 4.0,
-  "quantizer_batch_size": 32
+  "quantizer_batch_size": 32,
+  "pooling": "mean",
+  "global_window": "non_overlapping",
+  "truncation": "none",
+  "site_embeddings": "centered",
+  "scoring_window": "centered"
 }

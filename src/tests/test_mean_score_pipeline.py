@@ -388,8 +388,8 @@ class MeanScoreCLITests(unittest.TestCase):
         validator.assert_called_once_with(self.root, model_family="proteinmpnn", cache_id="scores_v1")
         self.assertEqual(json.loads(output), {"num_variants": 4})
 
-    def test_unsupported_score_models_are_rejected_before_inference(self):
-        for family in ("esm_if1", "prosst"):
+    def test_invalid_score_model_configs_are_rejected_before_inference(self):
+        for family in ("unknown_model", "prosst"):
             with self.subTest(family=family):
                 self.config.write_text(json.dumps({"model_family": family}), encoding="utf-8")
                 with patch("feature_generation.adapters.proteinmpnn.ProteinMPNNAdapter") as adapter:
@@ -398,6 +398,19 @@ class MeanScoreCLITests(unittest.TestCase):
                 self.assertEqual(output, "")
                 self.assertIn("error:", errors)
                 adapter.assert_not_called()
+
+    def test_esm_if1_score_routes_and_rejects_explicit_random_orders(self):
+        self.config.write_text(json.dumps({"model_family": "esm_if1"}), encoding="utf-8")
+        with patch("feature_generation.score_runner.score", return_value=[]) as scorer:
+            status, _, errors = self.invoke(["score", "--config", self.config, "--assay", "tiny"])
+            self.assertEqual(status, 0, errors)
+            self.assertEqual(scorer.call_args.args[0].model_family, "esm_if1")
+            self.assertIsNone(scorer.call_args.kwargs["batch_size"])
+        with patch("feature_generation.score_runner.score") as scorer:
+            status, _, errors = self.invoke(["score", "--config", self.config, "--assay", "tiny", "--num-orders", "1"])
+            self.assertEqual(status, 1)
+            self.assertIn("only to ProteinMPNN", errors)
+            scorer.assert_not_called()
 
 
 if __name__ == "__main__":

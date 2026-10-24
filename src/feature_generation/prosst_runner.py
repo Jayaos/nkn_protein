@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Callable, Sequence
 
 import torch
 
+from data_loading.features import parse_substitutions
+
 from .inputs import prepare_assay, safe_component
 from .storage import check_existing, ensure_assay, make_leaf_config, write_sequence_cache
 from .structure_inputs import load_structure
@@ -62,18 +64,31 @@ def extract(
     for assay_id in assay_ids:
         started = time.monotonic()
         embeddings = None
+        site_data = None
         try:
             safe_component(assay_id, "assay ID")
             inputs = prepare_assay(config.assay_index, assay_id, singles_only=singles_only, limit=limit)
             n = len(inputs.variant_ids)
-            if inputs.length > config.max_length:
+            centered = config.site_embeddings == "centered"
+            mutation_positions = [
+                parse_substitutions(row["mutant"], row["mutated_sequence"], inputs.reference_sequence)
+                for row in inputs.rows
+            ] if centered else None
+            site_count = sum(map(len, mutation_positions)) if centered else 0
+            if inputs.length > config.max_length and config.truncation == "reject":
                 raise ValueError(
                     f"Reference length {inputs.length} exceeds max_length={config.max_length}; "
                     "structures and sequences are never truncated"
                 )
-            if inputs.length + 2 > config.max_tokens_per_batch:
+            represented_length = min(inputs.length, config.max_length)
+            if represented_length + 2 > config.max_tokens_per_batch:
                 raise ValueError("A sequence plus its two special tokens exceeds max_tokens_per_batch")
-            output_bytes = n * inputs.length * adapter.hidden_size * 4
+            feature_shape = (adapter.hidden_size,) if config.pooling == "mean" else (inputs.length, adapter.hidden_size)
+            output_bytes = n * adapter.hidden_size * 4
+            if config.pooling == "none":
+                output_bytes *= inputs.length
+            if centered:
+                output_bytes += site_count * (adapter.hidden_size * 4 + 4 * 8)
             if output_bytes > config.max_output_gib * 1024**3:
                 raise ValueError(
                     f"Output requires {output_bytes / 1024**3:.3f} GiB, above "
@@ -133,27 +148,62 @@ def extract(
                 adapter.load()
                 loaded = True
             adapter.set_structure_tokens(structure_tokens.tokens)
-            embeddings = torch.empty((n, inputs.length, adapter.hidden_size), dtype=torch.float32)
+            embeddings = torch.empty((n, *feature_shape), dtype=torch.float32)
             seen = torch.zeros(n, dtype=torch.bool)
-            for indices, values in adapter.iter_embeddings(inputs.sequences):
-                if not indices or any(type(i) is not int or i < 0 or i >= n for i in indices):
-                    raise ValueError("Adapter returned invalid variant indices")
-                if len(set(indices)) != len(indices) or seen[indices].any():
-                    raise ValueError("Adapter returned duplicate variant indices")
-                if (
-                    not isinstance(values, torch.Tensor)
-                    or values.device.type != "cpu"
-                    or values.dtype != torch.float32
-                    or tuple(values.shape) != (len(indices), inputs.length, adapter.hidden_size)
-                    or not torch.isfinite(values).all()
-                ):
-                    raise ValueError("Adapter must return finite CPU float32 residue embeddings")
-                embeddings[indices] = values
-                seen[indices] = True
-                emit({
-                    "assay_id": assay_id, "status": "batch", "model_family": "prosst",
-                    "completed": int(seen.sum()), "num_variants": n,
-                })
+            if centered:
+                counts = torch.tensor([len(sites) for sites in mutation_positions], dtype=torch.long)
+                offsets = torch.cat((torch.zeros(1, dtype=torch.long), counts.cumsum(0))).tolist()
+                positions = torch.tensor([p for sites in mutation_positions for p in sites], dtype=torch.long)
+                starts = (positions - 1 - config.max_length // 2).clamp(
+                    min=0, max=max(inputs.length - config.max_length, 0),
+                )
+                site_data = {
+                    "site_embeddings": torch.empty((site_count, adapter.hidden_size), dtype=torch.float32),
+                    "site_variant_indices": torch.repeat_interleave(torch.arange(n), counts),
+                    "site_positions": positions,
+                    "site_window_starts": starts,
+                    "site_window_ends": starts + represented_length,
+                }
+                completed = 0
+                for index, global_value, site_values in adapter.iter_site_embeddings(inputs.sequences, mutation_positions):
+                    if type(index) is not int or not 0 <= index < n or seen[index]:
+                        raise ValueError("Adapter returned invalid or duplicate variant indices")
+                    for values, shape in (
+                        (global_value, (adapter.hidden_size,)),
+                        (site_values, (len(mutation_positions[index]), adapter.hidden_size)),
+                    ):
+                        if (
+                            not isinstance(values, torch.Tensor)
+                            or values.device.type != "cpu"
+                            or values.dtype != torch.float32
+                            or tuple(values.shape) != shape
+                            or not torch.isfinite(values).all()
+                        ):
+                            raise ValueError("Adapter must return finite CPU float32 global and mutation-site embeddings")
+                    embeddings[index] = global_value
+                    site_data["site_embeddings"][offsets[index]:offsets[index + 1]] = site_values
+                    seen[index] = True
+                    completed += 1
+                    emit({"assay_id": assay_id, "status": "batch", "model_family": "prosst", "completed": completed, "num_variants": n})
+            else:
+                completed = 0
+                for indices, values in adapter.iter_embeddings(inputs.sequences):
+                    if not indices or any(type(i) is not int or i < 0 or i >= n for i in indices):
+                        raise ValueError("Adapter returned invalid variant indices")
+                    if len(set(indices)) != len(indices) or seen[indices].any():
+                        raise ValueError("Adapter returned duplicate variant indices")
+                    if (
+                        not isinstance(values, torch.Tensor)
+                        or values.device.type != "cpu"
+                        or values.dtype != torch.float32
+                        or tuple(values.shape) != (len(indices), *feature_shape)
+                        or not torch.isfinite(values).all()
+                    ):
+                        raise ValueError("Adapter must return finite CPU float32 embeddings matching the configured pooling")
+                    embeddings[indices] = values
+                    seen[indices] = True
+                    completed += len(indices)
+                    emit({"assay_id": assay_id, "status": "batch", "model_family": "prosst", "completed": completed, "num_variants": n})
             if not seen.all():
                 raise ValueError("Adapter did not cover all selected variants")
             provenance = {
@@ -172,14 +222,17 @@ def extract(
                 "structure_token_input_signature": structure_tokens.input_signature,
                 "uses_dms_labels": False,
             }
+            options = {"site_data": site_data} if centered else {}
             leaf = write_sequence_cache(
-                root, config.cache_id, inputs, leaf_config, embeddings, provenance, model_family="prosst",
+                root, config.cache_id, inputs, leaf_config, embeddings, provenance, model_family="prosst", **options,
             )
             result = {
                 "assay_id": assay_id, "status": "completed", "model_family": "prosst",
-                "path": str(leaf), "shape": [n, inputs.length, adapter.hidden_size],
+                "path": str(leaf), "shape": [n, *feature_shape],
                 "num_variants": n, "elapsed_seconds": time.monotonic() - started,
             }
+            if centered:
+                result["site_shape"] = [site_count, adapter.hidden_size]
             results.append(result)
             emit(result)
         except (OSError, ValueError, RuntimeError, KeyError, ImportError) as error:
@@ -190,4 +243,5 @@ def extract(
             emit(result)
         finally:
             embeddings = None
+            site_data = None
     return results

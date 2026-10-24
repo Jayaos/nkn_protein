@@ -35,7 +35,7 @@ class InverseBackendTests(unittest.TestCase):
     def test_rejects_unsupported_recipes_and_unsafe_cache_paths(self):
         for kwargs in ({"conditioning_mode": "reference_prefix"}, {"revision": "main"},
                        {"cache_id": "../escape"}, {"cache_id": "CON"}, {"seed": True},
-                       {"inference_dtype": "float16"}, {"model_family": "esm_if1", "max_length": 1023},
+                       {"inference_dtype": "float16"},
                        {"feature_type": "sequence"}, {"model_family": []}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 InverseFoldingConfig(**kwargs)
@@ -74,11 +74,13 @@ class InverseBackendTests(unittest.TestCase):
             InverseFoldingAdapter(InverseFoldingConfig())._coords(inputs, 4)
 
     def test_invalid_inputs_rejected_before_model_load(self):
-        adapter = ProteinMPNNAdapter(InverseFoldingConfig(max_length=2))
-        adapter.load = Mock(side_effect=AssertionError("must not load"))
-        with self.assertRaisesRegex(ValueError, "max_length"):
-            adapter.predict(structure())
-        adapter.load.assert_not_called()
+        for family, adapter_class in (("proteinmpnn", ProteinMPNNAdapter), ("esm_if1", ESMIF1Adapter)):
+            with self.subTest(family=family):
+                adapter = adapter_class(InverseFoldingConfig(model_family=family, max_length=2))
+                adapter.load = Mock(side_effect=AssertionError("must not load"))
+                with self.assertRaisesRegex(ValueError, "max_length"):
+                    adapter.predict(structure())
+                adapter.load.assert_not_called()
 
     def test_mpnn_backbone_only_does_not_receive_reference_amino_acids(self):
         adapter = ProteinMPNNAdapter(InverseFoldingConfig())
@@ -95,25 +97,32 @@ class InverseBackendTests(unittest.TestCase):
         torch.testing.assert_close(mask, torch.ones(1, 3))
 
     def test_esm_if_prefix_shift_and_canonical_token_mapping(self):
+        for sequence in ("ACD", "ACD" * 621):
+            with self.subTest(length=len(sequence)):
+                self.assert_esm_if_prediction(sequence)
+
+    def assert_esm_if_prediction(self, sequence):
+        length = len(sequence)
         adapter = ESMIF1Adapter(InverseFoldingConfig(model_family="esm_if1"))
         adapter._device = torch.device("cpu")
         vocabulary = "<bos>", *reversed(ALPHABET), "<unk>"
         adapter._alphabet = SimpleNamespace(get_idx=vocabulary.index, get_tok=lambda index: vocabulary[index])
         def converter(batch, device):
             coords, confidence, seq = batch[0]
-            self.assertEqual(coords.shape, (3, 3, 3))
+            self.assertEqual(coords.shape, (length, 3, 3))
             self.assertIsNone(confidence)
+            self.assertEqual(seq, sequence)
             tokens = torch.tensor([[0] + [vocabulary.index(aa) for aa in seq]])
-            return torch.as_tensor(coords)[None], torch.ones(1, 3), [seq], tokens, torch.zeros(1, 3).bool()
+            return torch.as_tensor(coords)[None], torch.ones(1, length), [seq], tokens, torch.zeros(1, length).bool()
         adapter._converter = converter
         def forward(coords, padding, confidence, previous):
-            self.assertEqual(previous.tolist(), [[0, vocabulary.index("A"), vocabulary.index("C")]])
-            return torch.arange(len(vocabulary)).float().repeat(1, 3, 1).transpose(1, 2), None
+            self.assertEqual(previous.tolist(), [[0] + [vocabulary.index(aa) for aa in sequence[:-1]]])
+            return torch.arange(len(vocabulary)).float().repeat(1, length, 1).transpose(1, 2), None
         adapter._model = forward
         adapter.load = lambda: None
-        output = adapter.predict(structure())
+        output = adapter.predict(structure(sequence))
         expected = torch.tensor([vocabulary.index(aa) for aa in ALPHABET]).float().softmax(-1)
-        torch.testing.assert_close(output["probabilities"], expected.repeat(3, 1))
+        torch.testing.assert_close(output["probabilities"], expected.repeat(length, 1))
 
     def test_loading_models_preserves_cpu_and_cuda_random_states(self):
         class NativeModel(torch.nn.Module):

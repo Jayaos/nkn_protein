@@ -126,9 +126,17 @@ config = ProSSTConfig.load(sys.argv[1])
 inputs = prepare_assay(config.assay_index, sys.argv[2], singles_only=True)
 if PRESET["structure_vocab_size"] != 2048:
     raise SystemExit("error: This job requires the pinned K=2048 ProSST recipe.")
-if inputs.length > config.max_length or inputs.length + 2 > config.max_tokens_per_batch:
-    raise SystemExit("error: Full-reference extraction exceeds the configured length or token budget.")
-output_gib = len(inputs.variant_ids) * inputs.length * PRESET["hidden_size"] * 4 / 1024**3
+if inputs.length > config.max_length and (config.truncation == "reject" or config.scoring_window == "full"):
+    raise SystemExit("error: Full-reference extraction or scoring exceeds the configured length budget.")
+if min(inputs.length, config.max_length) + 2 > config.max_tokens_per_batch:
+    raise SystemExit("error: One sequence window plus BOS/EOS exceeds the configured token budget.")
+output_bytes = len(inputs.variant_ids) * PRESET["hidden_size"] * 4
+if config.pooling == "none":
+    output_bytes *= inputs.length
+if config.site_embeddings == "centered":
+    # Singles have at most one site each; WT rows make this a conservative bound.
+    output_bytes += len(inputs.variant_ids) * (PRESET["hidden_size"] * 4 + 4 * 8)
+output_gib = output_bytes / 1024**3
 if output_gib > config.max_output_gib:
     raise SystemExit("error: Full singles cache exceeds max_output_gib; check the job memory allocation before increasing it.")
 print(f"Model: {config.model_id}; K=2048; layer: {config.layer}")
