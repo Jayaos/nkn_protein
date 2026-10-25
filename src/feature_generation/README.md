@@ -620,8 +620,8 @@ Other chains are not used as structural context in this first version.
 Choose `--chain` explicitly for multichain structures and `--model-index` for
 multi-model structures. No sequence offset or cropping is inferred from `pdb_range`.
 
-The ESM-IF1 preset selects `protssn_proteingym`. Register its assay manifest in
-`data/structures/protssn_proteingym/manifests/` before extraction; the official
+The ESM-IF1 preset selects `protssn_proteingym`. For direct offline CLI extraction,
+register its assay manifest in `data/structures/protssn_proteingym/manifests/`; the official
 ProteinGym manifest prepared above belongs to the ProteinMPNN preset.
 Download both checkpoints explicitly, then extract offline:
 
@@ -637,7 +637,8 @@ python -m feature_generation.cli validate --features "data/features/pretrained/$
 For Slurm preparation, [`prepare_esm_if1.sbatch`](../../sbatch_run/run_prepare_rep/prepare_esm_if1.sbatch)
 uses `esm_if1_142m.json` and explicitly saves single-mutant caches under
 `data/features/pretrained/singles/`. It selects `protssn_proteingym`, downloads/verifies
-the pinned model, verifies registered reference structures, extracts WT-prefix distributions, scores complete variants,
+the pinned model, automatically registers missing manifests from that collection's local
+raw PDBs, verifies reference structures, extracts WT-prefix distributions, scores complete variants,
 and validates both caches. It preserves registered structure manifests and requires
 N/CA/C coordinates. Mean scoring uses the ProteinGym recipe described below, with
 batch sizes selected from each assay's full reference length: 16 for <=300 residues,
@@ -646,9 +647,9 @@ a batch size are scored together to reuse the loaded model; the log records each
 assay's length and batch size. Full-sequence scores require one backbone covering the entire
 reference; partial structures and independent fragments cannot supply that score.
 Their kernel features remain available even if the separate scoring stage fails.
-Prepare the collection's manifests before submission. Missing manifests fail
-without downloading an official ProteinGym replacement. Feature and score cache
-IDs start with `protssn_proteingym--`.
+Automatic registration checks the PDB against `source.json`, resolves its filename
+aliases, and validates the reference mapping. Missing raw files or invalid structures
+fail the assay. Feature and score cache IDs start with `protssn_proteingym--`.
 
 ```bash
 sbatch sbatch_run/run_prepare_rep/prepare_esm_if1.sbatch
@@ -1300,9 +1301,10 @@ and duplicate assay preparations use filesystem locks.
 
 The default singles preset selects `structure_source="protssn_proteingym"`:
 it reads `data/structures/protssn_proteingym/manifests/<assay>.json` and stores
-tokens under `data/structures/protssn_proteingym/tokens/prosst/`. Prepare those
-manifests before submission; raw PDBs alone are insufficient. Missing manifests
-fail the assay without falling back to the official ProteinGym collection.
+tokens under `data/structures/protssn_proteingym/tokens/prosst/`. The launcher
+automatically creates missing manifests from the collection's local raw PDBs,
+using the checksums and filename aliases in `source.json` before validating the
+reference mapping. Missing raw files or invalid structures fail the assay.
 Embedding and score cache IDs start with `protssn_proteingym--`.
 The separate `prosst_2048.json` CLI preset retains the official `proteingym` source.
 Structures must cover the full reference with finite N/CA/C/O coordinates.

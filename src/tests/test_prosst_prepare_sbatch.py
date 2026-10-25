@@ -116,9 +116,10 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
                 record('download', model=config.model_id, model_dir=str(config.model_dir))
                 return config.model_dir
 
-            def download_structure(index, assay, *, manifest_dir):
+            def ensure_structure(index, assay, *, structure_source, manifest_dir):
                 require_lock()
-                record('structure-download', assay=assay, manifest_dir=str(manifest_dir))
+                record('structure-download', assay=assay, structure_source=structure_source,
+                       manifest_dir=str(manifest_dir))
                 path = manifest_dir / (assay + '.json')
                 path.write_text('{}')
                 return path
@@ -165,7 +166,7 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
             module('feature_generation.prosst_structure', _runtime_versions=runtime)
             module('feature_generation.prosst_checkpoints', download=download)
             module('feature_generation.structure_inputs',
-                   download_proteingym_structure=download_structure, load_structure=load_structure)
+                   ensure_structure_manifest=ensure_structure, load_structure=load_structure)
             module('feature_generation.prosst_runner', extract=extract)
             module('feature_generation.score_runner', score=score, default_cache_id=lambda config: 'score-recipe')
             module('feature_generation.score_storage', validate_score_cache=validate_scores)
@@ -216,14 +217,23 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
         self.assertEqual(Path(validation['path']), Path(extraction['output_root']) / ASSAY)
         self.assertTrue(next(r for r in records if r['kind'] == 'structure-verify')['require_oxygen'])
 
-    def test_missing_protssn_manifest_does_not_download_official_structure(self):
+    def test_missing_protssn_manifest_registers_selected_collection_and_continues(self):
         (self.manifests / f'{ASSAY}.json').unlink()
         result, records = self.invoke()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Prepare the selected collection's manifest first", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
         stages = [r['kind'] for r in records]
-        self.assertNotIn('structure-download', stages)
-        self.assertNotIn('extract', stages)
+        self.assertLess(stages.index('structure-download'), stages.index('structure-verify'))
+        self.assertLess(stages.index('structure-verify'), stages.index('extract'))
+        preparation = next(r for r in records if r['kind'] == 'structure-download')
+        self.assertEqual(preparation['structure_source'], 'protssn_proteingym')
+        self.assertEqual(Path(preparation['manifest_dir']), self.manifests)
+        self.assertEqual(stages[-1], 'validate-scores')
+
+    def test_failed_automatic_registration_stops_inference(self):
+        (self.manifests / f'{ASSAY}.json').unlink()
+        result, records = self.invoke(environment={'TEST_FAIL_STAGE': 'structure-download'})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('extract', [r['kind'] for r in records])
 
     def test_windowed_preset_admits_long_references_and_counts_special_tokens(self):
         catalog = self.root / 'data/DMS_ProteinGym_substitutions/DMS_substitutions.csv'

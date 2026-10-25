@@ -155,7 +155,7 @@ import sys
 
 from data_loading.catalog import AssayCatalog
 from feature_generation.inverse_config import InverseFoldingConfig
-from feature_generation.structure_inputs import download_proteingym_structure
+from feature_generation.structure_inputs import ensure_structure_manifest
 from feature_generation.structure_fragments import load_inverse_structure
 
 config = InverseFoldingConfig.load(sys.argv[1])
@@ -166,12 +166,11 @@ for assay_id in sys.argv[2:]:
         reference = catalog.get(assay_id).reference_sequence
         manifest = config.structure_manifest_dir / f"{assay_id}.json"
         if not manifest.exists():
-            if getattr(config, "structure_source", "proteingym") != "proteingym":
-                raise FileNotFoundError(f"Prepare the selected collection's manifest first: {manifest}")
             # A sole polymer chain is selected automatically. Ambiguous chains
             # require a separately prepared manifest with an explicit chain.
-            manifest = download_proteingym_structure(
+            manifest = ensure_structure_manifest(
                 config.assay_index, assay_id,
+                structure_source=config.structure_source,
                 manifest_dir=config.structure_manifest_dir,
             )
         # Preserve valid registered structures, including custom source files.

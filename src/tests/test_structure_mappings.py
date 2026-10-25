@@ -38,6 +38,18 @@ class StructureMappingTests(unittest.TestCase):
         self.addCleanup(torch.set_num_threads, torch.get_num_threads())
         torch.set_num_threads(1)
 
+    def test_exact_reference_structure_does_not_require_official_mapping_exception(self):
+        assay = sorted(P53_ASSAYS)[0]
+        reference, _, config, _, pdb = self.fixture(assay)
+        with patch.dict(THREE, {"R": "ARG"}):
+            pdb.write_text(pdb_text(reference), encoding="utf-8")
+        manifests = self.root / "alternative_manifests"
+        manifest = prepare_structure(config.assay_index, assay, pdb, output_dir=manifests)
+        structure = load_structure(manifest, reference)
+        self.assertEqual(structure.metadata["schema_version"], 1)
+        self.assertEqual(structure.metadata["mapping_policy"], "exact_full_chain_sequence")
+        self.assertEqual(structure.reference_sequence, reference)
+
     def fixture(self, assay):
         if assay in DOMAIN_RANGES:
             length, start, end, filename = DOMAIN_RANGES[assay]

@@ -16,8 +16,8 @@
 # Prerequisites: the nkn_protein Conda environment and the ProteinGym catalog at
 # data/DMS_ProteinGym_substitutions/DMS_substitutions.csv. Individual assay CSVs
 # may be beside the catalog or in its raw_substitutions/ subdirectory. Requires
-# outbound HTTPS access for first model downloads. The preset uses registered
-# protssn_proteingym structures; prepare that collection's manifests before submission.
+# outbound HTTPS access for first model downloads. The preset automatically registers
+# local protssn_proteingym structures using that collection's source.json inventory.
 # Uses the pinned esm_if1_142m.json recipe: WT reference-prefix conditioning,
 # float32 inference, and normalized probabilities over the 20 canonical residues.
 # Selects single mutants only, saved under data/features/pretrained/singles/.
@@ -136,7 +136,7 @@ import sys
 
 from data_loading.catalog import AssayCatalog
 from feature_generation.inverse_config import InverseFoldingConfig
-from feature_generation.structure_inputs import download_proteingym_structure
+from feature_generation.structure_inputs import ensure_structure_manifest
 from feature_generation.structure_fragments import load_inverse_structure
 
 config = InverseFoldingConfig.load(sys.argv[1])
@@ -151,11 +151,10 @@ for assay_id in sys.argv[2:]:
             )
         manifest = config.structure_manifest_dir / f"{assay_id}.json"
         if not manifest.exists():
-            if getattr(config, "structure_source", "proteingym") != "proteingym":
-                raise FileNotFoundError(f"Prepare the selected collection's manifest first: {manifest}")
             # Ambiguous chains require a separately prepared explicit manifest.
-            manifest = download_proteingym_structure(
+            manifest = ensure_structure_manifest(
                 config.assay_index, assay_id,
+                structure_source=config.structure_source,
                 manifest_dir=config.structure_manifest_dir,
             )
         # Preserve registered custom structures/mappings/fragments. ESM-IF1 uses

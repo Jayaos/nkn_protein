@@ -141,8 +141,8 @@ def _parse_structure(path: Path, reference_sequence: str | None, chain_id: str |
             raise ValueError(f"Unsupported noncanonical protein residue {residue.resname} {residue.id}")
         residues.append(residue)
     observed = "".join(RESIDUE_CODES[residue.resname] for residue in residues)
-    # Only explicit mapped-assay registration calls with None, then verifies
-    # the observed sequence against its narrow, assay-specific mapping recipe.
+    # Mapped-assay registration reads the source sequence first, then requires
+    # an exact reference match or the narrow, assay-specific mapping recipe.
     if reference_sequence is None:
         reference_sequence = observed
     if observed != reference_sequence:
@@ -194,19 +194,23 @@ def prepare_structure(index_path: str | Path, assay_id: str, structure_file: str
                       source_url: str | None = None, source_archive: dict | None = None) -> Path:
     """Register an existing structure; registration allows a missing O atom.
 
-    The selected chain must match the entire assay reference in residue order.
+    Exact reference matches use normal registration, including for assays with
+    a documented mapping exception for a different source structure.
     PDB author numbering need not start at one or be contiguous: it is preserved
     explicitly, never interpreted as the assay coordinate system.
     """
     safe_component(assay_id, "assay ID")
     index_path, structure_file = Path(index_path).resolve(), Path(structure_file).resolve()
     from .structure_mappings import MAPPED_ASSAYS, prepare_mapped_structure
-    if assay_id in MAPPED_ASSAYS:
-        return prepare_mapped_structure(index_path, assay_id, structure_file, chain_id, model_index,
-                                        output_dir, source_url, source_archive)
     record = AssayCatalog(index_path).get(assay_id)
     index_hash, digest = sha256_file(index_path), sha256_file(structure_file)
-    _, mapping, selected_chain, parser_version = _parse_structure(structure_file, record.reference_sequence, chain_id, model_index)
+    _, mapping, selected_chain, parser_version = _parse_structure(
+        structure_file, None if assay_id in MAPPED_ASSAYS else record.reference_sequence,
+        chain_id, model_index,
+    )
+    if assay_id in MAPPED_ASSAYS and "".join(row["amino_acid"] for row in mapping) != record.reference_sequence:
+        return prepare_mapped_structure(index_path, assay_id, structure_file, chain_id, model_index,
+                                        output_dir, source_url, source_archive)
     if sha256_file(structure_file) != digest or sha256_file(index_path) != index_hash:
         raise ValueError("Structure inputs changed while being read")
     destination = Path(output_dir).resolve() / f"{assay_id}.json"
@@ -233,6 +237,61 @@ def prepare_structure(index_path: str | Path, assay_id: str, structure_file: str
         return destination
     _atomic_json(destination, metadata)
     return destination
+
+
+def ensure_structure_manifest(index_path: str | Path, assay_id: str,
+                              structure_source: str = "proteingym",
+                              chain_id: str | None = None, model_index: int = 1,
+                              raw_dir: str | Path | None = None,
+                              manifest_dir: str | Path | None = None) -> Path:
+    """Reuse a manifest or acquire/register inputs from the selected collection.
+
+    ProteinGym uses its pinned archive downloader. ProtSSN uses local assay-named
+    PDBs and the checksums/aliases in raw_dir's sibling source.json inventory.
+    Existing custom manifests are verified and preserved for either collection.
+    """
+    from .structure_sources import structure_path
+    from .structure_fragments import load_inverse_structure
+
+    safe_component(assay_id, "assay ID")
+    raw_dir = structure_path(structure_source, raw_dir, "raw")
+    manifest_dir = structure_path(structure_source, manifest_dir, "manifests")
+    manifest_path = manifest_dir / f"{assay_id}.json"
+    if manifest_path.exists():
+        reference = AssayCatalog(index_path).get(assay_id).reference_sequence
+        existing = load_inverse_structure(manifest_path, reference, require_oxygen=False)
+        if existing.model_index != model_index or (chain_id is not None and existing.chain_id != chain_id):
+            raise ValueError("The existing structure manifest uses a different model or chain")
+        return manifest_path
+    if structure_source == "proteingym":
+        return download_proteingym_structure(
+            index_path, assay_id, chain_id, model_index, raw_dir, manifest_dir,
+        )
+
+    source_path = raw_dir.parent / "source.json"
+    with source_path.open(encoding="utf-8") as handle:
+        source = json.load(handle)
+    if source.get("schema_version") != 1 or source.get("source_id") != structure_source:
+        raise ValueError(f"Invalid {structure_source} collection inventory: {source_path}")
+    filename = source.get("filename_aliases", {}).get(assay_id, f"{assay_id}.pdb")
+    safe_component(filename, "structure filename")
+    if Path(filename).suffix.lower() != ".pdb":
+        raise ValueError("ProtSSN structure filename must end in .pdb")
+    expected_hash = source.get("files_sha256", {}).get(f"raw/{filename}")
+    if not isinstance(expected_hash, str) or len(expected_hash) != 64 or any(c not in "0123456789abcdef" for c in expected_hash):
+        raise ValueError(f"No valid ProtSSN checksum for {filename!r} in {source_path}")
+    structure_file = raw_dir / filename
+    if not structure_file.is_file():
+        raise FileNotFoundError(f"Missing ProtSSN raw structure: {structure_file}; restore it from the collection archive")
+    if sha256_file(structure_file) != expected_hash:
+        raise ValueError(f"ProtSSN structure checksum mismatch: {structure_file}")
+    return prepare_structure(
+        index_path, assay_id, structure_file, chain_id, model_index, manifest_dir,
+        source_url=source.get("archive_url"),
+        source_archive={"url": source.get("archive_url"), "sha256": source.get("archive_sha256"),
+                        "source_id": structure_source, "filename": filename,
+                        "file_sha256": expected_hash},
+    )
 
 
 def load_structure(manifest_path: str | Path, reference_sequence: str, require_oxygen: bool = True) -> StructureInput:

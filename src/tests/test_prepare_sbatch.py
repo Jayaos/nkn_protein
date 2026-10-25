@@ -232,8 +232,9 @@ class PreparationSbatchTests(PreparationFixture):
                 def get(self, assay):
                     return SimpleNamespace(reference_sequence=self.rows[assay]['target_seq'])
 
-            def download_structure(index, assay, *, manifest_dir, **kwargs):
+            def ensure_structure(index, assay, *, structure_source, manifest_dir):
                 record('structure-download', [assay])
+                record('structure-source', [assay, structure_source, str(manifest_dir)])
                 if os.environ.get('TEST_FAIL_STRUCTURE_ASSAY') == assay:
                     raise ValueError('fixture structure unavailable')
                 return manifest_dir / (assay + '.json')
@@ -285,7 +286,7 @@ class PreparationSbatchTests(PreparationFixture):
             module('feature_generation.score_runner', default_cache_id=lambda config:
                    f'{config.structure_source}--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b')
             module('feature_generation.structure_inputs',
-                   download_proteingym_structure=download_structure, load_structure=load_structure)
+                   ensure_structure_manifest=ensure_structure, load_structure=load_structure)
             module('feature_generation.structure_fragments', load_inverse_structure=load_structure)
             module('fcntl', LOCK_EX=2, flock=lock_download)
             module('data_loading')
@@ -583,6 +584,26 @@ class PreparationSbatchTests(PreparationFixture):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_esm_if1_targets(records, ["length_case_1"], batches)
 
+    def test_missing_manifests_register_from_selected_collection_for_both_inverse_models(self):
+        for script, presets in ((ESM_IF1_SCRIPT, ("esm_if1_142m.json",)),
+                                ("prepare_proteinmpnn.sbatch", ("proteinmpnn_v48_020_kermut.json",
+                                                                "proteinmpnn_v48_020.json"))):
+            with self.subTest(script=script):
+                for preset in presets:
+                    config_path = self.root / "configs/extraction" / preset
+                    config = json.loads(config_path.read_text())
+                    config["structure_source"] = "protssn_proteingym"
+                    config["structure_manifest_dir"] = "data/structures/protssn_proteingym/manifests"
+                    config["cache_id"] = "protssn_proteingym--" + config["cache_id"].split("--", 1)[1]
+                    config_path.write_text(json.dumps(config), encoding="utf-8")
+                (self.protssn_manifests / f"{ASSAYS[0]}.json").unlink(missing_ok=True)
+                result, records = self.invoke(script)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                sources = [record["args"] for record in records if record["kind"] == "structure-source"]
+                self.assertEqual(sources, [[ASSAYS[0], "protssn_proteingym", str(self.protssn_manifests)]])
+                verified = [record["args"][0] for record in records if record["kind"] == "structure-verify"]
+                self.assertEqual(verified, ASSAYS)
+
     def test_esm_if1_failures_continue_through_validation_and_preserve_registered_structures(self):
         manifests = self.protssn_manifests
         # A failing batch-size group must not prevent another group from running.
@@ -607,9 +628,9 @@ class PreparationSbatchTests(PreparationFixture):
                 self.assertIn(message, result.stderr)
                 self.assert_esm_if1_targets(records, ASSAYS, {ASSAYS[0]: 8})
                 downloads = [record["args"][0] for record in records if record["kind"] == "structure-download"]
-                self.assertEqual(downloads, [])
+                self.assertEqual(downloads, [ASSAYS[0]] if "TEST_FAIL_STRUCTURE_ASSAY" in environment else [])
                 if "TEST_FAIL_STRUCTURE_ASSAY" in environment:
-                    self.assertIn("Prepare the selected collection's manifest first", result.stderr)
+                    self.assertIn("fixture structure unavailable", result.stderr)
                 verified = [record["args"][0] for record in records if record["kind"] == "structure-verify"]
                 self.assertIn(ASSAYS[1], verified)
                 self.assertIn(ASSAYS[-1], verified)

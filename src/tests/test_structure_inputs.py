@@ -13,9 +13,11 @@ from unittest.mock import patch
 import torch
 
 from feature_generation.structure_inputs import (
-    download_proteingym_structure, download_structure, load_structure, prepare_structure, validate_structure_metadata,
+    download_proteingym_structure, download_structure, ensure_structure_manifest,
+    load_structure, prepare_structure, validate_structure_metadata,
     PROTEINGYM_STRUCTURE_SHA256, PROTEINGYM_STRUCTURE_URL,
 )
+from feature_generation.inputs import sha256_file
 
 
 THREE = {"A": "ALA", "C": "CYS", "D": "ASP", "V": "VAL"}
@@ -240,6 +242,104 @@ class StructureInputTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "differs from the pinned ProteinGym archive"):
                 download_proteingym_structure(self.index, "tiny", raw_dir=raw, manifest_dir=self.manifests)
         self.assertEqual(existing.read_text(encoding="utf-8"), "existing unrelated data")
+
+    def protssn_collection(self, filename="tiny.pdb", sequence="ACD", aliases=None):
+        raw = self.root / "protssn/raw"
+        raw.mkdir(parents=True)
+        pdb = raw / filename
+        pdb.write_text(pdb_text(sequence), encoding="utf-8")
+        source = {"schema_version": 1, "source_id": "protssn_proteingym",
+                  "archive_url": "https://example.org/protssn.zip", "archive_sha256": None,
+                  "files_sha256": {f"raw/{filename}": sha256_file(pdb)},
+                  "filename_aliases": aliases or {}}
+        (raw.parent / "source.json").write_text(json.dumps(source), encoding="utf-8")
+        return raw, pdb
+
+    def ensure_protssn(self, **kwargs):
+        return ensure_structure_manifest(
+            self.index, "tiny", structure_source="protssn_proteingym",
+            raw_dir=self.root / "protssn/raw", manifest_dir=self.manifests, **kwargs,
+        )
+
+    def test_protssn_registers_raw_structure_and_reuses_manifest_offline(self):
+        raw, pdb = self.protssn_collection()
+        with patch("feature_generation.structure_inputs.download_proteingym_structure") as official:
+            manifest = self.ensure_protssn()
+            original = manifest.read_bytes()
+            observed = load_structure(manifest, "ACD")
+            self.assertEqual(observed.structure_sha256, sha256_file(pdb))
+            self.assertEqual(observed.metadata["source_archive"]["source_id"], "protssn_proteingym")
+            self.assertEqual(observed.metadata["source_url"], "https://example.org/protssn.zip")
+            (raw.parent / "source.json").unlink()
+            self.assertEqual(self.ensure_protssn(), manifest)
+            self.assertEqual(manifest.read_bytes(), original)
+            official.assert_not_called()
+
+    def test_protssn_resolves_inventory_alias_without_renaming_source(self):
+        raw, pdb = self.protssn_collection("original_name.pdb", aliases={"tiny": "original_name.pdb"})
+        manifest = self.ensure_protssn()
+        observed = load_structure(manifest, "ACD")
+        self.assertEqual((manifest.parent / observed.metadata["structure_path"]).resolve(), pdb)
+        self.assertEqual([path.name for path in raw.iterdir()], ["original_name.pdb"])
+
+    def test_protssn_rejects_modified_raw_file_without_manifest(self):
+        _, pdb = self.protssn_collection()
+        pdb.write_text(pdb_text("ACV"), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            self.ensure_protssn()
+        self.assertFalse(self.manifests.exists())
+
+    def test_protssn_rejects_reference_mismatch_despite_valid_checksum(self):
+        self.protssn_collection(sequence="ACV")
+        with self.assertRaisesRegex(ValueError, "full reference sequence"):
+            self.ensure_protssn()
+        self.assertFalse(self.manifests.exists())
+
+    def test_protssn_missing_raw_file_never_falls_back_to_official(self):
+        _, pdb = self.protssn_collection()
+        pdb.unlink()
+        with patch("feature_generation.structure_inputs.download_proteingym_structure") as official:
+            with self.assertRaisesRegex(FileNotFoundError, "Missing ProtSSN raw structure"):
+                self.ensure_protssn()
+            official.assert_not_called()
+        self.assertFalse(self.manifests.exists())
+
+    def test_protssn_rejects_wrong_collection_unpinned_file_and_unsafe_alias(self):
+        raw, _ = self.protssn_collection()
+        source_path = raw.parent / "source.json"
+        original = json.loads(source_path.read_text())
+        cases = (({"source_id": "proteingym"}, "Invalid protssn_proteingym"),
+                 ({"files_sha256": {}}, "No valid ProtSSN checksum"),
+                 ({"filename_aliases": {"tiny": "../tiny.pdb"}}, "Invalid structure filename"))
+        for changes, message in cases:
+            with self.subTest(changes=changes):
+                source_path.write_text(json.dumps(dict(original, **changes)), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, message):
+                    self.ensure_protssn()
+                self.assertFalse(self.manifests.exists())
+
+    def test_collection_preparation_preserves_custom_manifest_and_checks_integrity(self):
+        manifest = self.register()
+        original = manifest.read_bytes()
+        for source in ("proteingym", "protssn_proteingym"):
+            with self.subTest(source=source):
+                self.assertEqual(ensure_structure_manifest(
+                    self.index, "tiny", structure_source=source, manifest_dir=self.manifests,
+                ), manifest)
+                self.assertEqual(manifest.read_bytes(), original)
+        self.pdb.write_text(pdb_text("ACV"), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            self.ensure_protssn()
+
+    def test_collection_preparation_keeps_official_archive_acquisition(self):
+        with patch("feature_generation.downloads.download_verified",
+                   side_effect=self.archive_downloader(["ProteinGym_AF2/tiny.pdb"])) as fetch:
+            manifest = ensure_structure_manifest(
+                self.index, "tiny", raw_dir=self.root / "raw", manifest_dir=self.manifests,
+            )
+        fetch.assert_called_once()
+        self.assertEqual(load_structure(manifest, "ACD").metadata["source_archive"]["sha256"],
+                         PROTEINGYM_STRUCTURE_SHA256)
 
 
 if __name__ == "__main__":

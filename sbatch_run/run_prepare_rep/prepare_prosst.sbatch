@@ -14,8 +14,8 @@
 # Prepare ProSST K=2048 single-substitution embeddings and GP mean scores for every assay in the
 # configured DMS_substitutions.csv, in catalog order, without assay-count limits.
 # Requires the nkn_protein environment and catalog/variant CSV files.
-# The default singles preset uses registered protssn_proteingym structures.
-# Prepare that collection's assay manifests before submission. Matching caches
+# The default singles preset automatically registers local protssn_proteingym
+# structures using the collection's source.json inventory. Matching caches
 # are reused; first model downloads require HTTPS.
 # From the repository root or a subdirectory:
 #   sbatch sbatch_run/run_prepare_rep/prepare_prosst.sbatch
@@ -182,7 +182,7 @@ from feature_generation.prosst_runner import extract
 from feature_generation.score_runner import score, default_cache_id
 from feature_generation.score_storage import validate_score_cache
 from feature_generation.storage import validate_sequence_cache
-from feature_generation.structure_inputs import download_proteingym_structure, load_structure
+from feature_generation.structure_inputs import ensure_structure_manifest, load_structure
 
 config = ProSSTConfig.load(sys.argv[1])
 assay = sys.argv[2]
@@ -194,10 +194,9 @@ with (config.structure_manifest_dir / f".{assay}.prosst.lock").open("a+b") as lo
     reference = AssayCatalog(config.assay_index).get(assay).reference_sequence
     manifest = config.structure_manifest_dir / f"{assay}.json"
     if not manifest.exists():
-        if getattr(config, "structure_source", "proteingym") != "proteingym":
-            raise FileNotFoundError(f"Prepare the selected collection's manifest first: {manifest}")
-        manifest = download_proteingym_structure(
+        manifest = ensure_structure_manifest(
             config.assay_index, assay, manifest_dir=config.structure_manifest_dir,
+            structure_source=config.structure_source,
         )
     load_structure(manifest, reference, require_oxygen=True)
     print(f"{assay}: structure verified: {manifest}", flush=True)
