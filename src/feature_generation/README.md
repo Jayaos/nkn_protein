@@ -620,6 +620,9 @@ Other chains are not used as structural context in this first version.
 Choose `--chain` explicitly for multichain structures and `--model-index` for
 multi-model structures. No sequence offset or cropping is inferred from `pdb_range`.
 
+The ESM-IF1 preset selects `protssn_proteingym`. Register its assay manifest in
+`data/structures/protssn_proteingym/manifests/` before extraction; the official
+ProteinGym manifest prepared above belongs to the ProteinMPNN preset.
 Download both checkpoints explicitly, then extract offline:
 
 ```powershell
@@ -633,13 +636,19 @@ python -m feature_generation.cli validate --features "data/features/pretrained/$
 
 For Slurm preparation, [`prepare_esm_if1.sbatch`](../../sbatch_run/run_prepare_rep/prepare_esm_if1.sbatch)
 uses `esm_if1_142m.json` and explicitly saves single-mutant caches under
-`data/features/pretrained/singles/`. It downloads/verifies the pinned model and
-reference structures, extracts WT-prefix distributions, scores complete variants,
+`data/features/pretrained/singles/`. It selects `protssn_proteingym`, downloads/verifies
+the pinned model, verifies registered reference structures, extracts WT-prefix distributions, scores complete variants,
 and validates both caches. It preserves registered structure manifests and requires
-N/CA/C coordinates. Mean scoring uses the ProteinGym recipe described below, one
-variant per batch. Full-sequence scores require one backbone covering the entire
+N/CA/C coordinates. Mean scoring uses the ProteinGym recipe described below, with
+batch sizes selected from each assay's full reference length: 16 for <=300 residues,
+8 for 301-600, 4 for 601-1,000, 2 for 1,001-2,000, and 1 for >2,000. Assays sharing
+a batch size are scored together to reuse the loaded model; the log records each
+assay's length and batch size. Full-sequence scores require one backbone covering the entire
 reference; partial structures and independent fragments cannot supply that score.
 Their kernel features remain available even if the separate scoring stage fails.
+Prepare the collection's manifests before submission. Missing manifests fail
+without downloading an official ProteinGym replacement. Feature and score cache
+IDs start with `protssn_proteingym--`.
 
 ```bash
 sbatch sbatch_run/run_prepare_rep/prepare_esm_if1.sbatch
@@ -933,7 +942,7 @@ weights stay frozen, and experimental labels are never passed to the scorer.
 
 ```bash
 python -m feature_generation.cli score --config configs/extraction/esm_if1_142m.json --output-root data/features/pretrained/singles --assay YAP1_HUMAN_Araya_2012 --singles-only --device cuda --batch-size 1 --resume
-python -m feature_generation.cli validate --features data/features/pretrained/singles/YAP1_HUMAN_Araya_2012 --feature-type scores --model-family esm_if1 --cache-id proteingym--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b
+python -m feature_generation.cli validate --features data/features/pretrained/singles/YAP1_HUMAN_Araya_2012 --feature-type scores --model-family esm_if1 --cache-id protssn_proteingym--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b
 ```
 
 The existing extraction config supplies the checkpoint, paths and optional
@@ -957,7 +966,7 @@ either alone or alongside existing ESM2/ProteinMPNN sources:
 
 ```json
 "score_sources": [
-  "scores/esm_if1/proteingym--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b"
+  "scores/esm_if1/protssn_proteingym--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b"
 ]
 ```
 

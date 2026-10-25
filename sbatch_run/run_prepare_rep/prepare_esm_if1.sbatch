@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
-#SBATCH --constraint=V100
+#SBATCH --constraint=A100
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=12:00:00
@@ -16,12 +16,15 @@
 # Prerequisites: the nkn_protein Conda environment and the ProteinGym catalog at
 # data/DMS_ProteinGym_substitutions/DMS_substitutions.csv. Individual assay CSVs
 # may be beside the catalog or in its raw_substitutions/ subdirectory. Requires
-# outbound HTTPS access from the allocated compute node. Checkpoint/source and structures are prepared here.
+# outbound HTTPS access for first model downloads. The preset uses registered
+# protssn_proteingym structures; prepare that collection's manifests before submission.
 # Uses the pinned esm_if1_142m.json recipe: WT reference-prefix conditioning,
 # float32 inference, and normalized probabilities over the 20 canonical residues.
 # Selects single mutants only, saved under data/features/pretrained/singles/.
 # Also prepares ProteinGym-style full-variant mean log-likelihoods for the GP mean.
 # Scores use variant prefixes and the native vocabulary, without WT subtraction.
+# Scoring batch size follows the full reference length: <=300: 16, <=600: 8,
+# <=1000: 4, <=2000: 2, >2000: 1. Assays sharing a batch size reuse the model.
 # Full-sequence scoring requires a single backbone covering the entire reference.
 # The default recipe has no sequence-length cap. An optional max_length can
 # limit full assay references. Long inputs require sufficient memory/runtime.
@@ -91,6 +94,8 @@ if config.model_family != "esm_if1" or config.conditioning_mode != "reference_pr
 print(f"Assay catalog: {config.assay_index}")
 print(f"Output root: {Path(sys.argv[2]).resolve()}")
 print(f"Cache: {config.cache_id}")
+print(f"Structure source: {config.structure_source}")
+print(f"Structure manifests: {config.structure_manifest_dir}")
 print(f"Conditioning: {config.conditioning_mode}; seed: {config.seed}")
 print(f"Precision: inference={config.inference_dtype}; output={config.output_dtype}")
 if config.max_length is None:
@@ -125,7 +130,7 @@ with (config.model_dir / ".download.lock").open("a+b") as lock:
 PY
 
 failed=0
-printf '[2/5] Downloading/verifying reference structures and residue mappings\n'
+printf '[2/5] Verifying reference structures and residue mappings\n'
 if python -u - "$feature_config" "${assays[@]}" <<'PY'
 import sys
 
@@ -187,17 +192,56 @@ else
 fi
 
 printf '[4/5] Scoring ESM-IF1 variants with native mean log-likelihoods\n'
-# One full variant per forward pass limits peak memory for long references.
-if python -u -m feature_generation.cli score \
-  --config "$feature_config" \
-  --output-root "$output_root" \
-  "${assay_args[@]}" \
-  --singles-only \
-  --batch-size 1 \
-  --device cuda \
-  --resume \
-  --continue-on-error; then
-  :
+# Build the plan from the same full references used by scoring, then dispatch
+# each batch-size group together to avoid reloading the model for every assay.
+if score_plan="$(python -u - "$feature_config" "${assays[@]}" <<'PY'
+import sys
+
+from data_loading.catalog import AssayCatalog
+from feature_generation.inverse_config import InverseFoldingConfig
+
+config = InverseFoldingConfig.load(sys.argv[1])
+catalog = AssayCatalog(config.assay_index)
+for assay_id in sys.argv[2:]:
+    length = len(catalog.get(assay_id).reference_sequence)
+    if length <= 300:
+        batch_size = 16
+    elif length <= 600:
+        batch_size = 8
+    elif length <= 1000:
+        batch_size = 4
+    elif length <= 2000:
+        batch_size = 2
+    else:
+        batch_size = 1
+    print(f"{assay_id}\t{length}\t{batch_size}")
+PY
+)"; then
+  for batch_size in 16 8 4 2 1; do
+    score_args=()
+    while IFS=$'\t' read -r assay reference_length assay_batch_size; do
+      if [[ "$assay_batch_size" == "$batch_size" ]]; then
+        score_args+=(--assay "$assay")
+        printf '%s: reference length=%s; scoring batch size=%s\n' "$assay" "$reference_length" "$batch_size"
+      fi
+    done <<< "$score_plan"
+    if (( ${#score_args[@]} == 0 )); then
+      continue
+    fi
+    if python -u -m feature_generation.cli score \
+      --config "$feature_config" \
+      --output-root "$output_root" \
+      "${score_args[@]}" \
+      --singles-only \
+      --batch-size "$batch_size" \
+      --device cuda \
+      --resume \
+      --continue-on-error; then
+      :
+    else
+      failed=1
+    fi
+  done
 else
   failed=1
 fi

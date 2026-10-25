@@ -157,6 +157,10 @@ class PreparationTargetTests(PreparationFixture):
 class PreparationSbatchTests(PreparationFixture):
     def setUp(self):
         super().setUp()
+        self.protssn_manifests = self.root / "data/structures/protssn_proteingym/manifests"
+        self.protssn_manifests.mkdir(parents=True)
+        for assay in ASSAYS:
+            (self.protssn_manifests / f"{assay}.json").write_text("registered fixture", encoding="utf-8")
         self.records = self.root / "calls.jsonl"
         self.bootstrap = self.workspace / "bootstrap.sh"
         self.bootstrap.write_text(textwrap.dedent("""\
@@ -180,9 +184,9 @@ class PreparationSbatchTests(PreparationFixture):
 
             root = Path(os.environ['TEST_ROOT'])
             args = [arg for arg in sys.argv[1:] if arg != '-u']
+            # Match Linux stdout, including inline batch plans, on Windows.
+            sys.stdout.reconfigure(newline='\\n')
             if args[0].endswith('list_assays.py'):
-                # Match Linux stdout when the harness runs with Windows Python.
-                sys.stdout.reconfigure(newline='\\n')
                 sys.argv = args
                 runpy.run_path(args[0], run_name='__main__')
                 raise SystemExit(0)
@@ -268,7 +272,7 @@ class PreparationSbatchTests(PreparationFixture):
             module('feature_generation.inverse_storage', validate_inverse_cache=validate_inverse_cache)
             module('feature_generation.score_storage', validate_score_cache=validate_score_cache)
             module('feature_generation.score_runner', default_cache_id=lambda config:
-                   'proteingym--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b')
+                   f'{config.structure_source}--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b')
             module('feature_generation.structure_inputs',
                    download_proteingym_structure=download_structure, load_structure=load_structure)
             module('feature_generation.structure_fragments', load_inverse_structure=load_structure)
@@ -491,7 +495,7 @@ class PreparationSbatchTests(PreparationFixture):
         self.assertEqual(verified, ASSAYS[1:])
         self.assert_targets(records, ASSAYS)
 
-    def assert_esm_if1_targets(self, records, expected):
+    def assert_esm_if1_targets(self, records, expected, batch_sizes=None):
         calls = [record for record in records if record["kind"] == "extract"]
         self.assertEqual(len(calls), 1, records)
         args = calls[0]["args"]
@@ -501,25 +505,29 @@ class PreparationSbatchTests(PreparationFixture):
         self.assertEqual(args[args.index("--device") + 1], "cuda")
         for flag in ("--singles-only", "--resume", "--continue-on-error"):
             self.assertIn(flag, args)
+        batches = dict.fromkeys(expected, 16)
+        batches.update(batch_sizes or {})
+        expected_batches = sorted({batches[assay] for assay in expected}, reverse=True)
         scores = [record["args"] for record in records if record["kind"] == "score"]
-        self.assertEqual(len(scores), 1, records)
-        score_args = scores[0]
-        self.assertEqual([score_args[index + 1] for index, value in enumerate(score_args) if value == "--assay"], expected)
-        for key in ("--config", "--output-root", "--device"):
-            self.assertEqual(score_args[score_args.index(key) + 1], args[args.index(key) + 1])
-        for flag in ("--singles-only", "--resume", "--continue-on-error"):
-            self.assertIn(flag, score_args)
-        self.assertEqual(score_args[score_args.index("--batch-size") + 1], "1")
-        self.assertNotIn("--num-orders", score_args)
+        self.assertEqual(len(scores), len(expected_batches), records)
+        for score_args, batch_size in zip(scores, expected_batches):
+            selected = [score_args[index + 1] for index, value in enumerate(score_args) if value == "--assay"]
+            self.assertEqual(selected, [assay for assay in expected if batches[assay] == batch_size])
+            for key in ("--config", "--output-root", "--device"):
+                self.assertEqual(score_args[score_args.index(key) + 1], args[args.index(key) + 1])
+            for flag in ("--singles-only", "--resume", "--continue-on-error"):
+                self.assertIn(flag, score_args)
+            self.assertEqual(score_args[score_args.index("--batch-size") + 1], str(batch_size))
+            self.assertNotIn("--num-orders", score_args)
         validations = [record["args"] for record in records if record["kind"] == "validate"]
         self.assertEqual([Path(args[0]) for args in validations],
                          [self.root / "data/features/pretrained/singles" / assay for assay in expected])
         for args in validations:
-            self.assertEqual(args[1:], ["esm_if1", "proteingym--esm_if1_gvp4_t16_142M_UR50-reference_prefix-2b369911bb5b"])
+            self.assertEqual(args[1:], ["esm_if1", "protssn_proteingym--esm_if1_gvp4_t16_142M_UR50-reference_prefix-2b369911bb5b"])
         score_validations = [record["args"] for record in records if record["kind"] == "validate-score"]
         self.assertEqual([args[0] for args in score_validations], [args[0] for args in validations])
         for args in score_validations:
-            self.assertEqual(args[1:], ["esm_if1", "proteingym--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b"])
+            self.assertEqual(args[1:], ["esm_if1", "protssn_proteingym--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b"])
 
     def test_esm_if1_dispatches_features_and_scores_to_same_singles_and_validates_both(self):
         for environment, expected in (({}, ASSAYS), ({"SLURM_ARRAY_TASK_ID": "2"}, [ASSAYS[2]])):
@@ -532,13 +540,43 @@ class PreparationSbatchTests(PreparationFixture):
                 self.assertEqual(locking, ["download-lock", "download"])
                 structures = [record["args"] for record in records if record["kind"] == "structure-verify"]
                 self.assertEqual(structures, [[assay, "ACD", False] for assay in expected])
+                self.assertNotIn("structure-download", [record["kind"] for record in records])
+                self.assertIn("Structure source: protssn_proteingym", result.stdout)
+                self.assertIn(str(self.protssn_manifests), result.stdout)
                 self.assertIn("reference_prefix", result.stdout)
                 self.assertIn("no sequence-length cap", result.stdout)
 
+    def test_esm_if1_assigns_length_boundaries_and_preserves_array_selection(self):
+        # Deliberately mix lengths so batching cannot rely on catalog order.
+        cases = ((301, 8), (2001, 1), (300, 16), (601, 4),
+                 (2000, 2), (600, 8), (1001, 2), (1000, 4))
+        self.rows = []
+        batches = {}
+        for index, (length, batch_size) in enumerate(cases):
+            assay = f"length_case_{index}"
+            self.rows.append({"DMS_id": assay, "DMS_filename": f"{assay}.csv",
+                              "target_seq": "A" * length, "UniProt_ID": assay})
+            batches[assay] = batch_size
+            (self.raw / f"{assay}.csv").write_text(
+                f"mutant,mutated_sequence,DMS_score\nA1C,C{'A' * (length - 1)},1.0\n",
+                encoding="utf-8")
+            (self.protssn_manifests / f"{assay}.json").write_text("registered fixture", encoding="utf-8")
+        self.write_catalog()
+        result, records = self.invoke(ESM_IF1_SCRIPT)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_esm_if1_targets(records, list(batches), batches)
+        for row, (length, batch_size) in zip(self.rows, cases):
+            self.assertIn(f"{row['DMS_id']}: reference length={length}; scoring batch size={batch_size}",
+                          result.stdout)
+        result, records = self.invoke(ESM_IF1_SCRIPT, {"SLURM_ARRAY_TASK_ID": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_esm_if1_targets(records, ["length_case_1"], batches)
+
     def test_esm_if1_failures_continue_through_validation_and_preserve_registered_structures(self):
-        manifests = self.root / "data/structures/proteingym/manifests"
-        manifests.mkdir(parents=True)
-        (manifests / f"{ASSAYS[1]}.json").write_text("registered fixture", encoding="utf-8")
+        manifests = self.protssn_manifests
+        # A failing batch-size group must not prevent another group from running.
+        self.rows[0]["target_seq"] = "A" * 301
+        self.write_catalog()
         cases = (
             ({"TEST_FAIL_STRUCTURE_ASSAY": ASSAYS[0]}, f"{ASSAYS[0]}: structure failed"),
             ({"TEST_FAIL_STAGE": "extract"}, "One or more ESM-IF1 stages failed"),
@@ -548,12 +586,19 @@ class PreparationSbatchTests(PreparationFixture):
         )
         for environment, message in cases:
             with self.subTest(environment=environment):
+                first = manifests / f"{ASSAYS[0]}.json"
+                if "TEST_FAIL_STRUCTURE_ASSAY" in environment:
+                    first.unlink()
+                else:
+                    first.write_text("registered fixture", encoding="utf-8")
                 result, records = self.invoke(ESM_IF1_SCRIPT, environment)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(message, result.stderr)
-                self.assert_esm_if1_targets(records, ASSAYS)
+                self.assert_esm_if1_targets(records, ASSAYS, {ASSAYS[0]: 8})
                 downloads = [record["args"][0] for record in records if record["kind"] == "structure-download"]
-                self.assertEqual(downloads, [ASSAYS[0], *ASSAYS[2:]])
+                self.assertEqual(downloads, [])
+                if "TEST_FAIL_STRUCTURE_ASSAY" in environment:
+                    self.assertIn("Prepare the selected collection's manifest first", result.stderr)
                 verified = [record["args"][0] for record in records if record["kind"] == "structure-verify"]
                 self.assertIn(ASSAYS[1], verified)
                 self.assertIn(ASSAYS[-1], verified)
@@ -563,7 +608,7 @@ class PreparationSbatchTests(PreparationFixture):
         self.write_catalog()
         result, records = self.invoke(ESM_IF1_SCRIPT, {"SLURM_ARRAY_TASK_ID": "0"})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_esm_if1_targets(records, [ASSAYS[0]])
+        self.assert_esm_if1_targets(records, [ASSAYS[0]], {ASSAYS[0]: 2})
         structures = [record["args"] for record in records if record["kind"] == "structure-verify"]
         self.assertEqual(structures, [[ASSAYS[0], "ACD" * 621, False]])
 
@@ -579,12 +624,14 @@ class PreparationSbatchTests(PreparationFixture):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Full reference length 1023 exceeds ESM-IF1 max_length=1022", result.stderr)
         self.assertIn("at most 1022 residues", result.stdout)
-        self.assert_esm_if1_targets(records, ASSAYS)
+        self.assert_esm_if1_targets(records, ASSAYS, {ASSAYS[0]: 2, ASSAYS[1]: 2})
         downloads = [record["args"][0] for record in records if record["kind"] == "structure-download"]
-        self.assertEqual(downloads, ASSAYS[1:])
+        self.assertEqual(downloads, [])
+        verified = [record["args"][0] for record in records if record["kind"] == "structure-verify"]
+        self.assertEqual(verified, ASSAYS[1:])
         result, records = self.invoke(ESM_IF1_SCRIPT, {"SLURM_ARRAY_TASK_ID": "1"})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_esm_if1_targets(records, [ASSAYS[1]])
+        self.assert_esm_if1_targets(records, [ASSAYS[1]], {ASSAYS[1]: 2})
         verified = [record["args"][0] for record in records if record["kind"] == "structure-verify"]
         self.assertEqual(verified, [ASSAYS[1]])
 
