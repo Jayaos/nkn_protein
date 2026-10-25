@@ -17,6 +17,34 @@ all variants through the CLI, override `--output-root data/features/pretrained`
 and omit `--singles-only` consistently for extraction and scoring. ProSST,
 ESM-IF1, and notebook defaults retain their existing full-assay locations.
 
+## Replacing saved assay caches
+
+`cleanup_and_save` defaults to `False`. Enable it for the ProSST or ESM-IF1
+preparation job with:
+
+```bash
+CLEANUP_AND_SAVE=True sbatch sbatch_run/run_prepare_rep/prepare_prosst.sbatch
+CLEANUP_AND_SAVE=True sbatch sbatch_run/run_prepare_rep/prepare_esm_if1.sbatch
+```
+
+Both scripts also expose a `cleanup_and_save` variable near the top. The Python
+extraction/scoring functions accept `cleanup_and_save=True`; the CLI equivalent
+is `--cleanup-and-save` on `extract` or `score`. Cleanup overrides resume and
+always recomputes. After a new cache is staged and validated, all previous cache
+directories for that assay, model family, and output type are removed and the
+new recipe becomes the sole cache. For example, ProSST extraction replaces all
+recipes under `<output_root>/<assay>/sequence/prosst/`; scoring independently
+replaces `<output_root>/<assay>/scores/prosst/`. ESM-IF1 uses
+`inverse_folding/esm_if1/` and `scores/esm_if1/` respectively. An existing default
+feature descriptor for the replaced family is updated to the new recipe.
+
+Other assays, model families, shared assay files, model downloads, structures,
+and structure tokens are preserved. Failed generation or staging validation
+leaves the old caches intact. Feature and score stages commit independently, so
+a failed score stage can leave old scores alongside newly generated features.
+Changed assay inputs or variant coverage still require a separate output root.
+When cleanup is disabled, the existing resume/immutable-cache behavior is unchanged.
+
 ## Data storage on Phoenix
 
 Data stays in the repository's existing `data/` directory by default. Choose
@@ -1256,10 +1284,13 @@ The loader supplies both global and mutation-site sequence branches from this co
 requires the other configured modalities and scores. This recipe supplies the
 variant sequence feature branch; it does not supply a separate WT structure cache.
 
-Both ProSST presets use `max_length=2046` residues per model window and
-`max_tokens_per_batch=2048`: 2046 residues plus BOS/EOS gives 2048 total tokens. The [paper, Appendix A.2](https://proceedings.neurips.cc/paper_files/paper/2024/file/3ed57b293db0aab7cc30c44f45262348-Paper-Conference.pdf)
+Both ProSST presets use `max_length=2046` residues per model window:
+2046 residues plus BOS/EOS gives 2048 total tokens per window. The singles
+preparation preset uses `max_tokens_per_batch=8192`, allowing up to four
+maximum-length windows per batch; the separate `prosst_2048.json` preset retains
+`max_tokens_per_batch=2048`. The [paper, Appendix A.2](https://proceedings.neurips.cc/paper_files/paper/2024/file/3ed57b293db0aab7cc30c44f45262348-Paper-Conference.pdf)
 reports removing proteins longer than 2048 residues during pre-training. This
-recipe uses a 2048-token cap including special tokens, within that training range. The model name's `2048`
+recipe uses a 2048-token per-window cap including special tokens, within that training range. The model name's `2048`
 separately denotes the structure codebook size.
 
 Global embeddings use non-overlapping windows covering every residue and a

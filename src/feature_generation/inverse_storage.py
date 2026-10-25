@@ -13,7 +13,7 @@ from torch import Tensor
 from data_loading.features import ALPHABET, parse_substitutions, read_csv
 from .inputs import AssayInput, safe_component, sha256_file, stable_json
 from .storage import (
-    _assay_lock, _assay_metadata, _atomic_json, _ensure_assay,
+    _assay_lock, _assay_metadata, _atomic_json, _cache_write_root, _ensure_assay,
     _inside, _read_json, _write_json,
 )
 from .structure_fragments import (
@@ -233,6 +233,8 @@ def write_inverse_cache(
     probabilities: Tensor,
     log_probs: Tensor,
     provenance: dict,
+    *,
+    cleanup_and_save: bool = False,
 ) -> Path:
     root = Path(root).resolve()
     _validate_config(config, model_family, cache_id)
@@ -256,9 +258,10 @@ def write_inverse_cache(
         "log_probs": log_probs.detach().contiguous(),
     }
     _validate_payload(payload, _assay_metadata(inputs), config)
-    with _assay_lock(root):
-        _ensure_assay(root, inputs)
-        leaf = _leaf(root, model_family, cache_id)
+    with _assay_lock(root), _cache_write_root(
+        root, inputs, "inverse_folding", model_family, cache_id, cleanup_and_save,
+    ) as write_root:
+        leaf = _leaf(write_root, model_family, cache_id)
         if leaf.exists():
             raise FileExistsError(f"Refusing to overwrite existing feature cache: {leaf}")
         leaf.parent.mkdir(parents=True, exist_ok=True)
@@ -278,8 +281,8 @@ def write_inverse_cache(
             "files_sha256": files,
         })
         pending.rename(leaf)
-        _register_default(root, model_family, cache_id)
-    return leaf
+        _register_default(write_root, model_family, cache_id)
+    return _leaf(root, model_family, cache_id)
 
 
 def _validate_mutation_coverage(rows: list[dict], reference: str, positions: Tensor) -> None:

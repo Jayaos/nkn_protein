@@ -84,7 +84,7 @@ class InverseCLITests(unittest.TestCase):
                 self.assertEqual(config.structure_manifest_dir, (self.root / "manifests").resolve())
                 self.assertEqual(config.device, "cpu")
                 self.assertEqual(inverse.call_args.kwargs, {
-                    "singles_only": True, "limit": 4, "resume": True,
+                    "singles_only": True, "limit": 4, "resume": True, "cleanup_and_save": False,
                     "continue_on_error": True, "progress": None,
                 })
                 self.assertEqual(json.loads(output)["results"][0]["status"], "completed")

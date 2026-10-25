@@ -7,6 +7,7 @@ import inspect
 import json
 import math
 import os
+import shutil
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -173,6 +174,86 @@ def ensure_assay(root: str | Path, inputs: AssayInput) -> None:
         _ensure_assay(root, inputs)
 
 
+@contextmanager
+def _cache_write_root(
+    root: Path, inputs: AssayInput, feature_type: str, model_family: str,
+    cache_id: str, cleanup_and_save: bool,
+) -> Iterator[Path]:
+    """Stage and validate replacements before retiring a family's old caches.
+
+    The caller holds the assay lock. Feature and score families are replaced
+    independently; shared assay inputs and other model families are preserved.
+    """
+    _ensure_assay(root, inputs)
+    if not cleanup_and_save:
+        yield root
+        return
+    if feature_type not in ("sequence", "inverse_folding", "scores"):
+        raise ValueError("Unsupported cache type for cleanup")
+    safe_component(model_family, "model family")
+    safe_component(cache_id, "cache ID")
+    parent = root / feature_type
+    target = parent / model_family
+    # Refuse redirected family/type directories, including Windows junctions.
+    # A resolved output root itself may legitimately live on another volume.
+    for path in (parent, target):
+        if path.is_symlink() or path.resolve() != path:
+            raise ValueError(f"Refusing cleanup through a redirected cache directory: {path}")
+        if path.exists() and not path.is_dir():
+            raise ValueError(f"Expected a cache directory: {path}")
+    work = Path(tempfile.mkdtemp(prefix=f".{model_family}.replacement-", dir=root))
+    if not work.resolve().is_relative_to(root) or work.resolve() == root:
+        raise ValueError("Replacement directory escapes the assay directory")
+    staging, backup = work / "new", work / "old"
+    try:
+        staging.mkdir()
+        _ensure_assay(staging, inputs)
+        yield staging
+        if feature_type == "sequence":
+            validate_sequence_cache(staging, cache_id, model_family=model_family)
+        elif feature_type == "inverse_folding":
+            from .inverse_storage import validate_inverse_cache
+
+            validate_inverse_cache(staging, model_family, cache_id)
+        else:
+            from .score_storage import validate_score_cache
+
+            validate_score_cache(staging, model_family, cache_id)
+        metadata = _read_json(_inside(root, "assay.json"))
+        update_default = False
+        if feature_type != "scores":
+            features = metadata.setdefault("features", {})
+            if not isinstance(features, dict):
+                raise ValueError("Assay features must be a mapping")
+            default = features.get(feature_type)
+            if default is None or (isinstance(default, dict) and default.get("model_family") == model_family):
+                features[feature_type] = {
+                    "model_family": model_family, "checkpoint": cache_id,
+                    "path": f"{feature_type}/{model_family}/{cache_id}",
+                }
+                update_default = True
+        replacement = staging / feature_type / model_family
+        parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            target.rename(backup)
+        try:
+            replacement.rename(target)
+            if update_default:
+                _atomic_json(_inside(root, "assay.json"), metadata)
+        except BaseException:
+            # Keep the backup on disk if restoration itself fails.
+            if target.exists():
+                target.rename(replacement)
+            if backup.exists():
+                backup.rename(target)
+            raise
+        if backup.exists():
+            shutil.rmtree(backup)
+    finally:
+        if not backup.exists():
+            shutil.rmtree(work)
+
+
 def make_leaf_config(cache_id: str, model_metadata: dict, *, model_family: str = "esm2") -> dict:
     safe_component(cache_id, "cache ID")
     _family(model_family)
@@ -336,6 +417,7 @@ def write_sequence_cache(
     *,
     model_family: str | None = None,
     site_data: dict | None = None,
+    cleanup_and_save: bool = False,
 ) -> Path:
     """Commit one complete leaf; failed staging never replaces existing outputs."""
     root = Path(root).resolve()
@@ -372,9 +454,10 @@ def write_sequence_cache(
         payload.update(_prosst_identity(config))
         _validate_prosst_provenance(provenance, config)
     _validate_payload(payload, _assay_metadata(inputs), inputs.rows, config)
-    with _assay_lock(root):
-        _ensure_assay(root, inputs)
-        leaf = _leaf(root, cache_id, model_family)
+    with _assay_lock(root), _cache_write_root(
+        root, inputs, "sequence", model_family, cache_id, cleanup_and_save,
+    ) as write_root:
+        leaf = _leaf(write_root, cache_id, model_family)
         if leaf.exists():
             raise FileExistsError(f"Refusing to overwrite existing feature cache: {leaf}")
         leaf.parent.mkdir(parents=True, exist_ok=True)
@@ -394,8 +477,8 @@ def write_sequence_cache(
             **(_prosst_identity(config) if model_family == "prosst" else {}),
         })
         pending.rename(leaf)
-        _register_default(root, cache_id, model_family)
-    return leaf
+        _register_default(write_root, cache_id, model_family)
+    return _leaf(root, cache_id, model_family)
 
 
 def _validate_prosst_provenance(provenance: dict, config: dict) -> None:

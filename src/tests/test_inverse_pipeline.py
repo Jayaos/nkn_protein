@@ -219,6 +219,23 @@ class InversePipelineTests(unittest.TestCase):
         self.config.num_orders = 10
         self.config.seed = 37
 
+    def test_esm_if1_cleanup_recomputes_and_removes_only_its_feature_recipes(self):
+        self.run_extraction()
+        proteinmpnn_leaf = self.leaf
+        self.config.model_family = "esm_if1"
+        self.config.model_id = "esm_if1_gvp4_t16_142M_UR50"
+        self.config.conditioning_mode = "reference_prefix"
+        self.run_extraction()
+        self.config.cache_id = "second"
+        self.run_extraction()
+        result = self.run_extraction(resume=True, cleanup_and_save=True)[0]
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(list(self.leaf.parent.iterdir()), [self.leaf])
+        self.assertEqual(self.adapters[-1].predict_count, 1)
+        self.assertTrue(proteinmpnn_leaf.is_dir())
+        self.assertEqual(validate_inverse_cache(self.assay_root)["model_family"], "proteinmpnn")
+        self.assertEqual(validate_inverse_cache(self.assay_root, "esm_if1")["cache_id"], "second")
+
     def test_conditional_cache_preserves_subprobabilities_and_backbone_cache(self):
         self.run_extraction()
         backbone_leaf = self.leaf

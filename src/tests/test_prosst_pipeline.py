@@ -179,6 +179,29 @@ class ProSSTPipelineTests(unittest.TestCase):
         self.assertEqual(sum(len(adapter.bindings) for adapter in self.adapters), 1)
         self.assertEqual(len(self.quantizations), 2)
 
+    def test_cleanup_recomputes_over_resume_and_removes_old_recipes(self):
+        self.run_extraction()
+        self.config = replace(self.config, cache_id="second")
+        self.run_extraction()
+        self.tokens = torch.tensor([1, 2, 3])
+        result = self.run_extraction(resume=True, cleanup_and_save=True)[0]
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(list(self.leaf.parent.iterdir()), [self.leaf])
+        self.assertEqual(sum(adapter.load_count for adapter in self.adapters), 3)
+        payload = torch.load(self.leaf / "features.pt", weights_only=True)
+        torch.testing.assert_close(payload["embeddings"], torch.stack([
+            residue_values(sequence, self.tokens) for sequence in self.sequences
+        ]))
+        self.assertEqual(validate_sequence_cache(self.assay_root)["cache_id"], "second")
+
+    def test_cleanup_inference_failure_preserves_previous_cache(self):
+        self.run_extraction()
+        before = {path.name: path.read_bytes() for path in self.leaf.iterdir()}
+        with patch.object(FakeAdapter, "iter_embeddings", side_effect=RuntimeError("inference failed")):
+            result = self.run_extraction(cleanup_and_save=True, continue_on_error=True)[0]
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual({path.name: path.read_bytes() for path in self.leaf.iterdir()}, before)
+
     def test_changed_structure_tokens_layer_or_coverage_cannot_resume(self):
         self.run_extraction()
         original_metadata = copy.deepcopy(self.metadata)

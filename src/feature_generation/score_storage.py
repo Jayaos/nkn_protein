@@ -15,7 +15,7 @@ from data_loading.features import read_csv
 from .inputs import AssayInput, safe_component, sha256_file, stable_json
 from .inverse_config import ESM_IF1_SCORE_RECIPE
 from .inverse_storage import _resume_configs_match, _validate_assay
-from .storage import _assay_lock, _ensure_assay, _inside, _read_json, _write_json
+from .storage import _assay_lock, _cache_write_root, _ensure_assay, _inside, _read_json, _write_json
 from .structure_inputs import validate_structure_metadata
 
 FAMILIES = ("proteinmpnn", "esm_if1", "esm2", "prosst", "msa_transformer")
@@ -247,6 +247,8 @@ def write_score_cache(
     config: dict,
     scores: Tensor,
     provenance: dict,
+    *,
+    cleanup_and_save: bool = False,
 ) -> Path:
     """Publish complete scores in immutable variant order under a distinct leaf."""
     root = Path(root).resolve()
@@ -256,9 +258,10 @@ def write_score_cache(
     _validate_scores(scores, len(inputs.rows))
     _validate_provenance(provenance, config)
     stable_json(provenance)
-    with _assay_lock(root):
-        _ensure_assay(root, inputs)
-        leaf = _leaf(root, model_family, cache_id)
+    with _assay_lock(root), _cache_write_root(
+        root, inputs, "scores", model_family, cache_id, cleanup_and_save,
+    ) as write_root:
+        leaf = _leaf(write_root, model_family, cache_id)
         if leaf.exists():
             raise FileExistsError(f"Refusing to overwrite existing mean-score cache: {leaf}")
         leaf.parent.mkdir(parents=True, exist_ok=True)
@@ -284,7 +287,7 @@ def write_score_cache(
             completion["structure_input_signature"] = config["structure"]["input_signature"]
         _write_json(pending / "completion.json", completion)
         pending.rename(leaf)
-    return leaf
+    return _leaf(root, model_family, cache_id)
 
 
 def _select_cache(root: Path, model_family: str, cache_id: str | None) -> str:

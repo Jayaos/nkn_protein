@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
-#SBATCH --constraint=V100
+#SBATCH --constraint=A100
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
 #SBATCH --time=4:00:00
@@ -26,6 +26,14 @@
 # Failed assays are reported and later assays are attempted; any failure makes
 # the job exit nonzero. Length, token, and output-size guards still apply.
 set -eo pipefail
+
+# Set True (or export CLEANUP_AND_SAVE=True) to recompute and replace this
+# model family's feature and score caches per assay. Default: reuse with resume.
+cleanup_and_save="${CLEANUP_AND_SAVE:-False}"
+case "${cleanup_and_save,,}" in
+  true|false|1|0) ;;
+  *) echo "error: CLEANUP_AND_SAVE must be True or False (or 1/0)." >&2; exit 1 ;;
+esac
 
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
 while [[ ! -f "$project_root/src/feature_generation/cli.py" || ! -f "$project_root/configs/extraction/prosst_2048_singles.json" ]]; do
@@ -173,7 +181,7 @@ fi
 
 # Serialize duplicate submissions through structure preparation and extraction,
 # including structure-token publication. All paths follow the selected config.
-python -u - "$config" "$assay" <<'PY' || return $?
+python -u - "$config" "$assay" "$cleanup_and_save" <<'PY' || return $?
 import fcntl
 import sys
 from data_loading.catalog import AssayCatalog
@@ -186,6 +194,7 @@ from feature_generation.structure_inputs import ensure_structure_manifest, load_
 
 config = ProSSTConfig.load(sys.argv[1])
 assay = sys.argv[2]
+cleanup_and_save = sys.argv[3].lower() in ("true", "1")
 config.device = "cuda"
 config.structure_manifest_dir.mkdir(parents=True, exist_ok=True)
 with (config.structure_manifest_dir / f".{assay}.prosst.lock").open("a+b") as lock:
@@ -204,7 +213,8 @@ with (config.structure_manifest_dir / f".{assay}.prosst.lock").open("a+b") as lo
     print("[3/6] Preparing structure tokens and extracting ProSST embeddings", flush=True)
     from feature_generation.cli import _progress
 
-    results = extract(config, [assay], singles_only=True, resume=True, progress=_progress)
+    results = extract(config, [assay], singles_only=True, resume=True,
+                      cleanup_and_save=cleanup_and_save, progress=_progress)
     if len(results) != 1 or results[0].get("status") not in ("completed", "skipped"):
         raise SystemExit(f"error: ProSST extraction did not complete: {results}")
     print(f"Extraction: {results[0]['status']}", flush=True)
@@ -215,7 +225,8 @@ with (config.structure_manifest_dir / f".{assay}.prosst.lock").open("a+b") as lo
     print(f"Cache: {report['path']}")
 
     print("[5/6] Preparing ProSST masked-marginal GP mean scores", flush=True)
-    results = score(config, [assay], singles_only=True, resume=True, progress=_progress)
+    results = score(config, [assay], singles_only=True, resume=True,
+                    cleanup_and_save=cleanup_and_save, progress=_progress)
     if len(results) != 1 or results[0].get("status") not in ("completed", "skipped"):
         raise SystemExit(f"error: ProSST scoring did not complete: {results}")
     print("[6/6] Validating the ProSST mean-score cache", flush=True)

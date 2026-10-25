@@ -299,7 +299,7 @@ class PreparationSbatchTests(PreparationFixture):
         self.records.unlink(missing_ok=True)
         env = os.environ.copy()
         for name in ("SLURM_ARRAY_TASK_ID", "TEST_FAIL_STAGE", "TEST_FAIL_STRUCTURE_ASSAY",
-                     "TEST_FAIL_VALIDATE_ASSAY", "ESM2_CONFIG"):
+                     "TEST_FAIL_VALIDATE_ASSAY", "ESM2_CONFIG", "CLEANUP_AND_SAVE"):
             env.pop(name, None)
         env.update(BASH_ENV=self.bootstrap.as_posix(), TEST_ROOT=self.root.as_posix(),
                    TEST_PYTHON=Path(sys.executable).as_posix(),
@@ -540,6 +540,21 @@ class PreparationSbatchTests(PreparationFixture):
         self.assertEqual([args[0] for args in score_validations], [args[0] for args in validations])
         for args in score_validations:
             self.assertEqual(args[1:], ["esm_if1", "protssn_proteingym--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b"])
+
+    def test_esm_if1_cleanup_setting_reaches_both_stages(self):
+        for value, enabled in ((None, False), ("True", True), ("False", False), ("1", True), ("0", False)):
+            with self.subTest(value=value):
+                environment = {} if value is None else {"CLEANUP_AND_SAVE": value}
+                result, records = self.invoke(ESM_IF1_SCRIPT, environment)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                stages = [r for r in records if r['kind'] in ('extract', 'score')]
+                self.assertGreaterEqual(len(stages), 2)
+                for record in stages:
+                    self.assertEqual('--cleanup-and-save' in record['args'], enabled)
+        result, records = self.invoke(ESM_IF1_SCRIPT, {"CLEANUP_AND_SAVE": "typo"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CLEANUP_AND_SAVE", result.stderr)
+        self.assertEqual(records, [])
 
     def test_esm_if1_dispatches_features_and_scores_to_same_singles_and_validates_both(self):
         for environment, expected in (({}, ASSAYS), ({"SLURM_ARRAY_TASK_ID": "2"}, [ASSAYS[2]])):

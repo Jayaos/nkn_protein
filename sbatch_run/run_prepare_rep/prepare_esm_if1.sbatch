@@ -40,6 +40,16 @@
 # own path cannot locate the repository. Logs go to the submission directory.
 set -eo pipefail
 
+# Set True (or export CLEANUP_AND_SAVE=True) to recompute and replace this
+# model family's feature and score caches per assay. Default: reuse with resume.
+cleanup_and_save="${CLEANUP_AND_SAVE:-False}"
+cache_args=(--resume)
+case "${cleanup_and_save,,}" in
+  true|1) cache_args+=(--cleanup-and-save) ;;
+  false|0) ;;
+  *) echo "error: CLEANUP_AND_SAVE must be True or False (or 1/0)." >&2; exit 1 ;;
+esac
+
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
 while [[ ! -f "$project_root/src/feature_generation/cli.py" || ! -f "$project_root/configs/extraction/esm_if1_142m.json" ]]; do
   if [[ "$project_root" == "/" ]]; then
@@ -183,7 +193,7 @@ if python -u -m feature_generation.cli extract \
   "${assay_args[@]}" \
   --singles-only \
   --device cuda \
-  --resume \
+  "${cache_args[@]}" \
   --continue-on-error; then
   :
 else
@@ -234,7 +244,7 @@ PY
       --singles-only \
       --batch-size "$batch_size" \
       --device cuda \
-      --resume \
+      "${cache_args[@]}" \
       --continue-on-error; then
       :
     else

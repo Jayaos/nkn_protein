@@ -30,6 +30,7 @@ def _parser() -> argparse.ArgumentParser:
     extraction.add_argument("--limit", type=int, help="Explicit first-N-variant development subset; use a separate output root")
     extraction.add_argument("--singles-only", action="store_true")
     extraction.add_argument("--resume", action="store_true", help="Reuse only matching, fully validated completed caches")
+    extraction.add_argument("--cleanup-and-save", action="store_true", help="Recompute, then replace all feature caches for this assay/model family; overrides --resume")
     extraction.add_argument("--continue-on-error", action="store_true", help="Report failed assays and continue; exit status remains nonzero")
     extraction.add_argument("--quiet", action="store_true")
     scoring = commands.add_parser("score", help="Prepare ProteinMPNN, ESM-IF1, ESM2, or ProSST mean_score.csv for the GP mean")
@@ -49,6 +50,7 @@ def _parser() -> argparse.ArgumentParser:
     scoring.add_argument("--limit", type=int, help="Explicit first-N-variant subset; use a separate output root")
     scoring.add_argument("--singles-only", action="store_true")
     scoring.add_argument("--resume", action="store_true", help="Reuse only matching, fully validated score caches")
+    scoring.add_argument("--cleanup-and-save", action="store_true", help="Recompute, then replace all score caches for this assay/model family; overrides --resume")
     scoring.add_argument("--continue-on-error", action="store_true")
     scoring.add_argument("--quiet", action="store_true")
     validation = commands.add_parser("validate", help="Validate one cache without requiring other feature modalities")
@@ -214,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
             results = score(
                 config, assay_ids, batch_size=args.batch_size, num_orders=1 if args.num_orders is None else args.num_orders,
                 cache_id=args.cache_id, singles_only=args.singles_only, limit=args.limit,
-                resume=args.resume, continue_on_error=args.continue_on_error,
+                resume=args.resume, cleanup_and_save=args.cleanup_and_save, continue_on_error=args.continue_on_error,
                 progress=None if args.quiet else _progress,
             )
             print(json.dumps({"results": results}, indent=2))
@@ -228,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
         assay_ids = [record.assay_id for record in AssayCatalog(config.assay_index)] if args.all_assays else args.assay
         results = extract(
             config, assay_ids, singles_only=args.singles_only, limit=args.limit,
-            resume=args.resume, continue_on_error=args.continue_on_error,
+            resume=args.resume, cleanup_and_save=args.cleanup_and_save, continue_on_error=args.continue_on_error,
             progress=None if args.quiet else _progress,
         )
         print(json.dumps({"results": results}, indent=2))

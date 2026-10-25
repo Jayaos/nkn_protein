@@ -128,9 +128,9 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
                 require_lock()
                 record('structure-verify', path=str(manifest), require_oxygen=require_oxygen)
 
-            def extract(config, assays, *, singles_only, resume, progress):
+            def extract(config, assays, *, singles_only, resume, cleanup_and_save, progress):
                 require_lock()
-                record('extract', assays=assays, singles_only=singles_only, resume=resume,
+                record('extract', assays=assays, singles_only=singles_only, resume=resume, cleanup_and_save=cleanup_and_save,
                        device=config.device, output_root=str(config.output_root),
                        cache_id=config.cache_id, max_tokens_per_batch=config.max_tokens_per_batch,
                        token_dir=str(config.structure_token_dir), layer=config.layer)
@@ -141,9 +141,9 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
                 record('validate', path=str(path), cache_id=cache_id, model_family=model_family)
                 return {'path': str(path), 'num_variants': 1, 'embedding_dim': 768}
 
-            def score(config, assays, *, singles_only, resume, progress):
+            def score(config, assays, *, singles_only, resume, cleanup_and_save, progress):
                 require_lock()
-                record('score', assays=assays, singles_only=singles_only, resume=resume)
+                record('score', assays=assays, singles_only=singles_only, resume=resume, cleanup_and_save=cleanup_and_save)
                 return [{'status': os.environ.get('TEST_SCORE_STATUS', 'completed')}]
 
             def validate_scores(path, model_family, cache_id):
@@ -180,7 +180,7 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
         self.records.unlink(missing_ok=True)
         env = os.environ.copy()
         for name in ("PROSST_CONFIG", "SLURM_ARRAY_TASK_ID", "TEST_FAIL_STAGE",
-                     "TEST_NO_CUDA", "TEST_EXTRACT_STATUS", "TEST_FAIL_ASSAY", "TEST_SCORE_STATUS"):
+                     "TEST_NO_CUDA", "TEST_EXTRACT_STATUS", "TEST_FAIL_ASSAY", "TEST_SCORE_STATUS", "CLEANUP_AND_SAVE"):
             env.pop(name, None)
         env.update(BASH_ENV=self.bootstrap.as_posix(), TEST_ROOT=self.root.as_posix(),
                    TEST_PYTHON=Path(sys.executable).as_posix(),
@@ -202,6 +202,7 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
         self.assertEqual(extraction['assays'], [ASSAY])
         self.assertTrue(extraction['singles_only'])
         self.assertTrue(extraction['resume'])
+        self.assertFalse(extraction['cleanup_and_save'])
         self.assertEqual(extraction['device'], 'cuda')
         self.assertEqual(Path(extraction['output_root']), self.root / 'data/features/pretrained/singles')
         self.assertEqual(extraction['layer'], 12)
@@ -244,7 +245,7 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
         result, records = self.invoke()
         self.assertEqual(result.returncode, 0, result.stderr)
         extraction = next(record for record in records if record['kind'] == 'extract')
-        self.assertEqual(extraction['max_tokens_per_batch'], 2048)
+        self.assertEqual(extraction['max_tokens_per_batch'], 8192)
         self.assertTrue(extraction['cache_id'].endswith('nonoverlap2046-centered-sites'))
         config = json.loads((self.root / CONFIG).read_text())
         config['max_tokens_per_batch'] = 2047
@@ -289,6 +290,19 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
                 kinds = [r['kind'] for r in records]
                 self.assertIn(stage, kinds)
                 self.assertFalse(set(order[index + 1:]).intersection(kinds))
+
+    def test_cleanup_setting_reaches_both_stages_and_rejects_invalid_values(self):
+        for value, expected in (("True", True), ("1", True), ("False", False), ("0", False)):
+            with self.subTest(value=value):
+                result, records = self.invoke(environment={"CLEANUP_AND_SAVE": value})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                stages = [r for r in records if r['kind'] in ('extract', 'score')]
+                self.assertEqual(len(stages), 2)
+                self.assertTrue(all(r['cleanup_and_save'] == expected for r in stages))
+        result, records = self.invoke(environment={"CLEANUP_AND_SAVE": "typo"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CLEANUP_AND_SAVE", result.stderr)
+        self.assertEqual(records, [])
 
     def test_resumed_cache_is_still_validated_and_failed_result_is_not(self):
         result, records = self.invoke(environment={'TEST_EXTRACT_STATUS': 'skipped'})

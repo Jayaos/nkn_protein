@@ -93,7 +93,7 @@ class ProSSTCLITests(unittest.TestCase):
         self.assertEqual(config.max_tokens_per_batch, 700)
         self.assertEqual(config.device, "cpu")
         self.assertEqual(prosst.call_args.kwargs, {
-            "singles_only": True, "limit": 4, "resume": True,
+            "singles_only": True, "limit": 4, "resume": True, "cleanup_and_save": False,
             "continue_on_error": True, "progress": None,
         })
 
@@ -109,6 +109,18 @@ class ProSSTCLITests(unittest.TestCase):
         catalog.assert_called_once_with((self.root / "custom.csv").resolve())
         self.assertEqual(prosst.call_args.args[1], ["first", "second"])
         self.assertTrue(callable(prosst.call_args.kwargs["progress"]))
+
+    def test_cleanup_flag_is_forwarded_to_extraction_and_scoring(self):
+        for command, runner in (("extract", "prosst_runner.extract"), ("score", "score_runner.score")):
+            with self.subTest(command=command), patch(
+                f"feature_generation.{runner}", return_value=[],
+            ) as run:
+                status, _, errors = self.invoke([
+                    command, "--config", self.config, "--assay", "tiny", "--resume", "--cleanup-and-save",
+                ])
+                self.assertEqual(status, 0, errors)
+                self.assertTrue(run.call_args.kwargs["cleanup_and_save"])
+                self.assertTrue(run.call_args.kwargs["resume"])
 
     def test_explicit_sequence_family_is_forwarded_instead_of_default_selection(self):
         # Storage resolves the registered default only when family is absent.

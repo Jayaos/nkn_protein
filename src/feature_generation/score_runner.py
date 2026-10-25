@@ -57,6 +57,7 @@ def score(
     singles_only: bool = False,
     limit: int | None = None,
     resume: bool = False,
+    cleanup_and_save: bool = False,
     continue_on_error: bool = False,
     progress: Callable[[dict], None] | None = None,
     adapter_factory=None,
@@ -171,7 +172,7 @@ def score(
                                             structure.metadata if structure is not None else None)
             n = len(inputs.variant_ids)
             source = f"scores/{family}/{cache_id}"
-            if check_existing(root, family, cache_id, inputs, leaf_config, resume=resume):
+            if not cleanup_and_save and check_existing(root, family, cache_id, inputs, leaf_config, resume=resume):
                 result = {
                     "assay_id": assay_id, "status": "skipped", "model_family": family,
                     "path": str(root / source), "score_source": source, "num_variants": n,
@@ -247,7 +248,10 @@ def score(
             if family in ("esm2", "prosst"):
                 provenance["max_tokens_per_batch"] = config.max_tokens_per_batch
                 provenance["num_masked_positions"] = event["num_masked_positions"]
-            leaf = write_score_cache(root, family, cache_id, inputs, leaf_config, scores, provenance)
+            leaf = write_score_cache(
+                root, family, cache_id, inputs, leaf_config, scores, provenance,
+                cleanup_and_save=cleanup_and_save,
+            )
             result = {
                 "assay_id": assay_id, "status": "completed", "model_family": family,
                 "path": str(leaf), "score_source": source, "num_variants": n,

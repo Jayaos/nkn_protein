@@ -14,7 +14,7 @@
   "inference_dtype": "float32",
   "output_dtype": "float32",
   "max_length": 2046,
-  "max_tokens_per_batch": 2048,
+  "max_tokens_per_batch": 8192,
   "max_output_gib": 4.0,
   "quantizer_batch_size": 32,
   "pooling": "mean",
