@@ -16,11 +16,11 @@ from tests import test_mean_score_storage as fixtures
 class CacheCleanupTests(unittest.TestCase):
     setUp = fixtures.MeanScoreStorageTests.setUp
 
-    def write_sequence(self, cache_id="old", cleanup_and_save=False):
+    def write_sequence(self, cache_id="old", cleanup_and_save=False, resume=False):
         config = storage.make_leaf_config(cache_id, {"hidden_size": 2})
         return storage.write_sequence_cache(
             self.root, cache_id, self.inputs, config, torch.ones(3, 3, 2), {},
-            cleanup_and_save=cleanup_and_save,
+            cleanup_and_save=cleanup_and_save, resume=resume,
         )
 
     def snapshot(self):
@@ -62,8 +62,86 @@ class CacheCleanupTests(unittest.TestCase):
     def test_cleanup_repairs_corrupted_cache_at_the_same_id(self):
         leaf = self.write_sequence()
         (leaf / "features.pt").write_bytes(b"corrupted")
-        self.write_sequence(cleanup_and_save=True)
+        self.write_sequence(cleanup_and_save=True, resume=True)
         storage.validate_sequence_cache(self.root)
+
+    def test_resume_cleanup_preserves_current_bytes_and_timestamps(self):
+        self.write_sequence("first")
+        current = self.write_sequence("second")
+        before = {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in current.iterdir()}
+        config = storage.make_leaf_config("second", {"hidden_size": 2})
+        self.assertTrue(storage.check_existing(
+            self.root, "second", self.inputs, config, resume=True, cleanup_and_save=True,
+        ))
+        self.assertEqual(list(current.parent.iterdir()), [current])
+        self.assertEqual({path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+                          for path in current.iterdir()}, before)
+        self.assertEqual(storage.validate_sequence_cache(self.root)["cache_id"], "second")
+
+    def test_cleanup_without_resume_never_overwrites_current_or_prunes_on_error(self):
+        self.write_sequence("first")
+        self.write_sequence("second")
+        before = self.snapshot()
+        with self.assertRaises(FileExistsError):
+            self.write_sequence("second", cleanup_and_save=True)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_resume_repairs_invalid_current_without_cleanup_and_preserves_siblings(self):
+        leaf = self.write_sequence()
+        sibling = self.write_sequence("other")
+        other_bytes = {path.name: path.read_bytes() for path in sibling.iterdir()}
+        config = storage.make_leaf_config("old", {"hidden_size": 2})
+        for missing in ("completion.json", "features.pt", "config.json"):
+            with self.subTest(missing=missing):
+                (leaf / missing).unlink()
+                self.assertFalse(storage.check_existing(self.root, "old", self.inputs, config, resume=True))
+                self.write_sequence(resume=True)
+                storage.validate_sequence_cache(self.root, "old", model_family="esm2")
+                self.assertEqual({path.name: path.read_bytes() for path in sibling.iterdir()}, other_bytes)
+
+    def test_failed_repair_keeps_invalid_current_and_siblings(self):
+        leaf = self.write_sequence()
+        self.write_sequence("other")
+        (leaf / "completion.json").unlink()
+        before = self.snapshot()
+        with patch("torch.save", side_effect=OSError("disk failed")):
+            with self.assertRaisesRegex(OSError, "disk failed"):
+                self.write_sequence(resume=True, cleanup_and_save=True)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_writer_never_replaces_a_completed_current_cache_even_with_resume(self):
+        self.write_sequence()
+        before = self.snapshot()
+        with self.assertRaises(FileExistsError):
+            self.write_sequence(resume=True, cleanup_and_save=True)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_cleanup_does_not_override_valid_configuration_conflicts(self):
+        self.write_sequence()
+        self.write_sequence("other")
+        before = self.snapshot()
+        changed = storage.make_leaf_config("old", {"hidden_size": 3})
+        with self.assertRaisesRegex(ValueError, "configuration differs"):
+            storage.check_existing(self.root, "old", self.inputs, changed,
+                                   resume=True, cleanup_and_save=True)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_failed_repair_promotion_restores_invalid_current(self):
+        leaf = self.write_sequence()
+        self.write_sequence("other")
+        (leaf / "completion.json").unlink()
+        before = self.snapshot()
+        rename = Path.rename
+
+        def fail_promotion(path, target):
+            if target == leaf and path.parent.name == "esm2":
+                raise OSError("repair publication failed")
+            return rename(path, target)
+
+        with patch.object(Path, "rename", fail_promotion):
+            with self.assertRaisesRegex(OSError, "repair publication failed"):
+                self.write_sequence(resume=True, cleanup_and_save=True)
+        self.assertEqual(self.snapshot(), before)
 
     def test_cleanup_preserves_a_default_from_another_family(self):
         self.write_sequence()
@@ -110,10 +188,10 @@ class CacheCleanupTests(unittest.TestCase):
         self.write_sequence()
         before = self.snapshot()
         rename = Path.rename
-        destination = self.root / "sequence/esm2"
+        destination = self.root / "sequence/esm2/new"
 
         def fail_promotion(path, target):
-            if target == destination and path.name == "esm2":
+            if target == destination and path != destination:
                 raise OSError("directory publication failed")
             return rename(path, target)
 
@@ -135,7 +213,7 @@ class CacheCleanupTests(unittest.TestCase):
             (parent / "esm2").symlink_to(outside, target_is_directory=True)
         except OSError as error:
             self.skipTest(f"Directory symlinks unavailable: {error}")
-        with self.assertRaisesRegex(ValueError, "redirected"):
+        with self.assertRaisesRegex(ValueError, "redirected|escapes"):
             self.write_sequence(cleanup_and_save=True)
         self.assertEqual(marker.read_bytes(), b"preserve")
 

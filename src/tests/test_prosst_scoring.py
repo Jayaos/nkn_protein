@@ -142,15 +142,18 @@ class ProSSTScorePipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "differs"):
             self.run_scores(resume=True)
 
-    def test_cleanup_recomputes_scores_and_removes_other_recipes(self):
+    def test_cleanup_reuses_complete_scores_and_removes_other_recipes(self):
         first = self.run_scores()[0]
         self.run_scores(cache_id="second")
-        self.tokens = torch.tensor([1, 2, 3])
-        result = self.run_scores(resume=True, cleanup_and_save=True)[0]
-        self.assertEqual(result["status"], "completed")
+        with patch.object(FakeScoreAdapter, "iter_scores", side_effect=AssertionError("must reuse scores")):
+            result = self.run_scores(resume=True, cleanup_and_save=True)[0]
+        self.assertEqual(result["status"], "skipped")
         self.assertEqual(result["path"], first["path"])
         parent = self.config.output_root / "tiny/scores/prosst"
         self.assertEqual([path.name for path in parent.iterdir()], [default_cache_id(self.config)])
+        validate_score_cache(self.config.output_root / "tiny", "prosst")
+        (parent / default_cache_id(self.config) / "completion.json").unlink()
+        self.assertEqual(self.run_scores(resume=True, cleanup_and_save=True)[0]["status"], "completed")
         validate_score_cache(self.config.output_root / "tiny", "prosst")
 
     def test_tampered_score_file_is_rejected(self):

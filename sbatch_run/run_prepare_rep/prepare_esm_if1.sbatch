@@ -40,8 +40,9 @@
 # own path cannot locate the repository. Logs go to the submission directory.
 set -eo pipefail
 
-# Set True (or export CLEANUP_AND_SAVE=True) to recompute and replace this
-# model family's feature and score caches per assay. Default: reuse with resume.
+# Set True (or export CLEANUP_AND_SAVE=True) to remove other cache names for
+# this assay/model family after reuse or saving. Resume keeps valid current
+# caches and regenerates incomplete/corrupted ones. Cleanup defaults to False.
 cleanup_and_save="${CLEANUP_AND_SAVE:-False}"
 cache_args=(--resume)
 case "${cleanup_and_save,,}" in

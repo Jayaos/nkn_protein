@@ -219,7 +219,7 @@ class InversePipelineTests(unittest.TestCase):
         self.config.num_orders = 10
         self.config.seed = 37
 
-    def test_esm_if1_cleanup_recomputes_and_removes_only_its_feature_recipes(self):
+    def test_esm_if1_cleanup_respects_resume_and_removes_only_its_other_recipes(self):
         self.run_extraction()
         proteinmpnn_leaf = self.leaf
         self.config.model_family = "esm_if1"
@@ -228,13 +228,20 @@ class InversePipelineTests(unittest.TestCase):
         self.run_extraction()
         self.config.cache_id = "second"
         self.run_extraction()
+        before = {path.name: path.read_bytes() for path in self.leaf.iterdir()}
         result = self.run_extraction(resume=True, cleanup_and_save=True)[0]
-        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["status"], "skipped")
         self.assertEqual(list(self.leaf.parent.iterdir()), [self.leaf])
-        self.assertEqual(self.adapters[-1].predict_count, 1)
+        self.assertEqual(self.adapters[-1].predict_count, 0)
+        self.assertEqual({path.name: path.read_bytes() for path in self.leaf.iterdir()}, before)
         self.assertTrue(proteinmpnn_leaf.is_dir())
         self.assertEqual(validate_inverse_cache(self.assay_root)["model_family"], "proteinmpnn")
         self.assertEqual(validate_inverse_cache(self.assay_root, "esm_if1")["cache_id"], "second")
+        (self.leaf / "features.pt").write_bytes(b"corrupted")
+        result = self.run_extraction(resume=True, cleanup_and_save=True)[0]
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(self.adapters[-1].predict_count, 1)
+        validate_inverse_cache(self.assay_root, "esm_if1")
 
     def test_conditional_cache_preserves_subprobabilities_and_backbone_cache(self):
         self.run_extraction()
@@ -382,8 +389,8 @@ class InversePipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "payload metadata"):
             validate_inverse_cache(self.assay_root)
         (self.leaf / "completion.json").unlink()
-        with self.assertRaisesRegex(ValueError, "incomplete"):
-            self.run_extraction(resume=True)
+        self.assertEqual(self.run_extraction(resume=True)[0]["status"], "completed")
+        validate_inverse_cache(self.assay_root)
 
     def test_structure_manifest_integrity_is_checked_without_original_structure(self):
         self.run_extraction()

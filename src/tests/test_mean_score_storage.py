@@ -131,18 +131,18 @@ class MeanScoreStorageTests(unittest.TestCase):
                 self.write(provenance=provenance)
             self.assertFalse(self.leaf.exists())
 
-    def test_missing_completion_and_corruption_block_validation_and_resume(self):
+    def test_missing_completion_and_corruption_require_regeneration_on_resume(self):
         self.write()
         original = (self.leaf / "mean_score.csv").read_bytes()
         (self.leaf / "mean_score.csv").write_bytes(original + b"extra,1\n")
         with self.assertRaisesRegex(ValueError, "checksum"):
             validate_score_cache(self.root)
-        with self.assertRaisesRegex(ValueError, "checksum"):
-            check_existing(self.root, "proteinmpnn", "official_v1", self.inputs, self.config, resume=True)
+        self.assertFalse(check_existing(self.root, "proteinmpnn", "official_v1", self.inputs, self.config, resume=True))
         (self.leaf / "mean_score.csv").write_bytes(original)
         (self.leaf / "completion.json").unlink()
         with self.assertRaisesRegex(ValueError, "incomplete"):
             validate_score_cache(self.root)
+        self.assertFalse(check_existing(self.root, "proteinmpnn", "official_v1", self.inputs, self.config, resume=True))
 
     def test_rehashed_invalid_ids_and_values_are_rejected(self):
         self.write()

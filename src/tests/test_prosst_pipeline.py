@@ -179,15 +179,17 @@ class ProSSTPipelineTests(unittest.TestCase):
         self.assertEqual(sum(len(adapter.bindings) for adapter in self.adapters), 1)
         self.assertEqual(len(self.quantizations), 2)
 
-    def test_cleanup_recomputes_over_resume_and_removes_old_recipes(self):
+    def test_cleanup_respects_resume_and_removes_only_old_recipes(self):
         self.run_extraction()
         self.config = replace(self.config, cache_id="second")
         self.run_extraction()
-        self.tokens = torch.tensor([1, 2, 3])
+        before = {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in self.leaf.iterdir()}
         result = self.run_extraction(resume=True, cleanup_and_save=True)[0]
-        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["status"], "skipped")
         self.assertEqual(list(self.leaf.parent.iterdir()), [self.leaf])
-        self.assertEqual(sum(adapter.load_count for adapter in self.adapters), 3)
+        self.assertEqual(sum(adapter.load_count for adapter in self.adapters), 2)
+        self.assertEqual({path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+                          for path in self.leaf.iterdir()}, before)
         payload = torch.load(self.leaf / "features.pt", weights_only=True)
         torch.testing.assert_close(payload["embeddings"], torch.stack([
             residue_values(sequence, self.tokens) for sequence in self.sequences
@@ -196,9 +198,10 @@ class ProSSTPipelineTests(unittest.TestCase):
 
     def test_cleanup_inference_failure_preserves_previous_cache(self):
         self.run_extraction()
+        (self.leaf / "completion.json").unlink()
         before = {path.name: path.read_bytes() for path in self.leaf.iterdir()}
         with patch.object(FakeAdapter, "iter_embeddings", side_effect=RuntimeError("inference failed")):
-            result = self.run_extraction(cleanup_and_save=True, continue_on_error=True)[0]
+            result = self.run_extraction(resume=True, cleanup_and_save=True, continue_on_error=True)[0]
         self.assertEqual(result["status"], "failed")
         self.assertEqual({path.name: path.read_bytes() for path in self.leaf.iterdir()}, before)
 
@@ -280,7 +283,7 @@ class ProSSTPipelineTests(unittest.TestCase):
         with patch("feature_generation.prosst_runner.load_structure", side_effect=AssertionError("must not open structure")):
             self.assertEqual(validate_sequence_cache(self.assay_root)["reference_length"], 3)
 
-    def test_completion_token_identity_corruption_is_rejected(self):
+    def test_completion_token_identity_corruption_is_rejected_and_resume_repairs_it(self):
         self.run_extraction()
         path = self.leaf / "completion.json"
         value = json.loads(path.read_text())
@@ -288,8 +291,8 @@ class ProSSTPipelineTests(unittest.TestCase):
         path.write_text(json.dumps(value))
         with self.assertRaisesRegex(ValueError, "completion"):
             validate_sequence_cache(self.assay_root)
-        with self.assertRaises(ValueError):
-            self.run_extraction(resume=True)
+        self.assertEqual(self.run_extraction(resume=True)[0]["status"], "completed")
+        validate_sequence_cache(self.assay_root)
 
     def test_rehashed_payload_misalignment_is_rejected(self):
         self.run_extraction()
@@ -324,8 +327,8 @@ class ProSSTPipelineTests(unittest.TestCase):
     def test_missing_completion_is_not_reused(self):
         self.run_extraction()
         (self.leaf / "completion.json").unlink()
-        with self.assertRaisesRegex(ValueError, "incomplete"):
-            self.run_extraction(resume=True)
+        self.assertEqual(self.run_extraction(resume=True, cleanup_and_save=True)[0]["status"], "completed")
+        validate_sequence_cache(self.assay_root)
 
     def test_invalid_adapter_outputs_never_create_a_leaf(self):
         invalid_batches = [

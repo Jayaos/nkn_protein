@@ -249,19 +249,20 @@ class MeanScorePipelineTests(unittest.TestCase):
         for action in (
             self.validate,
             lambda: load_feature_bundle(self.assay_root, enabled_branches=["sequence_global"], score_sources=[source]),
-            lambda: self.run_score(resume=True),
         ):
             with self.assertRaises(ValueError):
                 action()
-        score_path.write_bytes(original)
+        self.assertEqual(self.run_score(resume=True)[0]["status"], "completed")
+        self.validate()
         (self.leaf() / "completion.json").unlink()
         for action in (
             self.validate,
             lambda: load_feature_bundle(self.assay_root, enabled_branches=["sequence_global"], score_sources=[source]),
-            lambda: self.run_score(resume=True),
         ):
             with self.assertRaises((ValueError, FileNotFoundError)):
                 action()
+        self.assertEqual(self.run_score(resume=True, cleanup_and_save=True)[0]["status"], "completed")
+        self.validate()
 
     def test_invalid_model_batches_never_publish_scores(self):
         cases = {
@@ -360,7 +361,8 @@ class MeanScoreCLITests(unittest.TestCase):
         self.assertEqual(config.device, "cpu")
         self.assertEqual(scorer.call_args.kwargs, {
             "batch_size": 2, "num_orders": 3, "cache_id": "scores_v1", "limit": 4,
-            "singles_only": True, "resume": True, "continue_on_error": True, "progress": None,
+            "singles_only": True, "resume": True, "cleanup_and_save": False,
+            "continue_on_error": True, "progress": None,
         })
         self.assertEqual(json.loads(output)["results"][0]["status"], "completed")
 

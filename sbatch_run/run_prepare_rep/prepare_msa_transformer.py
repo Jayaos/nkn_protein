@@ -20,7 +20,8 @@ def main(argv=None):
     parser.add_argument("--task-index", type=int, default=os.environ.get("SLURM_ARRAY_TASK_ID"),
                         help="Zero-based index in the selected catalog; defaults to SLURM_ARRAY_TASK_ID")
     parser.add_argument("--count", action="store_true", help="Print selected catalog size without importing PyTorch")
-    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--resume", action="store_true", help="Reuse matching completed caches; regenerate incomplete or corrupted caches")
+    parser.add_argument("--cleanup-and-save", action="store_true", help="Remove differently named MSA feature/score caches after successful reuse or saving; respects --resume")
     parser.add_argument("--device", choices=("cpu", "cuda"))
     parser.add_argument("--validate-inputs-only", action="store_true", help="Check all selected pairs and mappings without loading a model or writing caches")
     args = parser.parse_args(argv)
@@ -68,6 +69,7 @@ def main(argv=None):
         report, model, alphabet = validate_runtime(config.runtime_dir, runtime_config, config.device, return_model=True)
         inference = MSAInference(model, alphabet, config)
         results = prepare(config, assays, report, inference, validate_pair, resume=args.resume,
+                          cleanup_and_save=args.cleanup_and_save,
                           progress=lambda message: print(message, flush=True))
         failed = sum(result["status"] == "failed" for result in results)
         print(f"Finished: {len(results) - failed}/{len(results)} assays ready; {failed} failed", flush=True)

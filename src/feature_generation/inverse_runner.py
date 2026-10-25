@@ -118,7 +118,8 @@ def extract(
                 raise ValueError("Assay path escapes output_root")
             ensure_assay(root, inputs)
             n = len(inputs.variant_ids)
-            if not cleanup_and_save and check_existing(root, config.model_family, config.cache_id, inputs, leaf_config, resume=resume):
+            if check_existing(root, config.model_family, config.cache_id, inputs, leaf_config,
+                              resume=resume, cleanup_and_save=cleanup_and_save):
                 result = {
                     "assay_id": assay_id, "status": "skipped", "model_family": config.model_family,
                     "path": str(root), "num_variants": n,
@@ -167,7 +168,7 @@ def extract(
             }
             leaf = write_inverse_cache(
                 root, config.model_family, config.cache_id, inputs, leaf_config,
-                probabilities, log_probs, provenance, cleanup_and_save=cleanup_and_save,
+                probabilities, log_probs, provenance, cleanup_and_save=cleanup_and_save, resume=resume,
             )
             result = {
                 "assay_id": assay_id,

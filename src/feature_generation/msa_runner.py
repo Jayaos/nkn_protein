@@ -272,7 +272,7 @@ class MSAInference:
         return total / len(contexts)
 
 
-def prepare(config, assay_ids, runtime_report, inference, validate_pair, *, resume=False, progress=print):
+def prepare(config, assay_ids, runtime_report, inference, validate_pair, *, resume=False, cleanup_and_save=False, progress=print):
     """Prepare all selected single-mutant caches; retain failures in the result."""
     results = []
     for assay_id in assay_ids:
@@ -325,18 +325,22 @@ def prepare(config, assay_ids, runtime_report, inference, validate_pair, *, resu
             for stage in ("sequence", "scores"):
                 try:
                     if stage == "sequence":
-                        exists = storage.check_existing(root, config.cache_id, inputs, feature_config, resume)
+                        exists = storage.check_existing(root, config.cache_id, inputs, feature_config, resume,
+                                                        cleanup_and_save=cleanup_and_save)
                         if not exists:
                             embeddings, site_data = inference.embeddings(inputs, contexts, progress)
                             storage.write_sequence_cache(root, config.cache_id, inputs, feature_config,
-                                                         embeddings, provenance, site_data=site_data)
+                                                         embeddings, provenance, site_data=site_data, resume=resume,
+                                                         cleanup_and_save=cleanup_and_save)
                         storage.validate_sequence_cache(root, config.cache_id, "msa_transformer")
                     else:
-                        exists = score_storage.check_existing(root, "msa_transformer", config.score_cache_id, inputs, score_config, resume)
+                        exists = score_storage.check_existing(root, "msa_transformer", config.score_cache_id, inputs, score_config, resume,
+                                                              cleanup_and_save=cleanup_and_save)
                         if not exists:
                             scores = inference.scores(inputs, contexts, progress)
                             score_storage.write_score_cache(root, "msa_transformer", config.score_cache_id,
-                                                            inputs, score_config, scores, provenance)
+                                                            inputs, score_config, scores, provenance, resume=resume,
+                                                            cleanup_and_save=cleanup_and_save)
                         score_storage.validate_score_cache(root, "msa_transformer", config.score_cache_id)
                     stages[stage] = "skipped" if exists else "completed"
                 except (OSError, ValueError, RuntimeError, KeyError) as error:

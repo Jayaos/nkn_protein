@@ -324,6 +324,26 @@ class PreparationSbatchTests(PreparationFixture):
             self.assertIn("--continue-on-error", args)
             self.assertEqual(args[args.index("--device") + 1], "cuda")
 
+    def test_esm2_and_proteinmpnn_cleanup_setting_reaches_both_stages(self):
+        for script in SCRIPTS:
+            for value, enabled in ((None, False), ("True", True), ("False", False)):
+                with self.subTest(script=script, cleanup=value):
+                    environment = {} if value is None else {"CLEANUP_AND_SAVE": value}
+                    if enabled:
+                        environment["SLURM_ARRAY_TASK_ID"] = "2"
+                    result, records = self.invoke(script, environment)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assert_targets(records, [ASSAYS[2]] if enabled else ASSAYS)
+                    for record in records:
+                        if record['kind'] in ('extract', 'score'):
+                            self.assertEqual('--cleanup-and-save' in record['args'], enabled)
+                        elif record['kind'] == 'download':
+                            self.assertNotIn('--cleanup-and-save', record['args'])
+            result, records = self.invoke(script, {"CLEANUP_AND_SAVE": "typo"})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("CLEANUP_AND_SAVE", result.stderr)
+            self.assertEqual(records, [])
+
     def test_default_dispatches_entire_catalog_and_preserves_model_recipes(self):
         for script in SCRIPTS:
             with self.subTest(script=script):

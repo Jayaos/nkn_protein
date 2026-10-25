@@ -15,7 +15,10 @@ from data_loading.features import read_csv
 from .inputs import AssayInput, safe_component, sha256_file, stable_json
 from .inverse_config import ESM_IF1_SCORE_RECIPE
 from .inverse_storage import _resume_configs_match, _validate_assay
-from .storage import _assay_lock, _cache_write_root, _ensure_assay, _inside, _read_json, _write_json
+from .storage import (
+    _assay_lock, _cache_is_complete, _cache_write_root, _cleanup_other_caches,
+    _ensure_assay, _inside, _read_json, _write_json,
+)
 from .structure_inputs import validate_structure_metadata
 
 FAMILIES = ("proteinmpnn", "esm_if1", "esm2", "prosst", "msa_transformer")
@@ -221,6 +224,8 @@ def check_existing(
     inputs: AssayInput,
     config: dict,
     resume: bool = False,
+    *,
+    cleanup_and_save: bool = False,
 ) -> bool:
     root = Path(root).resolve()
     _validate_config(config, model_family, cache_id)
@@ -233,9 +238,12 @@ def check_existing(
             return False
         if not resume:
             raise FileExistsError(f"Mean-score cache already exists: {leaf}; use --resume to validate and reuse it")
-        validate_score_cache(root, model_family, cache_id)
+        if not _cache_is_complete(root, "scores", model_family, cache_id):
+            return False
         if not _resume_configs_match(_read_json(_inside(leaf, "config.json")), config, model_family):
             raise ValueError("Existing checkpoint, scoring recipe, or structure differs; use a new cache ID")
+        if cleanup_and_save:
+            _cleanup_other_caches(root, "scores", model_family, cache_id)
         return True
 
 
@@ -249,6 +257,7 @@ def write_score_cache(
     provenance: dict,
     *,
     cleanup_and_save: bool = False,
+    resume: bool = False,
 ) -> Path:
     """Publish complete scores in immutable variant order under a distinct leaf."""
     root = Path(root).resolve()
@@ -259,7 +268,7 @@ def write_score_cache(
     _validate_provenance(provenance, config)
     stable_json(provenance)
     with _assay_lock(root), _cache_write_root(
-        root, inputs, "scores", model_family, cache_id, cleanup_and_save,
+        root, inputs, "scores", model_family, cache_id, cleanup_and_save, resume,
     ) as write_root:
         leaf = _leaf(write_root, model_family, cache_id)
         if leaf.exists():

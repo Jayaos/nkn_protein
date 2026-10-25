@@ -330,6 +330,57 @@ class MSAPreparationTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertFalse(self.model.calls)
 
+    def test_cleanup_prunes_other_recipes_without_rewriting_resumed_caches_or_inputs(self):
+        self.assertEqual(self.run_preparation()[0]["status"], "completed")
+        other = replace(self.config, cache_id="other-features", score_cache_id="other-scores")
+        self.assertEqual(self.run_preparation(config=other)[0]["status"], "completed")
+        root = self.config.output_root / "tiny"
+        current = [root / "sequence/msa_transformer/features-test", root / "scores/msa_transformer/scores-test"]
+        protected = [self.directory, *current]
+        marker = root / "sequence/esm2/keep/features.txt"
+        marker.parent.mkdir(parents=True)
+        marker.write_bytes(b"keep")
+        before = {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                  for directory in protected for path in directory.iterdir() if path.is_file()}
+        self.model.calls.clear()
+        result = self.run_preparation(resume=True, cleanup_and_save=True)[0]
+        self.assertEqual((result["sequence"], result["scores"]), ("skipped", "skipped"), result)
+        self.assertFalse(self.model.calls)
+        for directory in current:
+            self.assertEqual(list(directory.parent.iterdir()), [directory])
+        self.assertEqual({path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before}, before)
+        self.assertEqual(marker.read_bytes(), b"keep")
+
+    def test_cleanup_regenerates_corrupted_stages_and_removes_other_recipes_after_saving(self):
+        self.assertEqual(self.run_preparation()[0]["status"], "completed")
+        other = replace(self.config, cache_id="other-features", score_cache_id="other-scores")
+        self.assertEqual(self.run_preparation(config=other)[0]["status"], "completed")
+        root = self.config.output_root / "tiny"
+        feature = root / "sequence/msa_transformer/features-test"
+        score = root / "scores/msa_transformer/scores-test"
+        (feature / "completion.json").unlink()
+        (score / "mean_score.csv").write_bytes(b"corrupted")
+        self.model.calls.clear()
+        result = self.run_preparation(resume=True, cleanup_and_save=True)[0]
+        self.assertEqual((result["sequence"], result["scores"]), ("completed", "completed"), result)
+        self.assertTrue(self.model.calls)
+        self.assertEqual(list(feature.parent.iterdir()), [feature])
+        self.assertEqual(list(score.parent.iterdir()), [score])
+        validate_sequence_cache(root, "features-test", "msa_transformer")
+        validate_score_cache(root, "msa_transformer", "scores-test")
+
+    def test_cleanup_without_resume_preserves_existing_current_and_sibling_caches(self):
+        self.assertEqual(self.run_preparation()[0]["status"], "completed")
+        other = replace(self.config, cache_id="other-features", score_cache_id="other-scores")
+        self.assertEqual(self.run_preparation(config=other)[0]["status"], "completed")
+        root = self.config.output_root / "tiny"
+        before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+        self.model.calls.clear()
+        result = self.run_preparation(cleanup_and_save=True)[0]
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(self.model.calls)
+        self.assertEqual({path: path.read_bytes() for path in root.rglob("*") if path.is_file()}, before)
+
     def test_long_scores_slice_existing_tokens_including_bos_boundary_and_clipped_tail(self):
         # Expected bounds follow pinned ProteinGym's +2 length convention even
         # though MSA-1b has BOS only. Interior windows must not add another BOS.

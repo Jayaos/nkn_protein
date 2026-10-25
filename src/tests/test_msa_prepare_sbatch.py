@@ -56,9 +56,12 @@ class MSASelectionTests(PreparationFixture):
             self.assertEqual(launcher.main(["--config", str(self.config), "--resume"]), 0)
             self.assertEqual(run.call_args.args[1], [ASSAYS[1]])
             self.assertTrue(run.call_args.kwargs["resume"])
+            self.assertFalse(run.call_args.kwargs["cleanup_and_save"])
             self.assertEqual(launcher.main(["--config", str(self.config), "--assay", ASSAYS[-1],
-                                           "--assay", ASSAYS[0]]), 0)
+                                           "--assay", ASSAYS[0], "--cleanup-and-save"]), 0)
             self.assertEqual(run.call_args.args[1], [ASSAYS[0]])
+            self.assertTrue(run.call_args.kwargs["cleanup_and_save"])
+            self.assertFalse(run.call_args.kwargs["resume"])
 
 
 @unittest.skipUnless(BASH, "Bash required")
@@ -89,16 +92,21 @@ class MSABatchTests(PreparationFixture):
             raise SystemExit(int(os.environ.get('TEST_EXIT', '0')))
             '''), encoding="utf-8")
 
-    def invoke(self, *args, fail=False):
+    def invoke(self, *args, fail=False, cleanup=None):
         environment = os.environ.copy()
+        environment.pop("CLEANUP_AND_SAVE", None)
+        if cleanup is not None:
+            environment["CLEANUP_AND_SAVE"] = cleanup
         environment.update(BASH_ENV=self.bootstrap.as_posix(), TEST_ROOT=self.root.as_posix(),
                            TEST_PYTHON=Path(sys.executable).as_posix(), SLURM_ARRAY_TASK_ID="2",
                            SLURM_SUBMIT_DIR=(self.root / "src/feature_generation").as_posix(),
                            SLURM_CPUS_PER_TASK="6", MSA_TRANSFORMER_CONFIG="env config.json",
                            TEST_EXIT="7" if fail else "0")
+        record_path = self.root / "calls.json"
+        record_path.unlink(missing_ok=True)
         result = subprocess.run([BASH, str(self.script), *args], env=environment, cwd=self.workspace,
                                 capture_output=True, text=True, timeout=30)
-        record = json.loads((self.root / "calls.json").read_text())
+        record = json.loads(record_path.read_text()) if record_path.exists() else None
         return result, record
 
     def test_spooled_job_finds_root_and_forwards_config_subset_and_array(self):
@@ -113,6 +121,18 @@ class MSABatchTests(PreparationFixture):
     def test_inference_failure_propagates_to_slurm(self):
         result, _ = self.invoke(fail=True)
         self.assertEqual(result.returncode, 7)
+
+    def test_cleanup_setting_preserves_resume_and_rejects_invalid_values(self):
+        for value, enabled in ((None, False), ("True", True), ("False", False), ("1", True), ("0", False)):
+            with self.subTest(cleanup=value):
+                result, record = self.invoke(cleanup=value)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("--resume", record["args"])
+                self.assertEqual("--cleanup-and-save" in record["args"], enabled)
+        result, record = self.invoke(cleanup="typo")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CLEANUP_AND_SAVE", result.stderr)
+        self.assertIsNone(record)
 
 
 if __name__ == "__main__":

@@ -172,7 +172,8 @@ def score(
                                             structure.metadata if structure is not None else None)
             n = len(inputs.variant_ids)
             source = f"scores/{family}/{cache_id}"
-            if not cleanup_and_save and check_existing(root, family, cache_id, inputs, leaf_config, resume=resume):
+            if check_existing(root, family, cache_id, inputs, leaf_config,
+                              resume=resume, cleanup_and_save=cleanup_and_save):
                 result = {
                     "assay_id": assay_id, "status": "skipped", "model_family": family,
                     "path": str(root / source), "score_source": source, "num_variants": n,
@@ -250,7 +251,7 @@ def score(
                 provenance["num_masked_positions"] = event["num_masked_positions"]
             leaf = write_score_cache(
                 root, family, cache_id, inputs, leaf_config, scores, provenance,
-                cleanup_and_save=cleanup_and_save,
+                cleanup_and_save=cleanup_and_save, resume=resume,
             )
             result = {
                 "assay_id": assay_id, "status": "completed", "model_family": family,

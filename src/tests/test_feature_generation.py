@@ -186,7 +186,7 @@ class ExtractionTests(unittest.TestCase):
             self.run_extraction(resume=True)
         self.assertEqual(sum(adapter.load_count for adapter in self.adapters), 1)
 
-    def test_corrupt_cache_is_not_silently_resumed(self):
+    def test_corrupt_cache_is_regenerated_on_resume(self):
         self.run_extraction()
         path = self.leaf / "features.pt"
         payload = torch.load(path, weights_only=True)
@@ -194,14 +194,14 @@ class ExtractionTests(unittest.TestCase):
         torch.save(payload, path)
         with self.assertRaises(ValueError):
             validate_sequence_cache(self.assay_root, self.config.cache_id)
-        with self.assertRaises(ValueError):
-            self.run_extraction(resume=True)
+        self.assertEqual(self.run_extraction(resume=True)[0]["status"], "completed")
+        validate_sequence_cache(self.assay_root, self.config.cache_id)
 
     def test_missing_completion_metadata_is_not_a_complete_cache(self):
         self.run_extraction()
         (self.leaf / "completion.json").unlink()
-        with self.assertRaises((ValueError, FileNotFoundError)):
-            self.run_extraction(resume=True)
+        self.assertEqual(self.run_extraction(resume=True)[0]["status"], "completed")
+        validate_sequence_cache(self.assay_root, self.config.cache_id)
 
     def test_interrupted_inference_can_retry_without_a_partial_cache(self):
         def interrupted(adapter, sequences):

@@ -13,7 +13,7 @@ from torch import Tensor
 from data_loading.features import ALPHABET, parse_substitutions, read_csv
 from .inputs import AssayInput, safe_component, sha256_file, stable_json
 from .storage import (
-    _assay_lock, _assay_metadata, _atomic_json, _cache_write_root, _ensure_assay,
+    _assay_lock, _assay_metadata, _atomic_json, _cache_is_complete, _cache_write_root, _cleanup_other_caches, _ensure_assay,
     _inside, _read_json, _write_json,
 )
 from .structure_fragments import (
@@ -207,6 +207,8 @@ def check_existing(
     inputs: AssayInput,
     config: dict,
     resume: bool = False,
+    *,
+    cleanup_and_save: bool = False,
 ) -> bool:
     root = Path(root).resolve()
     _validate_config(config, model_family, cache_id)
@@ -217,10 +219,13 @@ def check_existing(
             return False
         if not resume:
             raise FileExistsError(f"Feature cache already exists: {leaf}; use --resume to validate and reuse it")
-        validate_inverse_cache(root, model_family, cache_id)
+        if not _cache_is_complete(root, "inverse_folding", model_family, cache_id):
+            return False
         if not _resume_configs_match(_read_json(_inside(leaf, "config.json")), config, model_family):
             raise ValueError("Existing checkpoint, conditioning, or structure differs; use a new cache ID")
         _register_default(root, model_family, cache_id)
+        if cleanup_and_save:
+            _cleanup_other_caches(root, "inverse_folding", model_family, cache_id)
         return True
 
 
@@ -235,6 +240,7 @@ def write_inverse_cache(
     provenance: dict,
     *,
     cleanup_and_save: bool = False,
+    resume: bool = False,
 ) -> Path:
     root = Path(root).resolve()
     _validate_config(config, model_family, cache_id)
@@ -259,7 +265,7 @@ def write_inverse_cache(
     }
     _validate_payload(payload, _assay_metadata(inputs), config)
     with _assay_lock(root), _cache_write_root(
-        root, inputs, "inverse_folding", model_family, cache_id, cleanup_and_save,
+        root, inputs, "inverse_folding", model_family, cache_id, cleanup_and_save, resume,
     ) as write_root:
         leaf = _leaf(write_root, model_family, cache_id)
         if leaf.exists():

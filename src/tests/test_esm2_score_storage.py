@@ -163,7 +163,7 @@ class ESM2ScoreStorageTests(unittest.TestCase):
                 check_existing(self.root, "esm2", "masked_v1", self.inputs, {**self.config, key: value}, resume=True)
         self.assertTrue(check_existing(self.root, "esm2", "masked_v1", self.inputs, self.config, resume=True))
 
-    def test_corrupt_scores_fail_validation_resume_and_gp_loading(self):
+    def test_corrupt_scores_fail_validation_and_gp_loading_and_require_regeneration(self):
         self.add_embeddings()
         self.write()
         path = self.leaf / "mean_score.csv"
@@ -172,11 +172,11 @@ class ESM2ScoreStorageTests(unittest.TestCase):
         source = self.leaf.relative_to(self.root).as_posix()
         for action in (
             lambda: validate_score_cache(self.root, "esm2"),
-            lambda: check_existing(self.root, "esm2", "masked_v1", self.inputs, self.config, resume=True),
             lambda: load_feature_bundle(self.root, enabled_branches=["sequence_global"], score_sources=[source]),
         ):
             with self.assertRaisesRegex(ValueError, "checksum"):
                 action()
+        self.assertFalse(check_existing(self.root, "esm2", "masked_v1", self.inputs, self.config, resume=True))
         path.write_bytes(original)
         (self.leaf / "completion.json").unlink()
         with self.assertRaisesRegex(ValueError, "incomplete"):

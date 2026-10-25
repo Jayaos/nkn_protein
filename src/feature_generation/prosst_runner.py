@@ -133,7 +133,8 @@ def extract(
                 "structure_tokens": deepcopy(structure_tokens.metadata),
                 "structure_token_input_signature": structure_tokens.input_signature,
             }, model_family="prosst")
-            if not cleanup_and_save and check_existing(root, config.cache_id, inputs, leaf_config, resume=resume, model_family="prosst"):
+            if check_existing(root, config.cache_id, inputs, leaf_config, resume=resume,
+                              model_family="prosst", cleanup_and_save=cleanup_and_save):
                 result = {
                     "assay_id": assay_id, "status": "skipped", "model_family": "prosst",
                     "path": str(root), "num_variants": n,
@@ -226,7 +227,7 @@ def extract(
             options = {"site_data": site_data} if centered else {}
             leaf = write_sequence_cache(
                 root, config.cache_id, inputs, leaf_config, embeddings, provenance, model_family="prosst",
-                cleanup_and_save=cleanup_and_save, **options,
+                cleanup_and_save=cleanup_and_save, resume=resume, **options,
             )
             result = {
                 "assay_id": assay_id, "status": "completed", "model_family": "prosst",

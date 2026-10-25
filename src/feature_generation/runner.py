@@ -95,7 +95,8 @@ def extract(
             if leaf_config is None:
                 leaf_config = make_leaf_config(config.cache_id, adapter.metadata())
             ensure_assay(root, inputs)
-            if not cleanup_and_save and check_existing(root, config.cache_id, inputs, leaf_config, resume=resume):
+            if check_existing(root, config.cache_id, inputs, leaf_config,
+                              resume=resume, cleanup_and_save=cleanup_and_save):
                 result = {"assay_id": assay_id, "status": "skipped", "path": str(root), "num_variants": n}
                 results.append(result)
                 emit(result)
@@ -176,7 +177,7 @@ def extract(
             options = {"site_data": site_data} if centered else {}
             leaf = write_sequence_cache(
                 root, config.cache_id, inputs, leaf_config, embeddings, provenance,
-                cleanup_and_save=cleanup_and_save, **options,
+                cleanup_and_save=cleanup_and_save, resume=resume, **options,
             )
             del embeddings
             result = {

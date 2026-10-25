@@ -106,8 +106,9 @@ class ProteinMPNNLengthCacheCompatibilityTests(unittest.TestCase):
                 completion = json.loads(original_completion)
                 completion["files_sha256"]["config.json"] = hashlib.sha256(config_path.read_bytes()).hexdigest()
                 completion_path.write_text(json.dumps(completion), encoding="utf-8")
-                with self.assertRaisesRegex(ValueError, "identity mismatch"):
-                    check(self.root, family, cache_id, self.inputs, {**config, "max_length": None}, resume=True)
+                # Invalid integrity metadata must trigger regeneration, not reuse.
+                self.assertFalse(check(self.root, family, cache_id, self.inputs,
+                                       {**config, "max_length": None}, resume=True))
                 config_path.write_bytes(original_config)
                 completion_path.write_bytes(original_completion)
 

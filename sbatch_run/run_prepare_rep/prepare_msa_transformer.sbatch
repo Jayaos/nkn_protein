@@ -30,6 +30,17 @@
 # Outputs: sequence_site, sequence_global and masked-marginal mean scores.
 set -eo pipefail
 
+# Set True (or export CLEANUP_AND_SAVE=True) to remove other cache names for
+# this assay/model family after reuse or saving. Resume keeps valid current
+# caches and regenerates incomplete/corrupted ones. Cleanup defaults to False.
+cleanup_and_save="${CLEANUP_AND_SAVE:-False}"
+cache_args=(--resume)
+case "${cleanup_and_save,,}" in
+  true|1) cache_args+=(--cleanup-and-save) ;;
+  false|0) ;;
+  *) echo "error: CLEANUP_AND_SAVE must be True or False (or 1/0)." >&2; exit 1 ;;
+esac
+
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
 while [[ ! -f "$project_root/src/feature_generation/msa_runner.py" || ! -f "$project_root/env_msa_transformer.yaml" ]]; do
   if [[ "$project_root" == "/" ]]; then
@@ -54,4 +65,4 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 printf 'Job: %s\nRepository: %s\nArray index: %s\n' \
   "${SLURM_JOB_ID:-manual}" "$project_root" "${SLURM_ARRAY_TASK_ID:-all}"
-python -u sbatch_run/run_prepare_rep/prepare_msa_transformer.py --resume "$@"
+python -u sbatch_run/run_prepare_rep/prepare_msa_transformer.py "${cache_args[@]}" "$@"

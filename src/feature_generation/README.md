@@ -19,31 +19,49 @@ ESM-IF1, and notebook defaults retain their existing full-assay locations.
 
 ## Replacing saved assay caches
 
-`cleanup_and_save` defaults to `False`. Enable it for the ProSST or ESM-IF1
-preparation job with:
+`cleanup_and_save` defaults to `False` in all five `prepare_*.sbatch` jobs.
+Enable it for the desired preparation job with:
 
 ```bash
 CLEANUP_AND_SAVE=True sbatch sbatch_run/run_prepare_rep/prepare_prosst.sbatch
 CLEANUP_AND_SAVE=True sbatch sbatch_run/run_prepare_rep/prepare_esm_if1.sbatch
+CLEANUP_AND_SAVE=True sbatch sbatch_run/run_prepare_rep/prepare_esm2.sbatch
+CLEANUP_AND_SAVE=True sbatch sbatch_run/run_prepare_rep/prepare_proteinmpnn.sbatch
+CLEANUP_AND_SAVE=True sbatch sbatch_run/run_prepare_rep/prepare_msa_transformer.sbatch
 ```
 
-Both scripts also expose a `cleanup_and_save` variable near the top. The Python
+All five scripts also expose a `cleanup_and_save` variable near the top. The Python
 extraction/scoring functions accept `cleanup_and_save=True`; the CLI equivalent
-is `--cleanup-and-save` on `extract` or `score`. Cleanup overrides resume and
-always recomputes. After a new cache is staged and validated, all previous cache
-directories for that assay, model family, and output type are removed and the
-new recipe becomes the sole cache. For example, ProSST extraction replaces all
-recipes under `<output_root>/<assay>/sequence/prosst/`; scoring independently
-replaces `<output_root>/<assay>/scores/prosst/`. ESM-IF1 uses
-`inverse_folding/esm_if1/` and `scores/esm_if1/` respectively. An existing default
-feature descriptor for the replaced family is updated to the new recipe.
+is `--cleanup-and-save` on `extract` or `score`, or on the dedicated
+`prepare_msa_transformer.py` launcher. Cleanup respects resume: after
+successfully reusing or saving the current cache, it removes only sibling recipe
+directories with different names for that assay, model family, and output type.
+The current directory's contents and generation timestamp are unchanged when
+resume reuses it. For example, ProSST extraction prunes other recipes under
+`<output_root>/<assay>/sequence/prosst/`; scoring independently prunes
+`<output_root>/<assay>/scores/prosst/`. ESM-IF1 uses `inverse_folding/esm_if1/`
+and `scores/esm_if1/` respectively. An existing default feature descriptor for
+the cleaned family is updated to the retained recipe.
+
+ESM2 and MSA Transformer use `sequence/<model_family>/` and
+`scores/<model_family>/`; ProteinMPNN uses `inverse_folding/proteinmpnn/` and
+`scores/proteinmpnn/`. Setup, MSA/weight generation, verification, and validation
+jobs do not prune representation caches. Generated MSA/weight inputs are preserved.
+
+With `resume=True`, a matching complete cache is validated and skipped. An
+incomplete or corrupted current cache is regenerated from the start of that
+stage, whether cleanup is enabled or disabled. Its replacement is staged and
+validated before the invalid cache is replaced. Valid caches with conflicting
+configurations still require a new cache ID. Without resume, an existing current
+directory remains an error; cleanup does not authorize overwriting it.
 
 Other assays, model families, shared assay files, model downloads, structures,
-and structure tokens are preserved. Failed generation or staging validation
-leaves the old caches intact. Feature and score stages commit independently, so
+and structure tokens are preserved. Hidden staging directories are ignored.
+Failed generation or staging validation leaves the old caches intact.
+Feature and score stages commit independently, so
 a failed score stage can leave old scores alongside newly generated features.
 Changed assay inputs or variant coverage still require a separate output root.
-When cleanup is disabled, the existing resume/immutable-cache behavior is unchanged.
+When cleanup is disabled, differently named sibling caches are retained.
 
 ## Data storage on Phoenix
 
@@ -1145,9 +1163,10 @@ task; increase time or memory with `sbatch` overrides when needed.
 
 Reruns reuse verified checkpoint files and registered structures. Both extraction
 and scoring use `--resume`: a matching, complete, validated cache is skipped
-before model loading/inference. Existing files alone do not qualify: corrupt,
-incomplete published caches or incompatible recipes are reported as errors;
-missing outputs are computed. Slurm jobs still start and perform validation.
+before model loading/inference. Existing files alone do not qualify: corrupt or
+incomplete published caches are regenerated, while incompatible valid recipes
+are reported as errors. Missing outputs are computed. Slurm jobs still start and
+perform validation.
 Both scripts use `--continue-on-error`, retaining completed outputs while reporting
 assay failures and returning a nonzero status. Shared setup failures stop the job.
 ProteinMPNN still needs compatible structures. BRCA2 uses fragment features;
@@ -1277,7 +1296,8 @@ The download command verifies the pinned HF model, custom model code, quantizer
 encoder, codebook, and graph code. Extraction loads only these local assets.
 Token caches record the structure/mapping, preprocessing, runtime, artifact hashes,
 and token checksums. Feature caches record those identities alongside the LM
-checkpoint, layer, and sequence coverage; `--resume` rejects mismatches or corruption.
+checkpoint, layer, and sequence coverage; `--resume` rejects configuration
+mismatches and regenerates incomplete or corrupted output caches.
 The quantizer cache directory can be overridden with `--structure-token-dir`.
 
 ESM-2 and ProSST can coexist within one assay when their output root and variant
@@ -1545,6 +1565,8 @@ reference are immutable. Use a separate output root to change a subset.
 Without `--resume`, an existing leaf is an error. With `--resume`, a completed
 leaf is reused only after checking hashes, tensors, input identity and extraction
 configuration. The model loads only if at least one assay requires inference.
+Incomplete or corrupted current leaves are regenerated with `--resume`, and
+replaced only after the new output validates. Configuration conflicts still fail.
 Interrupted extraction restarts that assay; earlier completed assays are reused.
 Incomplete staging directories are ignored and retained for inspection.
 
