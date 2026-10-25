@@ -222,7 +222,7 @@ class ExperimentConfig:
     feature_selection: dict = field(default_factory=dict)
     score_sources: list | None = None
     inverse_folding_policy: str = "normalized"
-    structure_manifest_dir: str = "data/structures/manifests"
+    structure_manifest_dir: str = "data/structures/proteingym/manifests"
     pooling: str = "mean"
     device: str = "cpu"
     num_threads: int = 1

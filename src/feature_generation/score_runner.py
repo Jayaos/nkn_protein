@@ -15,6 +15,7 @@ from .prosst_config import ProSSTConfig
 from .score_storage import check_existing, make_score_config, write_score_cache
 from .storage import ensure_assay
 from .structure_inputs import load_structure
+from .structure_sources import structure_cache_id, validate_structure_cache_id
 
 
 def default_cache_id(config: InverseFoldingConfig | ExtractionConfig | ProSSTConfig, num_orders: int = 1) -> str:
@@ -32,14 +33,15 @@ def default_cache_id(config: InverseFoldingConfig | ExtractionConfig | ProSSTCon
         cache_id = f"ProSST-2048-masked_marginals-fixed-backbone-{config.inference_dtype}-{config.revision[:12]}"
         if config.scoring_window == "centered":
             cache_id += f"-centered{config.max_length}"
-        return cache_id
+        return structure_cache_id(config.structure_source, cache_id)
     if family == "esm_if1":
         if type(num_orders) is not int or num_orders != 1:
             raise ValueError("ESM-IF1 scoring uses one fixed N-to-C decoding order")
-        return f"{config.model_id.split('/')[-1]}-sequence_log_likelihood-native-v1-{config.revision[:12]}"
+        return structure_cache_id(config.structure_source,
+                                  f"{config.model_id.split('/')[-1]}-sequence_log_likelihood-native-v1-{config.revision[:12]}")
     if family != "proteinmpnn":
         raise ValueError("Mean scoring supports ProteinMPNN, ESM-IF1, ESM2, and ProSST")
-    return (
+    return structure_cache_id(config.structure_source,
         f"{config.model_id.split('/')[-1]}-sequence_log_likelihood-"
         f"orders{num_orders}-seed{config.seed}-{config.revision[:12]}"
     )
@@ -89,6 +91,8 @@ def score(
         raise ValueError("limit must be a positive integer")
     cache_id = default_cache_id(config, num_orders) if cache_id is None else cache_id
     safe_component(cache_id, "score cache ID")
+    if family in ("proteinmpnn", "esm_if1", "prosst"):
+        validate_structure_cache_id(config.structure_source, cache_id)
     if adapter_factory is None:
         if family == "proteinmpnn":
             from .adapters.proteinmpnn import ProteinMPNNAdapter

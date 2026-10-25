@@ -190,7 +190,7 @@ def _atomic_json(path: Path, value: dict) -> None:
 
 def prepare_structure(index_path: str | Path, assay_id: str, structure_file: str | Path,
                       chain_id: str | None = None, model_index: int = 1,
-                      output_dir: str | Path = PROJECT_ROOT / "data/structures/manifests",
+                      output_dir: str | Path = PROJECT_ROOT / "data/structures/proteingym/manifests",
                       source_url: str | None = None, source_archive: dict | None = None) -> Path:
     """Register an existing structure; registration allows a missing O atom.
 
@@ -270,8 +270,8 @@ def _load_structure_metadata(metadata: dict, manifest_path: Path, reference_sequ
 
 def download_structure(index_path: str | Path, assay_id: str, url: str,
                        chain_id: str | None = None, model_index: int = 1,
-                       raw_dir: str | Path = PROJECT_ROOT / "data/structures/raw",
-                       manifest_dir: str | Path = PROJECT_ROOT / "data/structures/manifests") -> Path:
+                       raw_dir: str | Path = PROJECT_ROOT / "data/structures/proteingym/raw",
+                       manifest_dir: str | Path = PROJECT_ROOT / "data/structures/proteingym/manifests") -> Path:
     """Download a user-selected direct structure URL and register its checksum.
 
     Archives are unsupported; downloads are bounded to 64 MiB. A registered
@@ -325,8 +325,8 @@ PROTEINGYM_STRUCTURE_SHA256 = "c78f5ff60cf59104fe19b8318c5647587aad033ee832e051d
 
 def download_proteingym_structure(index_path: str | Path, assay_id: str,
                                  chain_id: str | None = None, model_index: int = 1,
-                                 raw_dir: str | Path = PROJECT_ROOT / "data/structures/raw",
-                                 manifest_dir: str | Path = PROJECT_ROOT / "data/structures/manifests") -> Path:
+                                 raw_dir: str | Path = PROJECT_ROOT / "data/structures/proteingym/raw",
+                                 manifest_dir: str | Path = PROJECT_ROOT / "data/structures/proteingym/manifests") -> Path:
     """Extract the assay's named PDB from the checksum-pinned ProteinGym archive.
 
     The archive is cached in raw_dir's sibling downloads directory. Member names

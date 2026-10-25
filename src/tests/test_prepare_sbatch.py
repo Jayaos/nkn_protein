@@ -268,7 +268,7 @@ class PreparationSbatchTests(PreparationFixture):
             module('feature_generation.inverse_storage', validate_inverse_cache=validate_inverse_cache)
             module('feature_generation.score_storage', validate_score_cache=validate_score_cache)
             module('feature_generation.score_runner', default_cache_id=lambda config:
-                   'esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b')
+                   'proteingym--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b')
             module('feature_generation.structure_inputs',
                    download_proteingym_structure=download_structure, load_structure=load_structure)
             module('feature_generation.structure_fragments', load_inverse_structure=load_structure)
@@ -479,7 +479,7 @@ class PreparationSbatchTests(PreparationFixture):
                 self.assertEqual(stages, ["download"])
 
     def test_failed_structure_continues_other_assays_and_preserves_registered_manifests(self):
-        manifests = self.root / "data/structures/manifests"
+        manifests = self.root / "data/structures/proteingym/manifests"
         manifests.mkdir(parents=True)
         (manifests / f"{ASSAYS[1]}.json").write_text("registered fixture", encoding="utf-8")
         result, records = self.invoke(SCRIPTS[1], {"TEST_FAIL_STRUCTURE_ASSAY": ASSAYS[0]})
@@ -515,11 +515,11 @@ class PreparationSbatchTests(PreparationFixture):
         self.assertEqual([Path(args[0]) for args in validations],
                          [self.root / "data/features/pretrained/singles" / assay for assay in expected])
         for args in validations:
-            self.assertEqual(args[1:], ["esm_if1", "esm_if1_gvp4_t16_142M_UR50-reference_prefix-2b369911bb5b"])
+            self.assertEqual(args[1:], ["esm_if1", "proteingym--esm_if1_gvp4_t16_142M_UR50-reference_prefix-2b369911bb5b"])
         score_validations = [record["args"] for record in records if record["kind"] == "validate-score"]
         self.assertEqual([args[0] for args in score_validations], [args[0] for args in validations])
         for args in score_validations:
-            self.assertEqual(args[1:], ["esm_if1", "esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b"])
+            self.assertEqual(args[1:], ["esm_if1", "proteingym--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b"])
 
     def test_esm_if1_dispatches_features_and_scores_to_same_singles_and_validates_both(self):
         for environment, expected in (({}, ASSAYS), ({"SLURM_ARRAY_TASK_ID": "2"}, [ASSAYS[2]])):
@@ -536,7 +536,7 @@ class PreparationSbatchTests(PreparationFixture):
                 self.assertIn("no sequence-length cap", result.stdout)
 
     def test_esm_if1_failures_continue_through_validation_and_preserve_registered_structures(self):
-        manifests = self.root / "data/structures/manifests"
+        manifests = self.root / "data/structures/proteingym/manifests"
         manifests.mkdir(parents=True)
         (manifests / f"{ASSAYS[1]}.json").write_text("registered fixture", encoding="utf-8")
         cases = (

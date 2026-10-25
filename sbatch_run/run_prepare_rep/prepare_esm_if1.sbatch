@@ -146,6 +146,8 @@ for assay_id in sys.argv[2:]:
             )
         manifest = config.structure_manifest_dir / f"{assay_id}.json"
         if not manifest.exists():
+            if getattr(config, "structure_source", "proteingym") != "proteingym":
+                raise FileNotFoundError(f"Prepare the selected collection's manifest first: {manifest}")
             # Ambiguous chains require a separately prepared explicit manifest.
             manifest = download_proteingym_structure(
                 config.assay_index, assay_id,

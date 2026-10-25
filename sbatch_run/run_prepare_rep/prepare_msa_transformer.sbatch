@@ -21,7 +21,10 @@
 # Config precedence: --config PATH, MSA_TRANSFORMER_CONFIG, shipped preset.
 # ProteinGym sampling: 400 rows, weighted replacement, seeds 1..5, score averaging.
 # Scores crop to the MSA interval and use upstream 1024-token optimal windows.
-# NKN embedding extension: full query, gap-padded homologs, averaged over seeds.
+# NKN v3 global: fixed consecutive windows over the MSA interval, length-weighted.
+# Sites: full-query centered windows, gap-padded homologs; drop all-gap rows,
+# using query-only MSA Transformer input if no homolog residues remain.
+# Both embeddings average over seeds. New v3 features reuse valid v2 scores.
 # Outputs: sequence_site, sequence_global and masked-marginal mean scores.
 set -eo pipefail
 

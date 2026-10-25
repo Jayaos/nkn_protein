@@ -156,7 +156,7 @@ def load_inverse_structure(manifest_path: str | Path, reference_sequence: str,
 def prepare_structure_fragments(index_path: str | Path, assay_id: str,
                                 structure_files: Sequence[str | Path], reference_ranges: Sequence[tuple[int, int]],
                                 chain_id: str | None = None, model_index: int = 1,
-                                output_dir: str | Path = PROJECT_ROOT / "data/structures/manifests",
+                                output_dir: str | Path = PROJECT_ROOT / "data/structures/proteingym/manifests",
                                 source_archive: dict | None = None) -> Path:
     """Register exact, disjoint reference slices without placing them in one frame.
 
@@ -217,8 +217,8 @@ def prepare_structure_fragments(index_path: str | Path, assay_id: str,
 
 def download_proteingym_fragments(index_path: str | Path, assay_id: str,
                                  chain_id: str | None = None, model_index: int = 1,
-                                 raw_dir: str | Path = PROJECT_ROOT / "data/structures/raw",
-                                 manifest_dir: str | Path = PROJECT_ROOT / "data/structures/manifests") -> Path:
+                                 raw_dir: str | Path = PROJECT_ROOT / "data/structures/proteingym/raw",
+                                 manifest_dir: str | Path = PROJECT_ROOT / "data/structures/proteingym/manifests") -> Path:
     """Acquire ProteinGym's known BRCA2 pieces with exact reference-slice checks."""
     from .downloads import download_verified
 

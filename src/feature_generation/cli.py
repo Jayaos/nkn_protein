@@ -65,7 +65,8 @@ def _parser() -> argparse.ArgumentParser:
         structure.add_argument("--assay-index", type=Path, default=PROJECT_ROOT / "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv")
         structure.add_argument("--chain", help="Author chain ID; required when the structure has multiple polymer chains")
         structure.add_argument("--model-index", type=int, default=1, help="One-based coordinate model index")
-        structure.add_argument("--manifest-dir", type=Path, default=PROJECT_ROOT / "data/structures/manifests")
+        structure.add_argument("--structure-source", choices=("proteingym", "protssn_proteingym"), default="proteingym")
+        structure.add_argument("--manifest-dir", type=Path, help="Defaults to the selected collection's manifests directory")
         if command == "prepare-structure":
             structure.add_argument("--structure", type=Path, action="append", required=True,
                                    help="Local structure; repeat with matching --reference-range for fragments")
@@ -74,7 +75,7 @@ def _parser() -> argparse.ArgumentParser:
             structure.add_argument("--source-url", help="Optional provenance URL for the local structure")
         else:
             structure.add_argument("--url", help="Direct HTTPS PDB/mmCIF URL; omitted to use the checksum-pinned ProteinGym archive")
-            structure.add_argument("--raw-dir", type=Path, default=PROJECT_ROOT / "data/structures/raw")
+            structure.add_argument("--raw-dir", type=Path, help="Defaults to the selected collection's raw directory")
     return parser
 
 
@@ -125,6 +126,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command in ("prepare-structure", "download-structure"):
             from .structure_inputs import prepare_structure, download_structure, download_proteingym_structure
+            from .structure_sources import structure_path
+            args.manifest_dir = structure_path(args.structure_source, args.manifest_dir, "manifests")
+            if args.command == "download-structure":
+                args.raw_dir = structure_path(args.structure_source, args.raw_dir, "raw")
+                if args.structure_source != "proteingym" and not args.url:
+                    raise ValueError("Automatic archive acquisition is available only for proteingym; register local files for the selected collection")
             common = dict(chain_id=args.chain, model_index=args.model_index)
             if args.command == "prepare-structure":
                 if args.reference_range:

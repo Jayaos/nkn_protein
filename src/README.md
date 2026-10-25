@@ -261,7 +261,7 @@ up to 1,022 residues, weighted by each window's residue count.
 ProteinMPNN sequence-conditioned distributions
 provide the third branch, `inverse_folding`. Reference Cα coordinates supply
 the fourth branch, `structure_distance`, using the existing assay manifests in
-`data/structures/manifests`. A fifth branch, `inverse_folding_site`, uses the
+`data/structures/proteingym/manifests`. A fifth branch, `inverse_folding_site`, uses the
 cached ProteinMPNN log probability of each substituted amino acid. The GP mean uses only ESM2 650M
 masked-marginal scores. The inverse-folding cache uses ten
 orders with seed 37 and retains the stored 20 amino-acid values without
@@ -809,7 +809,7 @@ for extraction commands and cache details.
 `feature_selection` independently chooses the family/checkpoint for each feature
 type. The NKN batch preset selects
 `esm2/esm2_t33_650M_UR50D-layer33-08e4846e5371-mean-all-nonoverlap1022-centered-sites` for `sequence` and
-`proteinmpnn/v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb` for
+`proteinmpnn/proteingym--v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb` for
 `inverse_folding`. Enabling an NKN branch does not select a different pretrained
 model or regenerate its representations.
 

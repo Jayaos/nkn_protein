@@ -165,6 +165,8 @@ for assay_id in sys.argv[2:]:
         reference = catalog.get(assay_id).reference_sequence
         manifest = config.structure_manifest_dir / f"{assay_id}.json"
         if not manifest.exists():
+            if getattr(config, "structure_source", "proteingym") != "proteingym":
+                raise FileNotFoundError(f"Prepare the selected collection's manifest first: {manifest}")
             # A sole polymer chain is selected automatically. Ambiguous chains
             # require a separately prepared manifest with an explicit chain.
             manifest = download_proteingym_structure(

@@ -76,11 +76,11 @@
     ]
   },
   "feature_selection": {
-    "sequence": "msa_transformer/msa1b-layer12-depth400-seeds1-5-full1022-sites-v2",
-    "inverse_folding": "proteinmpnn/v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb"
+    "sequence": "msa_transformer/msa1b-layer12-depth400-seeds1-5-msaregion1022-sites-v3",
+    "inverse_folding": "proteinmpnn/proteingym--v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb"
   },
   "inverse_folding_policy": "sequence_conditional",
-  "structure_manifest_dir": "data/structures/manifests",
+  "structure_manifest_dir": "data/structures/proteingym/manifests",
   "score_sources": [
     "scores/msa_transformer/msa1b-depth400-seeds1-5-proteingym-masked-marginals-v2"
   ],

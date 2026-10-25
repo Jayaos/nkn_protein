@@ -71,7 +71,7 @@ default combines both sources:
 ```json
 "score_sources": [
   "scores/esm2/esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371-centered1022",
-  "scores/proteinmpnn/v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb"
+  "scores/proteinmpnn/proteingym--v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb"
 ]
 ```
 

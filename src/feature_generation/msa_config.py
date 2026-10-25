@@ -24,6 +24,13 @@ LEGACY_SCORE_RECIPE = {
 }
 
 SAMPLING = "proteingym_sequence_reweighting_with_replacement"
+EMBEDDING_RECIPE = {
+    "msa_recipe_version": 3,
+    "global_region": "msa_interval",
+    "global_accumulation_dtype": "float64",
+    "embedding_homolog_filter": "drop_all_gap_window_rows",
+    "empty_embedding_window": "query_only",
+}
 SCORE_RECIPE = {
     **LEGACY_SCORE_RECIPE,
     "scoring_recipe_version": 2,
@@ -108,8 +115,20 @@ def validate_msa_metadata(config):
         if not isinstance(config.get(key), str) or not re.fullmatch("[0-9a-f]{64}", config[key]):
             raise ValueError(f"Missing MSA fingerprint: {key}")
     version = config.get("msa_recipe_version")
-    if type(version) is not int or version not in (1, 2):
+    if type(version) is not int or version not in (1, 2, 3):
         raise ValueError("Unsupported MSA recipe version")
+    if version == 3:
+        if config.get("feature_type") != "sequence" or any(
+                type(config.get(key)) is not type(value) or config.get(key) != value
+                for key, value in EMBEDDING_RECIPE.items()):
+            raise ValueError("Invalid MSA-region embedding recipe")
+        start, end = config.get("global_region_start"), config.get("global_region_end")
+        columns = config.get("msa_covered_positions")
+        if (type(start) is not int or type(end) is not int or not 0 <= start < end
+                or not isinstance(columns, list) or len(columns) != end - start
+                or any(type(position) is not int or position != start + i + 1
+                       for i, position in enumerate(columns))):
+            raise ValueError("Global embedding region must match contiguous MSA coverage")
     if version == 1:
         # Previously prepared caches remain readable under their original IDs.
         expected = {

@@ -22,6 +22,7 @@ _GLOBAL_WINDOW_METADATA = {
     "global_window": "non_overlapping",
     "global_window_aggregation": "length_weighted_mean",
 }
+_GLOBAL_REGION_FIELDS = ("global_region", "global_region_start", "global_region_end")
 
 
 def centered_window_bounds(position: int, reference_length: int, max_length: int) -> tuple[int, int]:
@@ -42,14 +43,17 @@ def centered_window_bounds(position: int, reference_length: int, max_length: int
 
 
 def mean_sequence_recipe(config: Mapping, reference_length: int | None = None) -> dict | None:
-    """Validate a prefix mean or full mean over fixed nonoverlapping windows.
+    """Validate a prefix mean or a mean over fixed nonoverlapping windows.
 
     Legacy prefix recipes omit global-window fields. New recipes must declare
     both the window policy and its aggregation so partial metadata cannot fall
-    back to prefix pooling or a full-residue cache.
+    back to prefix pooling or a full-residue cache. MSA v3 globals explicitly
+    cover an MSA interval; site coordinates still address the full reference.
     """
     windowed = any(key in config for key in _GLOBAL_WINDOW_METADATA)
-    if not windowed and config.get("pooling") != "mean" and config.get("truncation") != "prefix":
+    region_declared = any(key in config for key in _GLOBAL_REGION_FIELDS)
+    msa_region = config.get("model_family") == "msa_transformer" and config.get("msa_recipe_version") == 3
+    if not (windowed or region_declared or msa_region) and config.get("pooling") != "mean" and config.get("truncation") != "prefix":
         return None
     if (
         config.get("model_family") not in ("esm2", "prosst", "msa_transformer")
@@ -59,7 +63,7 @@ def mean_sequence_recipe(config: Mapping, reference_length: int | None = None) -
         raise ValueError("Mean sequence caches require ESM2/ProSST/MSA Transformer residue-mean pooling without special tokens")
     if windowed:
         if any(config.get(key) != value for key, value in _GLOBAL_WINDOW_METADATA.items()) or config.get("truncation") != "none":
-            raise ValueError("Full sequence means require non_overlapping windows, length_weighted_mean aggregation, and no truncation")
+            raise ValueError("Windowed sequence means require non_overlapping windows, length_weighted_mean aggregation, and no truncation")
     elif config.get("truncation") != "prefix":
         raise ValueError("Legacy sequence means require prefix truncation")
     max_length, size = config.get("max_length"), config.get("hidden_size")
@@ -71,16 +75,27 @@ def mean_sequence_recipe(config: Mapping, reference_length: int | None = None) -
     recipe = {"pooling": "mean", "truncation": "none" if windowed else "prefix", "max_length": max_length}
     if windowed:
         recipe.update(_GLOBAL_WINDOW_METADATA)
+    if region_declared or msa_region:
+        if not msa_region or not windowed or config.get("global_region") != "msa_interval":
+            raise ValueError("An explicit MSA interval requires the windowed MSA v3 embedding recipe")
+        start, end = config.get("global_region_start"), config.get("global_region_end")
+        if type(start) is not int or type(end) is not int or not 0 <= start < end:
+            raise ValueError("Invalid global MSA region bounds")
+        recipe.update({key: config[key] for key in _GLOBAL_REGION_FIELDS})
     if reference_length is not None:
         if type(reference_length) is not int or reference_length < 1:
             raise ValueError("reference_length must be a positive integer")
         recipe["represented_length"] = reference_length if windowed else min(reference_length, max_length)
+        if msa_region:
+            if end > reference_length:
+                raise ValueError("Global MSA region exceeds the reference sequence")
+            recipe["represented_length"] = end - start
     return recipe
 
 
 def validate_global_window_payload(store: Mapping, recipe: Mapping | None) -> None:
     """Reject undeclared or inconsistent global policy even for short proteins."""
-    for key in _GLOBAL_WINDOW_METADATA:
+    for key in (*_GLOBAL_WINDOW_METADATA, *_GLOBAL_REGION_FIELDS):
         if recipe is not None and key in recipe:
             if type(store.get(key)) is not type(recipe[key]) or store.get(key) != recipe[key]:
                 raise ValueError("Sequence payload does not match its global-window recipe")

@@ -37,7 +37,7 @@
     ]
   },
   "feature_selection": {
-    "sequence": "msa_transformer/msa1b-layer12-depth400-seeds1-5-full1022-sites-v2"
+    "sequence": "msa_transformer/msa1b-layer12-depth400-seeds1-5-msaregion1022-sites-v3"
   },
   "score_sources": [
     "scores/msa_transformer/msa1b-depth400-seeds1-5-proteingym-masked-marginals-v2"

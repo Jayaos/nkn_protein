@@ -14,8 +14,9 @@
 # Prepare ProSST K=2048 single-substitution embeddings and GP mean scores for every assay in the
 # configured DMS_substitutions.csv, in catalog order, without assay-count limits.
 # Requires the nkn_protein environment and catalog/variant CSV files.
-# Existing structures and completed matching caches are reused. Missing structures
-# come from the pinned ProteinGym archive; first downloads require HTTPS.
+# The default singles preset uses registered protssn_proteingym structures.
+# Prepare that collection's assay manifests before submission. Matching caches
+# are reused; first model downloads require HTTPS.
 # From the repository root or a subdirectory:
 #   sbatch sbatch_run/run_prepare_rep/prepare_prosst.sbatch
 # Config precedence: --config PATH, PROSST_CONFIG, then the singles preset below.
@@ -143,6 +144,7 @@ print(f"Model: {config.model_id}; K=2048; layer: {config.layer}")
 print(f"Reference length: {inputs.length}; single variants: {len(inputs.variant_ids)}")
 print(f"Batch token budget: {config.max_tokens_per_batch}; cache estimate: {output_gib:.3f} GiB")
 print(f"Output: {config.output_root}; cache: prosst/{config.cache_id}")
+print(f"Structure source: {config.structure_source}")
 print(f"Structure manifests: {config.structure_manifest_dir}")
 print(f"Structure tokens: {config.structure_token_dir}")
 print(f"Python: {sys.executable}; PyTorch: {torch.__version__}; CUDA: {torch.version.cuda}")
@@ -192,6 +194,8 @@ with (config.structure_manifest_dir / f".{assay}.prosst.lock").open("a+b") as lo
     reference = AssayCatalog(config.assay_index).get(assay).reference_sequence
     manifest = config.structure_manifest_dir / f"{assay}.json"
     if not manifest.exists():
+        if getattr(config, "structure_source", "proteingym") != "proteingym":
+            raise FileNotFoundError(f"Prepare the selected collection's manifest first: {manifest}")
         manifest = download_proteingym_structure(
             config.assay_index, assay, manifest_dir=config.structure_manifest_dir,
         )

@@ -121,7 +121,7 @@ class MeanScorePipelineTests(unittest.TestCase):
 
     def leaf(self, cache_id=None, num_orders=1):
         cache_id = cache_id or (
-            f"{self.config.model_id.split('/')[-1]}-sequence_log_likelihood-"
+            f"{self.config.structure_source}--{self.config.model_id.split('/')[-1]}-sequence_log_likelihood-"
             f"orders{num_orders}-seed{self.config.seed}-{self.config.revision[:12]}"
         )
         return self.assay_root / "scores" / "proteinmpnn" / cache_id

@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 
 from .config import PROJECT_ROOT
+from .structure_sources import structure_cache_id, structure_path, validate_structure_cache_id
 
 PRESETS = json.loads(Path(__file__).with_name("inverse_artifacts.json").read_text(encoding="utf-8"))
 ALPHABET = "ACDEFGHIKLMNPQRSTVWY"
@@ -43,7 +44,8 @@ class InverseFoldingConfig:
     model_dir: Path | None = None
     output_root: Path = Path("data/features/pretrained")
     assay_index: Path = Path("data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv")
-    structure_manifest_dir: Path = Path("data/structures/manifests")
+    structure_source: str = "proteingym"
+    structure_manifest_dir: Path | None = None
     conditioning_mode: str | None = None
     device: str = "auto"
     inference_dtype: str = "float32"
@@ -55,6 +57,7 @@ class InverseFoldingConfig:
     num_orders: int = 10
 
     def __post_init__(self):
+        self.structure_manifest_dir = structure_path(self.structure_source, self.structure_manifest_dir, "manifests")
         if self.feature_type != "inverse_folding":
             raise ValueError("feature_type must be inverse_folding")
         if not isinstance(self.model_family, str) or self.model_family not in PRESETS:
@@ -78,8 +81,10 @@ class InverseFoldingConfig:
             if self.conditioning_mode == "sequence_conditional":
                 self.cache_id += f"-orders{self.num_orders}-seed{self.seed}"
             self.cache_id += f"-{self.revision[:12]}"
+            self.cache_id = structure_cache_id(self.structure_source, self.cache_id)
         if not isinstance(self.cache_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", self.cache_id):
             raise ValueError("cache_id must be a safe single directory name")
+        validate_structure_cache_id(self.structure_source, self.cache_id)
         reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
         if self.cache_id.endswith(".") or self.cache_id.split(".")[0].upper() in reserved:
             raise ValueError("cache_id must be a portable directory name")

@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 
 from .config import PROJECT_ROOT
+from .structure_sources import structure_cache_id, structure_path, validate_structure_cache_id
 
 PRESET = json.loads(Path(__file__).with_name("prosst_artifacts.json").read_text(encoding="utf-8"))
 
@@ -21,8 +22,9 @@ class ProSSTConfig:
     model_dir: Path = Path("data/models/prosst")
     output_root: Path = Path("data/features/pretrained")
     assay_index: Path = Path("data/DMS_ProteinGym_substitutions/DMS_substitutions.csv")
-    structure_manifest_dir: Path = Path("data/structures/manifests")
-    structure_token_dir: Path = Path("data/structures/tokens/prosst")
+    structure_source: str = "proteingym"
+    structure_manifest_dir: Path | None = None
+    structure_token_dir: Path | None = None
     layer: int = 12
     device: str = "auto"
     inference_dtype: str = "float32"
@@ -38,6 +40,8 @@ class ProSSTConfig:
     quantizer_batch_size: int = 32
 
     def __post_init__(self):
+        self.structure_manifest_dir = structure_path(self.structure_source, self.structure_manifest_dir, "manifests")
+        self.structure_token_dir = structure_path(self.structure_source, self.structure_token_dir, "tokens/prosst")
         if self.feature_type != "sequence" or self.model_family != "prosst":
             raise ValueError("ProSST requires feature_type=sequence and model_family=prosst")
         for name in ("model_id", "revision"):
@@ -68,8 +72,10 @@ class ProSSTConfig:
                 self.cache_id += f"-mean-all-nonoverlap{self.max_length}"
             if self.site_embeddings == "centered":
                 self.cache_id += "-centered-sites"
+            self.cache_id = structure_cache_id(self.structure_source, self.cache_id)
         if not isinstance(self.cache_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", self.cache_id):
             raise ValueError("cache_id must be a safe single directory name")
+        validate_structure_cache_id(self.structure_source, self.cache_id)
         reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
         if self.cache_id.endswith(".") or self.cache_id.split(".")[0].upper() in reserved:
             raise ValueError("cache_id must be a portable directory name")

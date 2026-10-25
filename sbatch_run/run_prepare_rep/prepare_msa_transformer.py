@@ -46,6 +46,9 @@ def main(argv=None):
         if args.device:
             config = replace(config, device=args.device)
         print(f"Config: {args.config}\nSelected assays: {len(assays)}\nOutput: {config.output_root}", flush=True)
+        print(f"GP mean source: scores/msa_transformer/{config.score_cache_id}/mean_score.csv\n"
+              "Scoring: ProteinGym masked-marginals over the MSA interval; "
+              f"arithmetic mean over seeds {list(config.seeds)}", flush=True)
         if args.validate_inputs_only:
             failed = False
             for assay in assays:

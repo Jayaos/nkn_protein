@@ -49,8 +49,8 @@ class StructureMappingTests(unittest.TestCase):
             reference = "A" * 71 + "R" + "A" * 321
             source = "A" * 71 + "P" + "A" * 321
             filename, start, end = "P53_HUMAN.pdb", 1, 393
-        directory = self.root / assay
-        directory.mkdir()
+        # Avoid repeating the long assay ID in Windows temporary cache paths.
+        directory = Path(tempfile.mkdtemp(prefix="assay-", dir=self.root))
         index = directory / "index.csv"
         write_csv(index, ["DMS_id", "DMS_filename", "target_seq", "pdb_file"],
                   [[assay, "variants.csv", reference, filename]])

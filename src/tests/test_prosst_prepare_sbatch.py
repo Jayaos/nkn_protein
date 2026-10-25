@@ -31,6 +31,7 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
         files = (SCRIPT, CONFIG, Path("src/feature_generation/__init__.py"),
                  Path("src/feature_generation/config.py"),
                  Path("src/feature_generation/prosst_config.py"),
+                 Path("src/feature_generation/structure_sources.py"),
                  Path("src/feature_generation/prosst_artifacts.json"))
         for path in files:
             (self.root / path.parent).mkdir(parents=True, exist_ok=True)
@@ -43,6 +44,9 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
             writer.writeheader()
             writer.writerow(dict(DMS_id=ASSAY, DMS_filename=f"{ASSAY}.csv", target_seq="ACD"))
         (raw / f"{ASSAY}.csv").write_text("mutant,mutated_sequence,DMS_score\nA1C,CCD,1.0\n")
+        self.manifests = self.root / "data/structures/protssn_proteingym/manifests"
+        self.manifests.mkdir(parents=True)
+        (self.manifests / f"{ASSAY}.json").write_text("registered structure")
         self.records = self.root / "calls.jsonl"
         self.bootstrap = self.workspace / "bootstrap.sh"
         self.bootstrap.write_text(textwrap.dedent("""\
@@ -191,7 +195,7 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         stages = [r['kind'] for r in records]
         self.assertEqual(stages, ['inputs', 'runtime', 'lock', 'download', 'lock',
-                                  'structure-download', 'structure-verify', 'extract', 'validate',
+                                  'structure-verify', 'extract', 'validate',
                                   'score', 'validate-scores'])
         extraction = next(r for r in records if r['kind'] == 'extract')
         self.assertEqual(extraction['assays'], [ASSAY])
@@ -200,11 +204,26 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
         self.assertEqual(extraction['device'], 'cuda')
         self.assertEqual(Path(extraction['output_root']), self.root / 'data/features/pretrained/singles')
         self.assertEqual(extraction['layer'], 12)
+        self.assertTrue(extraction['cache_id'].startswith('protssn_proteingym--'))
+        self.assertEqual(Path(extraction['token_dir']),
+                         self.root / 'data/structures/protssn_proteingym/tokens/prosst')
+        structure = next(r for r in records if r['kind'] == 'structure-verify')
+        self.assertEqual(Path(structure['path']), self.manifests / f'{ASSAY}.json')
+        self.assertIn('Structure source: protssn_proteingym', result.stdout)
         validation = next(r for r in records if r['kind'] == 'validate')
         self.assertEqual(validation['cache_id'], extraction['cache_id'])
         self.assertEqual(validation['model_family'], 'prosst')
         self.assertEqual(Path(validation['path']), Path(extraction['output_root']) / ASSAY)
         self.assertTrue(next(r for r in records if r['kind'] == 'structure-verify')['require_oxygen'])
+
+    def test_missing_protssn_manifest_does_not_download_official_structure(self):
+        (self.manifests / f'{ASSAY}.json').unlink()
+        result, records = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Prepare the selected collection's manifest first", result.stderr)
+        stages = [r['kind'] for r in records]
+        self.assertNotIn('structure-download', stages)
+        self.assertNotIn('extract', stages)
 
     def test_windowed_preset_admits_long_references_and_counts_special_tokens(self):
         catalog = self.root / 'data/DMS_ProteinGym_substitutions/DMS_substitutions.csv'
@@ -301,6 +320,7 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
         with (raw.parent / "DMS_substitutions.csv").open("a", newline="", encoding="utf-8") as handle:
             csv.writer(handle).writerow(["SECOND_ASSAY", "SECOND_ASSAY.csv", "ACD"])
         (raw / "SECOND_ASSAY.csv").write_text("mutant,mutated_sequence,DMS_score\nA1C,CCD,1.0\n")
+        (self.manifests / "SECOND_ASSAY.json").write_text("registered structure")
 
     def test_all_catalog_assays_run_in_order_with_one_model_download(self):
         self.add_second_assay()

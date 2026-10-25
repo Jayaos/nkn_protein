@@ -14,12 +14,16 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
+from config import ExperimentConfig
 from data_loading import load_feature_bundle
+from data_loading.sequence_windows import COMPACT_SITE_FIELDS, compact_sequence_recipe, validate_compact_sequence_payload
 from feature_generation.inputs import prepare_assay, sha256_file
-from feature_generation.msa_config import LEGACY_SCORE_RECIPE, MSAConfig, validate_msa_metadata
+from feature_generation.msa_config import EMBEDDING_RECIPE, LEGACY_SCORE_RECIPE, MSAConfig, validate_msa_metadata
 from feature_generation.msa_runner import MSAContext, MSAInference, load_contexts, prepare, proteingym_token_window
-from feature_generation.storage import validate_sequence_cache
+from feature_generation.storage import check_existing, make_leaf_config, validate_sequence_cache, write_sequence_cache
 from feature_generation.score_storage import make_score_config, validate_score_cache
+from gp.model import ExactProteinGP
+from gp.preprocessing import FoldTransform
 
 ROOT = Path(__file__).resolve().parents[2]
 HELPERS = ROOT / "sbatch_run/run_prepare_rep"
@@ -155,9 +159,9 @@ class MSAPreparationTests(unittest.TestCase):
                                      feature_selection={"sequence": "msa_transformer/features-test"},
                                      score_sources=["scores/msa_transformer/scores-test"])
         self.assertEqual(bundle.variant_ids, ("head", "middle", "tail"))
-        expected = torch.tensor([np.mean([Alphabet().get_idx(aa) for aa in sequence]) for sequence in self.inputs.sequences])
+        expected = torch.tensor([np.mean([Alphabet().get_idx(aa) for aa in sequence[1:5]]) for sequence in self.inputs.sequences])
         torch.testing.assert_close(bundle.global_features[:, 0], expected, rtol=1e-6, atol=1e-6)
-        torch.testing.assert_close(bundle.global_features[:, 1], torch.full((3,), 13 / 6, dtype=torch.float64))
+        torch.testing.assert_close(bundle.global_features[:, 1], torch.full((3,), 2.5, dtype=torch.float64))
         torch.testing.assert_close(bundle.local_features["sequence_site"][:, 1], torch.tensor([2., 3., 3.], dtype=torch.float64))
         with (root / "scores/msa_transformer/scores-test/mean_score.csv").open() as handle:
             scores = [float(row["score"]) for row in csv.DictReader(handle)]
@@ -176,12 +180,144 @@ class MSAPreparationTests(unittest.TestCase):
             seed_scores.append(per_seed)
             homologs = context.window("ACDEFG", 0, 6)[1:]
             context_sum = np.array([[Alphabet().get_idx(aa) for aa in seq] for _, seq in homologs]).sum(0)
-            global_contexts.append(context_sum.mean())
+            global_contexts.append(context_sum[1:5].mean())
             site_contexts.append(context_sum[[1, 3, 4]])
         self.assertGreater(len({tuple(values) for values in seed_scores}), 1)
         np.testing.assert_allclose(scores, np.mean(seed_scores, axis=0), atol=1e-5)
+        # The generated ProteinGym scores must reach the GP mean, preserving
+        # variant order and using only training-fold scores for normalization.
+        expected_scores = torch.tensor(np.mean(seed_scores, axis=0), dtype=torch.float64)
+        self.assertEqual(bundle.score_names, ("scores/msa_transformer/scores-test",))
+        torch.testing.assert_close(bundle.scores[:, 0], expected_scores, atol=1e-5, rtol=1e-6)
+        train, heldout = bundle.select([0, 1]), bundle.select([2])
+        transform = FoldTransform.fit(train)
+        experiment = ExperimentConfig.load(ROOT / "configs/msa_transformer_nkn.json")
+        gp = ExactProteinGP(transform.apply(train), experiment.model, experiment.training)
+        with torch.no_grad():
+            gp.intercept.fill_(0.4)
+            gp.coefficients.fill_(1.7)
+        expected_mean = 0.4 + 1.7 * (expected_scores[2:] - expected_scores[:2].mean()) / expected_scores[:2].std(unbiased=False)
+        torch.testing.assert_close(gp.mean(transform.apply(heldout)), expected_mean, atol=1e-5, rtol=1e-6)
         np.testing.assert_allclose(bundle.global_features[:, 2], np.mean(global_contexts), atol=1e-5)
         np.testing.assert_allclose(bundle.local_features["sequence_site"][:, 2], np.mean(site_contexts, axis=0), atol=1e-5)
+
+    def test_fixed_msa_global_windows_weight_short_tail_and_keep_outside_mutations_in_sites(self):
+        reference = Alphabet.tokens[:-1]
+        config = replace(self.config, seeds=(1,), max_depth=2)
+        # Nonzero MSA start; shorter than, equal to, and longer than max_length.
+        for msa_length in (3, 4, 7):
+            with self.subTest(msa_length=msa_length):
+                start, end = 6, 6 + msa_length
+                positions = [1, 6, 7, end, end + 1, len(reference)]
+                rows = []
+                for position in positions:
+                    old = reference[position - 1]
+                    new = "V" if old != "V" else "A"
+                    sequence = reference[:position - 1] + new + reference[position:]
+                    rows.append({"mutant": f"{old}{position}{new}", "mutated_sequence": sequence})
+                inputs = replace(self.inputs, reference_sequence=reference, rows=rows)
+                msa = [("query", reference[start:end]), ("homolog", reference[start:end])]
+                context = MSAContext(msa, [1., 1.], list(range(start + 1, end + 1)), reference, config)
+                model = Model()
+                inference = MSAInference(model, Alphabet(), config)
+                globals_, sites = inference.embeddings(inputs, [context], lambda _: None)
+                expected = torch.tensor([
+                    [Alphabet().get_idx(aa) for aa in sequence[start:end]] for sequence in inputs.sequences
+                ], dtype=torch.float32).mean(1)
+                torch.testing.assert_close(globals_[:, 0], expected)
+                # Position-dependent output detects both wrong boundaries and
+                # an unweighted average of means for the final 3-residue chunk.
+                window_lengths = [min(4, msa_length - offset) for offset in range(0, msa_length, 4)]
+                position_mean = sum(width * (width + 1) / 2 for width in window_lengths) / msa_length
+                torch.testing.assert_close(globals_[:, 1], torch.full((len(rows),), position_mean))
+                torch.testing.assert_close(globals_[[0, 1, 4, 5]], globals_[0].expand(4, -1))
+                expected_sites = torch.tensor([Alphabet().get_idx(sequence[position - 1])
+                                               for sequence, position in zip(inputs.sequences, positions)], dtype=torch.float32)
+                torch.testing.assert_close(sites["site_embeddings"][:, 0], expected_sites)
+                self.assertEqual(sites["site_window_starts"].tolist(),
+                                 [max(0, min(position - 3, len(reference) - 4)) for position in positions])
+                self.assertTrue(all(tokens.shape[-1] <= 5 for tokens, _ in model.calls))
+                self.assertTrue(all(representations for _, representations in model.calls))
+                # Terminal site windows have no MSA overlap and use one row.
+                query_only = [tokens for tokens, _ in model.calls if tokens.shape[1] == 1]
+                self.assertEqual(len(query_only), 2)
+                self.assertEqual(sites["site_embeddings"][[0, -1], 2].tolist(), [0., 0.])
+                # Adjacent outside mutations retain partial homolog evidence.
+                self.assertGreater(sites["site_embeddings"][1, 2].item(), 0.)
+                self.assertGreater(sites["site_embeddings"][4, 2].item(), 0.)
+
+    def test_embeddings_drop_all_gap_rows_per_window_without_changing_score_rows(self):
+        config = replace(self.config, seeds=(1,), max_depth=5)
+        context = MSAContext([("query", "CDEF"), ("homolog1", "-D--"), ("homolog2", "---F")],
+                             self.weights, [2, 3, 4, 5], "ACDEFG", config)
+        inference = MSAInference(self.model, Alphabet(), config)
+        # Partial coverage keeps both draws of homolog1, with flank gaps.
+        inference.forward(context, "VCDEFG", (0, 3))
+        expected_rows = [("query", "VCD"), ("homolog1", "--D"), ("homolog1", "--D")]
+        _, _, expected = Alphabet().get_batch_converter()([expected_rows])
+        torch.testing.assert_close(self.model.calls[-1][0], expected)
+        # Actual residue evidence matters, even for a column inside coverage.
+        for bounds in ((3, 4), (5, 6)):
+            values = inference.forward(context, "ACDWFG", bounds)
+            self.assertEqual(self.model.calls[-1][0].shape[1], 1)
+            self.assertEqual(values[0, 2].item(), 0.)
+        self.assertEqual(len(context.window("ACDEFG", 0, 3)), config.max_depth)
+        inference.scores(self.inputs, [context], lambda _: None)
+        self.assertTrue(all(tokens.shape[1] == config.max_depth
+                            for tokens, representations in self.model.calls if not representations))
+
+    def test_msa_region_metadata_payload_validation_and_legacy_features(self):
+        self.assertEqual(self.run_preparation()[0]["status"], "completed")
+        root = self.config.output_root / "tiny"
+        leaf = root / "sequence/msa_transformer/features-test"
+        config = json.loads((leaf / "config.json").read_text())
+        payload = torch.load(leaf / "features.pt", weights_only=True)
+        self.assertEqual((config["msa_recipe_version"], payload["represented_length"]), (3, 4))
+        self.assertEqual((payload["global_region_start"], payload["global_region_end"]), (1, 5))
+        torch.testing.assert_close(payload["positions"], torch.arange(1, 7))
+        for changes in ({"global_region": "full_query"}, {"global_region_start": None},
+                        {"global_region_start": True}, {"global_region_end": 1},
+                        {"global_region_end": 6}, {"global_window_aggregation": "mean_of_window_means"},
+                        {"embedding_homolog_filter": "keep_all_rows"}, {"empty_embedding_window": "esm2"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                make_leaf_config("invalid", {**config, **changes}, model_family="msa_transformer")
+        with self.assertRaises(ValueError):
+            compact_sequence_recipe({**config, "global_region_end": 7}, reference_length=6)
+        for changes in ({"represented_length": 6}, {"global_region_start": 0}, {"global_region_end": 6},
+                        {"global_region": "full_query"}, {"site_window_starts": torch.zeros(3, dtype=torch.long)}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                validate_compact_sequence_payload({**payload, **changes}, config, 6, [[2], [4], [5]])
+        missing_region = {key: value for key, value in config.items() if key != "global_region"}
+        with self.assertRaises(ValueError):
+            compact_sequence_recipe(missing_region)
+
+        # v2 full-query features retain their original coverage and load beside v3.
+        legacy = {key: value for key, value in config.items()
+                  if key not in {*EMBEDDING_RECIPE, "global_region_start", "global_region_end"}}
+        legacy["msa_recipe_version"] = 2
+        legacy = make_leaf_config("legacy-v2", legacy, model_family="msa_transformer")
+        legacy_leaf = write_sequence_cache(root, "legacy-v2", self.inputs, legacy, payload["embeddings"], {},
+                                           site_data={key: payload[key] for key in COMPACT_SITE_FIELDS})
+        self.assertEqual(torch.load(legacy_leaf / "features.pt", weights_only=True)["represented_length"], 6)
+        validate_sequence_cache(root, "legacy-v2", "msa_transformer")
+        bundle = load_feature_bundle(root, enabled_branches=["sequence_global", "sequence_site"],
+                                     feature_selection={"sequence": "msa_transformer/legacy-v2"},
+                                     score_sources=["scores/msa_transformer/scores-test"])
+        self.assertEqual(bundle.global_features.shape, (3, 768))
+        with self.assertRaisesRegex(ValueError, "new cache ID"):
+            check_existing(root, "features-test", self.inputs, {**legacy, "checkpoint": "features-test"}, resume=True)
+
+    def test_new_feature_cache_reuses_unchanged_v2_scores(self):
+        self.assertEqual(self.run_preparation()[0]["status"], "completed")
+        leaf = self.config.output_root / "tiny/scores/msa_transformer/scores-test"
+        before = {path.name: path.read_bytes() for path in leaf.iterdir()}
+        self.assertEqual(json.loads(before["config.json"])["msa_recipe_version"], 2)
+        self.model.calls.clear()
+        result = self.run_preparation(config=replace(self.config, cache_id="another-feature-cache"), resume=True)[0]
+        self.assertEqual((result["sequence"], result["scores"]), ("completed", "skipped"))
+        self.assertTrue(self.model.calls)
+        self.assertTrue(all(representations for _, representations in self.model.calls))
+        self.assertEqual({path.name: path.read_bytes() for path in leaf.iterdir()}, before)
 
     def test_resume_skips_both_stages_and_rejects_changed_sampling(self):
         self.assertEqual(self.run_preparation()[0]["status"], "completed")
@@ -235,7 +371,7 @@ class MSAPreparationTests(unittest.TestCase):
         for name in ("msa_transformer_nkn.json", "msa_transformer_proteinmpnn_nkn.json"):
             experiment = json.loads((ROOT / "configs" / name).read_text())
             self.assertEqual(experiment["feature_selection"]["sequence"], f"msa_transformer/{cfg.cache_id}")
-            self.assertIn(f"scores/msa_transformer/{cfg.score_cache_id}", experiment["score_sources"])
+            self.assertEqual(experiment["score_sources"], [f"scores/msa_transformer/{cfg.score_cache_id}"])
         for change in ({"seeds": []}, {"seeds": [1, 1]}, {"seeds": [True]}, {"scoring_token_window": 1022},
                        {"sampling": "weighted_without_replacement_sorted_query_first"}):
             with self.subTest(change=change), self.assertRaises(ValueError):

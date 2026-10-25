@@ -2,7 +2,7 @@
 
 ProteinGym's weighted replacement sampler supplies one fixed context per seed.
 Scores use its MSA-interval token windows and are averaged over sampling seeds.
-The full-query global/site embedding ensemble is a separate NKN extension.
+MSA-region global means and full-query centered sites are an NKN extension.
 """
 
 import csv
@@ -16,7 +16,7 @@ import torch
 from data_loading.features import ALPHABET, parse_substitutions
 from data_loading.sequence_windows import centered_window_bounds
 from .inputs import prepare_assay, safe_component, sha256_file
-from .msa_config import SAMPLING, SCORE_RECIPE
+from .msa_config import EMBEDDING_RECIPE, SAMPLING, SCORE_RECIPE
 from . import score_storage, storage
 
 
@@ -58,10 +58,15 @@ class MSAContext:
                 padded[position - 1] = residue
             self.homologs.append((rows[index][0], "".join(padded)))
 
-    def window(self, query, start, end):
+    def window(self, query, start, end, *, drop_empty_homologs=False):
         if len(query) != len(self.reference) or not 0 <= start < end <= len(query):
             raise ValueError("Invalid full-query MSA window")
-        return [("query", query[start:end]), *[(name, seq[start:end]) for name, seq in self.homologs]]
+        homologs = [(name, seq[start:end]) for name, seq in self.homologs]
+        if drop_empty_homologs:
+            # Preserve sampled order and duplicates among rows with evidence.
+            # With no evidence in this window, the same model gets query only.
+            homologs = [(name, seq) for name, seq in homologs if seq.strip("-")]
+        return [("query", query[start:end]), *homologs]
 
 
 def load_contexts(config, inputs, validate_pair):
@@ -143,8 +148,9 @@ class MSAInference:
 
     def forward(self, context, query, bounds, mask_position=None):
         start, end = bounds
-        _, _, tokens = self.converter([context.window(query, start, end)])
-        if tokens.shape != (1, len(context.indices), end - start + self.offset + int(self.alphabet.append_eos)):
+        rows = context.window(query, start, end, drop_empty_homologs=mask_position is None)
+        _, _, tokens = self.converter([rows])
+        if tokens.shape != (1, len(rows), end - start + self.offset + int(self.alphabet.append_eos)):
             raise ValueError("MSA tokenizer changed alignment dimensions")
         column = None
         if mask_position is not None:
@@ -182,7 +188,10 @@ class MSAInference:
     def _embeddings_one(self, inputs, context, progress):
         length, width = inputs.length, self.config.max_length
         mutations = [parse_substitutions(row["mutant"], row["mutated_sequence"], inputs.reference_sequence) for row in inputs.rows]
-        global_bounds = [(start, min(start + width, length)) for start in range(0, length, width)]
+        # Every variant uses the same columns and boundaries inside MSA coverage.
+        # Site windows below still use full-reference coordinates.
+        global_bounds = [(start, min(start + width, context.end))
+                         for start in range(context.start, context.end, width)]
         # Reuse WT sums only for windows whose query is unchanged. A mutation in
         # a different window cannot affect a separate model invocation.
         wt_sums = {}
@@ -200,7 +209,7 @@ class MSAInference:
         for index, (sequence, sites) in enumerate(zip(inputs.sequences, mutations)):
             site_bounds = {centered_window_bounds(position, length, width) for position in sites}
             retained = {}
-            total = torch.zeros(768)
+            total = torch.zeros(768, dtype=torch.float64)
             for window in global_bounds:
                 start, end = window
                 changed = any(start < position <= end for position in sites)
@@ -208,13 +217,15 @@ class MSAInference:
                     total += wt_sums[window]
                     continue
                 values = self.forward(context, sequence, window)
-                summed = values.sum(0)
+                summed = values.sum(0, dtype=torch.float64)
                 total += summed
                 if not changed:
                     wt_sums[window] = summed
                 if window in site_bounds:
                     retained[window] = values
-            embeddings[index] = total / length
+            # Sum residue vectors, then divide by covered length: exactly the
+            # length-weighted mean of window means, including a short last one.
+            embeddings[index] = total / (context.end - context.start)
             for position in sites:
                 window = centered_window_bounds(position, length, width)
                 if window not in retained:
@@ -289,7 +300,9 @@ def prepare(config, assay_ids, runtime_report, inference, validate_pair, *, resu
                 "msa_covered_positions": context.columns,
             }
             feature_config = storage.make_leaf_config(config.cache_id, {
-                **common, "pooling": "mean", "truncation": "none", "includes_special_tokens": False,
+                **common, **EMBEDDING_RECIPE,
+                "global_region_start": context.start, "global_region_end": context.end,
+                "pooling": "mean", "truncation": "none", "includes_special_tokens": False,
                 "uncovered_positions": config.uncovered_positions,
                 "embedding_aggregation": "arithmetic_mean_over_sampling_seeds",
                 "window_policy": "centered_clamped", "window_indexing": "zero_based_half_open",

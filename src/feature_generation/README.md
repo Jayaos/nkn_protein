@@ -443,15 +443,36 @@ The output averages float32 per-seed log-odds in float64, as ProteinGym does.
 Mutation sites outside the MSA interval fail score preparation rather than
 producing a complete score cache. Input preflight checks this coverage too.
 
-The global/site embeddings are an NKN extension, averaged over the same five
-sampled contexts. They keep the full reference or mutant query. Homologs are
-mapped through `columns.csv` and gap-padded outside MSA coverage, preserving
-sequence context at those positions. Global embeddings average query residues
-across fixed nonoverlapping windows of at most 1,022 residues, weighted by
-window length. Site embeddings use centered windows around each mutation in
-the mutated query. Special tokens and homolog rows are excluded from pooling.
-The embedding `max_length` and `uncovered_positions` settings do not change the
-ProteinGym scoring windows or coverage.
+These per-variant zero-shot scores are saved in `mean_score.csv` and selected
+through `score_sources` in both MSA Transformer NKN presets. They supply the GP
+mean: `m(x) = intercept + coefficient * standardized_MSA_score(x)`. Score
+standardization is fitted on the training fold only; the intercept and
+coefficient are learned during GP training. The saved CSV contains the raw
+ProteinGym-style seed-averaged log-odds. Length-weighted embedding pooling does
+not alter these scores.
+
+The v3 global/site embeddings are an NKN extension, averaged over the same five
+sampled contexts. Both use unmasked mutant queries and layer-12 query-row
+representations from MSA Transformer:
+
+- **Global:** cover only the MSA interval, using fixed consecutive nonoverlapping
+  windows of at most 1,022 residues. The same boundaries apply to every variant,
+  including variants mutated inside the interval. One window covers a short
+  interval. Combine window means as `sum(window_length * window_mean) /
+  MSA_interval_length`, accumulating in float64 and saving float32. Thus a short
+  final window contributes in proportion to its residue count. Mutations outside
+  coverage leave this input WT and share the WT global embedding.
+- **Site:** use a centered, clamped window in the **full mutated query**, then
+  extract the mutated residue's vector. Homologs are mapped through `columns.csv`
+  and gap-padded outside MSA coverage. Remove homolog rows that are all gaps in
+  each embedding window, preserving sampled order and duplicates among remaining
+  rows. If none remain, run the same MSA Transformer with the query as its only
+  row. This also applies to internal windows lacking homolog residue evidence.
+
+Special tokens and homolog rows are excluded from pooling. The cache records
+zero-based half-open global interval bounds and its represented length; site
+coordinates and sequence identities still refer to the full protein. These
+embedding policies do not change ProteinGym scoring windows, rows or coverage.
 
 Preparation consumes the project's generated MSA/weight pairs. Matching scoring
 settings alone does not reproduce published ProteinGym numbers: that also
@@ -461,7 +482,7 @@ Outputs share the existing immutable single-mutant assay table:
 
 ```text
 data/features/pretrained/singles/<assay>/
-  sequence/msa_transformer/msa1b-layer12-depth400-seeds1-5-full1022-sites-v2/features.pt
+  sequence/msa_transformer/msa1b-layer12-depth400-seeds1-5-msaregion1022-sites-v3/features.pt
   scores/msa_transformer/msa1b-depth400-seeds1-5-proteingym-masked-marginals-v2/mean_score.csv
 ```
 
@@ -469,8 +490,9 @@ Both leaves include configuration, provenance and completion checksums.
 `--resume` is enabled by the sbatch script and validates completed leaves before
 skipping them. Feature and score stages resume independently; failed assays do
 not stop later assays, but any failure makes the job exit nonzero. Changing the
-checkpoint, pair, sampled rows or recipe requires new cache IDs. Existing v1
-caches remain readable and are separate from the new v2 selections. The
+checkpoint, pair, sampled rows or recipe requires new cache IDs. Existing v1/v2
+embedding caches remain readable under their original IDs. The shipped NKN
+presets select new v3 features; existing valid v2 score caches are reused. The
 16,384-token setting controls upstream axial-attention chunking; it does not
 truncate the alignment. Reducing depth creates a custom recipe that differs
 from ProteinGym's default and requires new cache IDs.
@@ -492,7 +514,7 @@ In a custom experiment config, select:
 ```json
 {
   "feature_selection": {
-    "sequence": "msa_transformer/msa1b-layer12-depth400-seeds1-5-full1022-sites-v2"
+    "sequence": "msa_transformer/msa1b-layer12-depth400-seeds1-5-msaregion1022-sites-v3"
   },
   "score_sources": [
     "scores/msa_transformer/msa1b-depth400-seeds1-5-proteingym-masked-marginals-v2"
@@ -504,7 +526,7 @@ Validate saved leaves in either the MSA environment or the NKN environment:
 
 ```bash
 export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
-python -m feature_generation.cli validate --features data/features/pretrained/singles/YAP1_HUMAN_Araya_2012 --model-family msa_transformer --cache-id msa1b-layer12-depth400-seeds1-5-full1022-sites-v2
+python -m feature_generation.cli validate --features data/features/pretrained/singles/YAP1_HUMAN_Araya_2012 --model-family msa_transformer --cache-id msa1b-layer12-depth400-seeds1-5-msaregion1022-sites-v3
 python -m feature_generation.cli validate --features data/features/pretrained/singles/YAP1_HUMAN_Araya_2012 --feature-type scores --model-family msa_transformer --cache-id msa1b-depth400-seeds1-5-proteingym-masked-marginals-v2
 ```
 
@@ -562,9 +584,35 @@ python -m feature_generation.cli prepare-structure --assay $assay --structure pa
 ```
 
 A direct structure URL can be supplied with `download-structure --url ...`.
-Raw downloads live in `data/structures/raw/`, and validated manifests in
-`data/structures/manifests/<assay>.json`. The manifest records the structure hash,
+Raw downloads live in `data/structures/proteingym/raw/`, and validated manifests in
+`data/structures/proteingym/manifests/<assay>.json`. The manifest records the structure hash,
 coordinate model, target chain, and reference-position-to-author-residue mapping.
+
+Structure collections live under `data/structures/proteingym/` and
+`data/structures/protssn_proteingym/`. Each collection has `source.json`,
+`downloads/`, `raw/`, `manifests/`, and `tokens/prosst/`. Source metadata records
+upstream versions and per-file checksums; raw filenames and PDB contents are
+preserved. Manifest filenames use canonical assay IDs; known upstream filename
+aliases are recorded in the collection metadata.
+
+Structure-conditioned extraction configs select `structure_source` (default:
+`proteingym`). Omitted manifest/token paths resolve inside that source. Explicit
+paths and source-prefixed cache IDs belonging to another collection are rejected.
+Automatic feature and score cache names use `<source>--<model-recipe>`; shipped
+presets and experiment selections follow this convention. Deliberately supplied
+custom cache IDs remain supported and retain all existing identity checks.
+ProSST token caches remain keyed by quantizer recipe and structure signature
+inside the selected collection. The structure-registration CLI also accepts
+`--structure-source`. Automatic archive downloads remain restricted to the
+official collection; jobs require an existing manifest for other sources.
+
+When migrating an existing workspace, relocate `raw/`, `manifests/`, and
+`tokens/` together under `proteingym/` to preserve relative manifest references.
+Legacy feature caches retain their original IDs. Source-qualified copies need
+their checkpoint/config signatures and completion checksums updated consistently;
+renaming a feature directory alone is insufficient. Existing legacy cache IDs
+can still be selected explicitly for historical runs.
+
 For a single-structure manifest, the selected chain must match the entire reference sequence with N/CA/C atoms;
 ProteinMPNN additionally requires O. Partial coverage, sequence mismatches,
 noncanonical residues, and ambiguous backbone alternate conformations are rejected.
@@ -579,7 +627,7 @@ python -m feature_generation.cli download --config configs/extraction/proteinmpn
 python -m feature_generation.cli download --config configs/extraction/esm_if1_142m.json
 python -m feature_generation.cli extract --config configs/extraction/proteinmpnn_v48_020_kermut.json --assay $assay --singles-only --resume
 python -m feature_generation.cli extract --config configs/extraction/esm_if1_142m.json --assay $assay --resume
-python -m feature_generation.cli validate --features "data/features/pretrained/singles/$assay" --feature-type inverse_folding --model-family proteinmpnn --cache-id v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb
+python -m feature_generation.cli validate --features "data/features/pretrained/singles/$assay" --feature-type inverse_folding --model-family proteinmpnn --cache-id proteingym--v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb
 python -m feature_generation.cli validate --features "data/features/pretrained/$assay" --feature-type inverse_folding --model-family esm_if1
 ```
 
@@ -614,7 +662,7 @@ To prepare it for experiments that still select that cache, run it separately:
 
 ```powershell
 python -m feature_generation.cli extract --config configs/extraction/proteinmpnn_v48_020.json --assay $assay --singles-only --resume
-python -m feature_generation.cli validate --features "data/features/pretrained/singles/$assay" --feature-type inverse_folding --model-family proteinmpnn --cache-id v_48_020-backbone_only-8907e6671bfb
+python -m feature_generation.cli validate --features "data/features/pretrained/singles/$assay" --feature-type inverse_folding --model-family proteinmpnn --cache-id proteingym--v_48_020-backbone_only-8907e6671bfb
 ```
 
 Conditional inference performs one decoder pass per reference position per
@@ -685,7 +733,7 @@ registers a schema-v2 fragment manifest:
 ```bash
 python -m feature_generation.cli download-structure --assay BRCA2_HUMAN_Erwood_2022_HEK293T
 python -m feature_generation.cli extract --config configs/extraction/proteinmpnn_v48_020_kermut.json --assay BRCA2_HUMAN_Erwood_2022_HEK293T --singles-only --device cuda --resume
-python -m feature_generation.cli validate --features data/features/pretrained/singles/BRCA2_HUMAN_Erwood_2022_HEK293T --feature-type inverse_folding --model-family proteinmpnn --cache-id v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb
+python -m feature_generation.cli validate --features data/features/pretrained/singles/BRCA2_HUMAN_Erwood_2022_HEK293T --feature-type inverse_folding --model-family proteinmpnn --cache-id proteingym--v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb
 ```
 
 ProteinMPNN processes reference intervals 1Ã¢â‚¬â€œ1000, 1001Ã¢â‚¬â€œ2085, and 2086Ã¢â‚¬â€œ2832 in
@@ -714,7 +762,7 @@ and mean scores must also be prepared with the existing ESM2 workflow.
 Local fragments can be registered explicitly using repeated file/range pairs:
 
 ```bash
-python -m feature_generation.cli prepare-structure --assay BRCA2_HUMAN_Erwood_2022_HEK293T --structure data/structures/raw/BRCA2_HUMAN_1-1000.pdb --reference-range 1-1000 --structure data/structures/raw/BRCA2_HUMAN_1001-2085.pdb --reference-range 1001-2085 --structure data/structures/raw/BRCA2_HUMAN_2086-2832.pdb --reference-range 2086-2832
+python -m feature_generation.cli prepare-structure --assay BRCA2_HUMAN_Erwood_2022_HEK293T --structure data/structures/proteingym/raw/BRCA2_HUMAN_1-1000.pdb --reference-range 1-1000 --structure data/structures/proteingym/raw/BRCA2_HUMAN_1001-2085.pdb --reference-range 1001-2085 --structure data/structures/proteingym/raw/BRCA2_HUMAN_2086-2832.pdb --reference-range 2086-2832
 ```
 
 ### Kermut reference mappings
@@ -885,7 +933,7 @@ weights stay frozen, and experimental labels are never passed to the scorer.
 
 ```bash
 python -m feature_generation.cli score --config configs/extraction/esm_if1_142m.json --output-root data/features/pretrained/singles --assay YAP1_HUMAN_Araya_2012 --singles-only --device cuda --batch-size 1 --resume
-python -m feature_generation.cli validate --features data/features/pretrained/singles/YAP1_HUMAN_Araya_2012 --feature-type scores --model-family esm_if1 --cache-id esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b
+python -m feature_generation.cli validate --features data/features/pretrained/singles/YAP1_HUMAN_Araya_2012 --feature-type scores --model-family esm_if1 --cache-id proteingym--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b
 ```
 
 The existing extraction config supplies the checkpoint, paths and optional
@@ -909,7 +957,7 @@ either alone or alongside existing ESM2/ProteinMPNN sources:
 
 ```json
 "score_sources": [
-  "scores/esm_if1/esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b"
+  "scores/esm_if1/proteingym--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b"
 ]
 ```
 
@@ -932,7 +980,7 @@ cache. There is no WT subtraction, DMS-label input, or finetuning.
 
 ```bash
 python -m feature_generation.cli score --config configs/extraction/proteinmpnn_v48_020.json --assay A0A1I9GEU1_NEIME_Kennouche_2019 --singles-only --device cuda --batch-size 1 --resume
-python -m feature_generation.cli validate --features data/features/pretrained/singles/A0A1I9GEU1_NEIME_Kennouche_2019 --feature-type scores --model-family proteinmpnn --cache-id v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb
+python -m feature_generation.cli validate --features data/features/pretrained/singles/A0A1I9GEU1_NEIME_Kennouche_2019 --feature-type scores --model-family proteinmpnn --cache-id proteingym--v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb
 ```
 
 Use `--device cpu` when no GPU is available. This reuses the existing ProteinMPNN
@@ -979,7 +1027,7 @@ No model inference runs for a matching validated completed score cache.
 data/features/pretrained/singles/<assay>/
   assay.json
   variants.csv
-  scores/proteinmpnn/v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb/
+  scores/proteinmpnn/proteingym--v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb/
     mean_score.csv
     config.json
     provenance.json
@@ -999,7 +1047,7 @@ Set experiment `score_sources` explicitly to the generated score source:
 {
   "model": {"enabled_branches": ["sequence_global", "inverse_folding"]},
   "score_sources": [
-    "scores/proteinmpnn/v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb"
+    "scores/proteinmpnn/proteingym--v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb"
   ]
 }
 ```
@@ -1171,7 +1219,7 @@ Use a separate output root when changing the variant subset.
 
 ```text
 data/models/prosst/ProSST-2048/<revision>/        # weights, codebook, verified source
-data/structures/tokens/prosst/<recipe>/<identity>/  # reusable reference tokens
+data/structures/proteingym/tokens/prosst/<recipe>/<identity>/  # reusable reference tokens
 data/features/pretrained/<assay>/sequence/prosst/<recipe>/
   features.pt
   config.json
@@ -1189,7 +1237,7 @@ The quantizer cache directory can be overridden with `--structure-token-dir`.
 ESM-2 and ProSST can coexist within one assay when their output root and variant
 selection match. The first sequence recipe remains
 the default. To use ProSST in a GP experiment, select
-`feature_selection["sequence"] = "prosst/ProSST-2048-layer12-fixed-backbone-e94ffee7846d-mean-all-nonoverlap2046-centered-sites"`.
+`feature_selection["sequence"] = "prosst/proteingym--ProSST-2048-layer12-fixed-backbone-e94ffee7846d-mean-all-nonoverlap2046-centered-sites"`.
 The loader supplies both global and mutation-site sequence branches from this compact cache. A full GP run still
 requires the other configured modalities and scores. This recipe supplies the
 variant sequence feature branch; it does not supply a separate WT structure cache.
@@ -1237,7 +1285,13 @@ assays are reported and later assays are attempted; any failure makes the job
 exit nonzero. The job verifies both embedding and score caches. Shared downloads
 and duplicate assay preparations use filesystem locks.
 
-The job reuses registered structures or downloads them from the pinned archive.
+The default singles preset selects `structure_source="protssn_proteingym"`:
+it reads `data/structures/protssn_proteingym/manifests/<assay>.json` and stores
+tokens under `data/structures/protssn_proteingym/tokens/prosst/`. Prepare those
+manifests before submission; raw PDBs alone are insufficient. Missing manifests
+fail the assay without falling back to the official ProteinGym collection.
+Embedding and score cache IDs start with `protssn_proteingym--`.
+The separate `prosst_2048.json` CLI preset retains the official `proteingym` source.
 Structures must cover the full reference with finite N/CA/C/O coordinates.
 Use `--config PATH` or `PROSST_CONFIG=PATH` to override paths, layer, batching, or
 resource guards; `--config` takes precedence. Relative paths use the repository
@@ -1264,7 +1318,7 @@ Each assay gets a separate score leaf:
 
 ```text
 data/features/pretrained/singles/<assay>/scores/prosst/
-  ProSST-2048-masked_marginals-fixed-backbone-float32-e94ffee7846d-centered2046/
+  protssn_proteingym--ProSST-2048-masked_marginals-fixed-backbone-float32-e94ffee7846d-centered2046/
     mean_score.csv
     config.json
     provenance.json
@@ -1273,7 +1327,7 @@ data/features/pretrained/singles/<assay>/scores/prosst/
 
 `mean_score.csv` contains `variant_id,score`. To use it for the GP mean, set
 `score_sources` to
-`["scores/prosst/ProSST-2048-masked_marginals-fixed-backbone-float32-e94ffee7846d-centered2046"]`.
+`["scores/prosst/protssn_proteingym--ProSST-2048-masked_marginals-fixed-backbone-float32-e94ffee7846d-centered2046"]`.
 Embedding selection remains independent. The score recipe does not depend on the
 embedding layer; resume verifies checkpoint, variant coverage, structure and
 structure-token identities, and file checksums.

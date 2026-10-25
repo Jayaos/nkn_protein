@@ -339,7 +339,7 @@ def load_feature_bundle(
     enabled_branches: Sequence[str] | None = None,
     *,
     inverse_folding_policy: str = "normalized",
-    structure_manifest_dir: str | Path = "data/structures/manifests",
+    structure_manifest_dir: str | Path = "data/structures/proteingym/manifests",
 ) -> FeatureBatch:
     """Load schema-v2 caches; selection and score sources never depend on labels.
 
