@@ -438,13 +438,15 @@ sbatch sbatch_run/run_prepare_rep/prepare_msa_transformer.sbatch --assay YAP1_HU
 
 Configuration precedence is `--config PATH`, `MSA_TRANSFORMER_CONFIG`, then
 `configs/extraction/msa_transformer.json`. The preset uses layer 12 (768
-dimensions), 400 MSA rows including the query, and sampling seeds 1, 2, 3, 4, 5.
-For each seed, Python's `random.choices` draws 399 homolog rows **with
+dimensions), 32 MSA rows including the query, and a single sampling seed, 1.
+For each seed, Python's `random.choices` draws 31 homolog rows **with
 replacement** using normalized non-query weights. Duplicate rows and draw order
-are preserved, including when the source alignment has fewer than 400 rows.
+are preserved, including when the source alignment has fewer than 32 rows.
 Each sampled context is reused across variants and windows. Query-only
-alignments use depth 1. Scores are averaged arithmetically over the five samples.
-These defaults match the pinned ProteinGym
+alignments use depth 1. Scores are averaged arithmetically over the configured
+samples; with the default `seeds: [1]`, the output is the seed-1 score.
+The preset reduces ProteinGym's 400 rows and five seeds to 32 rows and one seed
+while retaining the sampling and scoring methods from the pinned ProteinGym
 [scoring launcher](https://github.com/OATML-Markslab/ProteinGym/blob/144fe22b07dfaeec2b366f2346203a9838a55b4c/scripts/scoring_DMS_zero_shot/scoring_MSA_transformer_substitutions.sh)
 and [sampler/scorer](https://github.com/OATML-Markslab/ProteinGym/blob/144fe22b07dfaeec2b366f2346203a9838a55b4c/proteingym/baselines/esm/compute_fitness.py).
 
@@ -479,8 +481,8 @@ coefficient are learned during GP training. The saved CSV contains the raw
 ProteinGym-style seed-averaged log-odds. Length-weighted embedding pooling does
 not alter these scores.
 
-The v3 global/site embeddings are an NKN extension, averaged over the same five
-sampled contexts. Both use unmasked mutant queries and layer-12 query-row
+The v3 global/site embeddings are an NKN extension, averaged over the same
+configured contexts (one by default). Both use unmasked mutant queries and layer-12 query-row
 representations from MSA Transformer:
 
 - **Global:** cover only the MSA interval, using fixed consecutive nonoverlapping
@@ -510,8 +512,8 @@ Outputs share the existing immutable single-mutant assay table:
 
 ```text
 data/features/pretrained/singles/<assay>/
-  sequence/msa_transformer/msa1b-layer12-depth400-seeds1-5-msaregion1022-sites-v3/features.pt
-  scores/msa_transformer/msa1b-depth400-seeds1-5-proteingym-masked-marginals-v2/mean_score.csv
+  sequence/msa_transformer/msa1b-layer12-depth32-seed1-msaregion1022-sites-v3/features.pt
+  scores/msa_transformer/msa1b-depth32-seed1-proteingym-masked-marginals-v2/mean_score.csv
 ```
 
 Both leaves include configuration, provenance and completion checksums.
@@ -520,8 +522,10 @@ skipping them. Feature and score stages resume independently; failed assays do
 not stop later assays, but any failure makes the job exit nonzero. Changing the
 checkpoint, pair, sampled rows or recipe requires new cache IDs. Existing v1/v2
 embedding caches remain readable under their original IDs. The shipped NKN
-presets select new v3 features; existing valid v2 score caches are reused. The
-16,384-token setting controls upstream axial-attention chunking; it does not
+presets select depth-32, seed-1 v3 features and v2 scores. Existing depth-400
+and five-seed caches remain separate; preparation computes new outputs under
+the depth-32, seed-1 IDs.
+The 16,384-token setting controls upstream axial-attention chunking; it does not
 truncate the alignment. Reducing depth creates a custom recipe that differs
 from ProteinGym's default and requires new cache IDs.
 
@@ -542,10 +546,10 @@ In a custom experiment config, select:
 ```json
 {
   "feature_selection": {
-    "sequence": "msa_transformer/msa1b-layer12-depth400-seeds1-5-msaregion1022-sites-v3"
+    "sequence": "msa_transformer/msa1b-layer12-depth32-seed1-msaregion1022-sites-v3"
   },
   "score_sources": [
-    "scores/msa_transformer/msa1b-depth400-seeds1-5-proteingym-masked-marginals-v2"
+    "scores/msa_transformer/msa1b-depth32-seed1-proteingym-masked-marginals-v2"
   ]
 }
 ```
@@ -554,8 +558,8 @@ Validate saved leaves in either the MSA environment or the NKN environment:
 
 ```bash
 export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
-python -m feature_generation.cli validate --features data/features/pretrained/singles/YAP1_HUMAN_Araya_2012 --model-family msa_transformer --cache-id msa1b-layer12-depth400-seeds1-5-msaregion1022-sites-v3
-python -m feature_generation.cli validate --features data/features/pretrained/singles/YAP1_HUMAN_Araya_2012 --feature-type scores --model-family msa_transformer --cache-id msa1b-depth400-seeds1-5-proteingym-masked-marginals-v2
+python -m feature_generation.cli validate --features data/features/pretrained/singles/YAP1_HUMAN_Araya_2012 --model-family msa_transformer --cache-id msa1b-layer12-depth32-seed1-msaregion1022-sites-v3
+python -m feature_generation.cli validate --features data/features/pretrained/singles/YAP1_HUMAN_Araya_2012 --feature-type scores --model-family msa_transformer --cache-id msa1b-depth32-seed1-proteingym-masked-marginals-v2
 ```
 
 ## Inverse folding: ProteinMPNN and ESM-IF1

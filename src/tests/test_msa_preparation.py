@@ -88,7 +88,8 @@ class MSAPreparationTests(unittest.TestCase):
         ])
         self.config = MSAConfig("features-test", "scores-test", assay_index=self.index,
                                 msa_root=self.root / "pairs", msa_reference_csv=self.index,
-                                output_root=self.root / "features", max_depth=3, max_length=4, device="cpu")
+                                output_root=self.root / "features", max_depth=3, max_length=4,
+                                seeds=(1, 2, 3, 4, 5), device="cpu")
         self.directory = self.config.msa_root / "assays/tiny_run"
         self.directory.mkdir(parents=True)
         self.rows = [(">query", "CDEF"), (">homolog1", "CD-F"), (">homolog2", "-DEF")]
@@ -364,10 +365,10 @@ class MSAPreparationTests(unittest.TestCase):
         self.assertFalse((self.config.output_root / "tiny/scores/msa_transformer/scores-test").exists())
         self.assertFalse(any(not representations for _, representations in self.model.calls))
 
-    def test_preset_and_nkn_selectors_use_proteingym_ensemble(self):
+    def test_preset_and_nkn_selectors_use_depth32_single_seed(self):
         cfg = MSAConfig.load(ROOT / "configs/extraction/msa_transformer.json")
         self.assertEqual((cfg.max_depth, cfg.seeds, cfg.scoring_token_window, cfg.max_tokens_per_msa),
-                         (400, (1, 2, 3, 4, 5), 1024, 16384))
+                         (32, (1,), 1024, 16384))
         for name in ("msa_transformer_nkn.json", "msa_transformer_proteinmpnn_nkn.json"):
             experiment = json.loads((ROOT / "configs" / name).read_text())
             self.assertEqual(experiment["feature_selection"]["sequence"], f"msa_transformer/{cfg.cache_id}")

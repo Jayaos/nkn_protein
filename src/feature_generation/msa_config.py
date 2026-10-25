@@ -57,8 +57,8 @@ class MSAConfig:
     output_root: Path = Path("data/features/pretrained/singles")
     model_family: str = "msa_transformer"
     max_length: int = 1022
-    max_depth: int = 400
-    seeds: tuple[int, ...] = (1, 2, 3, 4, 5)
+    max_depth: int = 32
+    seeds: tuple[int, ...] = (1,)
     sampling: str = SAMPLING
     scoring_token_window: int = 1024
     max_tokens_per_msa: int = 16384

@@ -21,12 +21,12 @@
 # Config precedence: --config PATH, MSA_TRANSFORMER_CONFIG, shipped preset.
 # Default catalog: data/DMS_ProteinGym_substitutions/DMS_substitutions.csv;
 # individual assay CSVs may be beside it or in raw_substitutions/ below it.
-# ProteinGym sampling: 400 rows, weighted replacement, seeds 1..5, score averaging.
+# ProteinGym-style sampling: 32 rows, weighted replacement, seed 1.
 # Scores crop to the MSA interval and use upstream 1024-token optimal windows.
 # NKN v3 global: fixed consecutive windows over the MSA interval, length-weighted.
 # Sites: full-query centered windows, gap-padded homologs; drop all-gap rows,
 # using query-only MSA Transformer input if no homolog residues remain.
-# Both embeddings average over seeds. New v3 features reuse valid v2 scores.
+# Multiple configured seeds are averaged for both embeddings and scores.
 # Outputs: sequence_site, sequence_global and masked-marginal mean scores.
 set -eo pipefail
 

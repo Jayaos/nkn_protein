@@ -37,10 +37,10 @@
     ]
   },
   "feature_selection": {
-    "sequence": "msa_transformer/msa1b-layer12-depth400-seeds1-5-msaregion1022-sites-v3"
+    "sequence": "msa_transformer/msa1b-layer12-depth32-seed1-msaregion1022-sites-v3"
   },
   "score_sources": [
-    "scores/msa_transformer/msa1b-depth400-seeds1-5-proteingym-masked-marginals-v2"
+    "scores/msa_transformer/msa1b-depth32-seed1-proteingym-masked-marginals-v2"
   ],
   "training": {
     "max_steps": 10000,
