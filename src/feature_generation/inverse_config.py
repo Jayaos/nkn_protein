@@ -43,7 +43,7 @@ class InverseFoldingConfig:
     cache_id: str | None = None
     model_dir: Path | None = None
     output_root: Path = Path("data/features/pretrained")
-    assay_index: Path = Path("data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv")
+    assay_index: Path = Path("data/DMS_ProteinGym_substitutions/DMS_substitutions.csv")
     structure_source: str = "proteingym"
     structure_manifest_dir: Path | None = None
     conditioning_mode: str | None = None

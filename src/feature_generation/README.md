@@ -877,7 +877,7 @@ needed: the verified safetensors checkpoint already contains the MLM head.
 embedding extraction and scoring with `--singles-only` for only
 `PIN1_HUMAN_Tsuboyama_2023_1I6C`, `VKOR1_HUMAN_Chiasson_2020_activity`, and
 `BLAT_ECOLX_Jacquier_2013`, in that order, using the configured
-`raw_substitutions/DMS_substitutions.csv` catalog.
+`data/DMS_ProteinGym_substitutions/DMS_substitutions.csv` catalog.
 Its default
 `configs/extraction/esm2_650m_centered.json` saves centered mutation-site vectors
 and a full-sequence mean from fixed non-overlapping windows for NKN's sequence
@@ -1075,8 +1075,12 @@ Both preparation scripts support every assay in their configured
 ProteinMPNN defaults to the six failed-assay retry tasks; the explicit array
 below overrides that default to process the full catalog. Neither script applies
 a single-mutant-count threshold.
-`DMS_substitutions.csv` supplies metadata; each entry must have its corresponding
-variant CSV beside the catalog. Both scripts still filter variants to single
+All shipped preparation presets use the catalog at
+`data/DMS_ProteinGym_substitutions/DMS_substitutions.csv`. Each entry must have its
+corresponding variant CSV beside the catalog or in its `raw_substitutions/`
+subdirectory. Custom configs may set `assay_index` to another catalog; MSA
+Transformer also has `msa_reference_csv` for validating generated-pair metadata
+when the generation catalog snapshot is absent. Both scripts still filter variants to single
 mutants and save under `data/features/pretrained/singles/<assay>/`; this does not
 add indel assays or multi-mutant variants.
 

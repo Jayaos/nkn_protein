@@ -62,7 +62,7 @@ def _parser() -> argparse.ArgumentParser:
     ):
         structure = commands.add_parser(command, help=help_text)
         structure.add_argument("--assay", required=True)
-        structure.add_argument("--assay-index", type=Path, default=PROJECT_ROOT / "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv")
+        structure.add_argument("--assay-index", type=Path, default=PROJECT_ROOT / "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv")
         structure.add_argument("--chain", help="Author chain ID; required when the structure has multiple polymer chains")
         structure.add_argument("--model-index", type=int, default=1, help="One-based coordinate model index")
         structure.add_argument("--structure-source", choices=("proteingym", "protssn_proteingym"), default="proteingym")

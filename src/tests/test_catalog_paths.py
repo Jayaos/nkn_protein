@@ -8,6 +8,11 @@ import tempfile
 import unittest
 
 from data_loading import AssayCatalog
+from feature_generation.cli import _parser
+from feature_generation.config import ExtractionConfig, PROJECT_ROOT
+from feature_generation.inverse_config import InverseFoldingConfig
+from feature_generation.msa_config import MSAConfig
+from feature_generation.prosst_config import ProSSTConfig
 
 spec = importlib.util.spec_from_file_location(
     "preparation_assays", Path(__file__).resolve().parents[2] / "sbatch_run/run_prepare_rep/list_assays.py",
@@ -17,6 +22,18 @@ spec.loader.exec_module(helper)
 
 
 class CatalogPathTests(unittest.TestCase):
+    def test_preparation_defaults_use_top_level_catalog(self):
+        expected = PROJECT_ROOT / "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv"
+        msa = MSAConfig("features", "scores")
+        for config in (ExtractionConfig(), InverseFoldingConfig(),
+                       InverseFoldingConfig(model_family="esm_if1"), ProSSTConfig(), msa):
+            with self.subTest(config=type(config).__name__):
+                self.assertEqual(config.assay_index, expected.resolve())
+        self.assertEqual(msa.msa_reference_csv, expected.resolve())
+        for arguments in (["download-structure", "--assay", "tiny"],
+                          ["prepare-structure", "--assay", "tiny", "--structure", "tiny.pdb"]):
+            self.assertEqual(_parser().parse_args(arguments).assay_index, expected)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

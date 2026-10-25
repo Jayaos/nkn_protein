@@ -49,9 +49,9 @@ SCORE_RECIPE = {
 class MSAConfig:
     cache_id: str
     score_cache_id: str
-    assay_index: Path = Path("data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv")
+    assay_index: Path = Path("data/DMS_ProteinGym_substitutions/DMS_substitutions.csv")
     msa_root: Path = Path("data/msa/DMS_msa_weights_generated")
-    msa_reference_csv: Path = Path("data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv")
+    msa_reference_csv: Path = Path("data/DMS_ProteinGym_substitutions/DMS_substitutions.csv")
     runtime_dir: Path = Path("data/models/msa_transformer")
     runtime_config: Path = Path("configs/setup/msa_transformer_runtime.json")
     output_root: Path = Path("data/features/pretrained/singles")

@@ -14,8 +14,9 @@ import unittest
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 PREPARATION = Path("sbatch_run/run_prepare_rep")
-CONFIGS = ("esm2_650m.json", "esm2_650m_residue.json", "esm2_650m_centered.json",
-           "proteinmpnn_v48_020_kermut.json", "proteinmpnn_v48_020.json", "esm_if1_142m.json")
+CONFIGS = ("esm2_8m.json", "esm2_650m.json", "esm2_650m_residue.json", "esm2_650m_centered.json",
+           "proteinmpnn_v48_020_kermut.json", "proteinmpnn_v48_020.json", "esm_if1_142m.json",
+           "msa_transformer.json", "prosst_2048.json", "prosst_2048_singles.json")
 SCRIPTS = ("prepare_esm2.sbatch", "prepare_proteinmpnn.sbatch")
 ESM_IF1_SCRIPT = "prepare_esm_if1.sbatch"
 SELECTED_ASSAYS = ["PIN1_HUMAN_Tsuboyama_2023_1I6C", "VKOR1_HUMAN_Chiasson_2020_activity",
@@ -44,6 +45,7 @@ class PreparationFixture(unittest.TestCase):
         self.workspace = Path(temporary.name)
         self.root = self.workspace / "repository with spaces"
         self.raw = self.root / "data/DMS_ProteinGym_substitutions/raw_substitutions"
+        self.index = self.raw.parent / "DMS_substitutions.csv"
         for directory in (PREPARATION, Path("configs/extraction"), Path("src/feature_generation"),
                           Path("etc/profile.d"), self.raw.relative_to(self.root)):
             (self.root / directory).mkdir(parents=True)
@@ -66,16 +68,25 @@ class PreparationFixture(unittest.TestCase):
                 "mutant,mutated_sequence,DMS_score\nA1C,CCD,1.0\n", encoding="utf-8")
 
     def write_catalog(self):
-        with (self.raw / "DMS_substitutions.csv").open("w", encoding="utf-8", newline="") as handle:
+        # Only the new catalog location exists; a duplicate in raw_substitutions
+        # would hide stale paths in a launcher's shipped config.
+        with self.index.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=("DMS_id", "DMS_filename", "target_seq", "UniProt_ID"))
             writer.writeheader()
             writer.writerows(self.rows)
-        # ESM-IF1 uses the top-level catalog with per-assay CSVs below it.
-        (self.raw.parent / "DMS_substitutions.csv").write_bytes(
-            (self.raw / "DMS_substitutions.csv").read_bytes())
 
 
 class PreparationTargetTests(PreparationFixture):
+    def test_all_shipped_presets_resolve_catalog_above_assay_csvs(self):
+        self.assertFalse((self.raw / "DMS_substitutions.csv").exists())
+        for name in CONFIGS:
+            with self.subTest(config=name):
+                path = self.root / "configs/extraction" / name
+                result = subprocess.run([sys.executable, str(self.helper), "--config", str(path)],
+                                        cwd=self.workspace, capture_output=True, text=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), ASSAYS)
+
     def invoke_helper(self, *arguments):
         return subprocess.run(
             [sys.executable, str(self.helper), "--config",

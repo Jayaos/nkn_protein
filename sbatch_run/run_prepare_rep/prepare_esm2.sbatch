@@ -14,6 +14,8 @@
 #SBATCH --mail-user=jlee3541@gatech.edu
 
 # Requires the nkn_protein Conda environment and ProteinGym assay CSVs.
+# Default catalog: data/DMS_ProteinGym_substitutions/DMS_substitutions.csv;
+# individual assay CSVs may be beside it or in raw_substitutions/ below it.
 # This job downloads/verifies ESM2-650M, saves layer-33 mutation-site embeddings
 # from centered windows and a full-sequence mean for NKN, and prepares mean_score.csv
 # with the same model. The node needs HTTPS for the first download.

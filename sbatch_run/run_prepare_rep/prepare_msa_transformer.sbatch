@@ -19,6 +19,8 @@
 # Count N with prepare_msa_transformer.py --count; do not hardcode catalog size.
 # Without an array, runs the entire catalog sequentially. Resubmit to resume.
 # Config precedence: --config PATH, MSA_TRANSFORMER_CONFIG, shipped preset.
+# Default catalog: data/DMS_ProteinGym_substitutions/DMS_substitutions.csv;
+# individual assay CSVs may be beside it or in raw_substitutions/ below it.
 # ProteinGym sampling: 400 rows, weighted replacement, seeds 1..5, score averaging.
 # Scores crop to the MSA interval and use upstream 1024-token optimal windows.
 # NKN v3 global: fixed consecutive windows over the MSA interval, length-weighted.

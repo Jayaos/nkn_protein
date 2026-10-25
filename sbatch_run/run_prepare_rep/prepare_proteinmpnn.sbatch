@@ -14,9 +14,10 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
-# Prerequisites: the nkn_protein Conda environment, the ProteinGym assay catalog
-# and assay CSVs in data/DMS_ProteinGym_substitutions/raw_substitutions/, and outbound HTTPS access
-# from the allocated compute node. No downloaded checkpoint or structure needed.
+# Prerequisites: the nkn_protein Conda environment and the assay catalog at
+# data/DMS_ProteinGym_substitutions/DMS_substitutions.csv. Individual assay CSVs
+# may be beside the catalog or in its raw_substitutions/ subdirectory. Requires
+# outbound HTTPS from the compute node. No downloaded checkpoint or structure needed.
 # This job downloads and verifies the assets before extraction and scoring.
 # It prepares Kermut's sequence-conditioned cache and variant mean scores.
 # Feature extraction uses ten conditional passes over every reference position.

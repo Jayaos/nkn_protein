@@ -7,7 +7,7 @@
   "cache_id": "proteingym--v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb",
   "model_dir": "data/models/proteinmpnn",
   "output_root": "data/features/pretrained/singles",
-  "assay_index": "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv",
+  "assay_index": "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv",
   "structure_manifest_dir": "data/structures/proteingym/manifests",
   "conditioning_mode": "sequence_conditional",
   "num_orders": 10,

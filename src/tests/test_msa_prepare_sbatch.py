@@ -18,7 +18,7 @@ class MSASelectionTests(PreparationFixture):
     def setUp(self):
         super().setUp()
         self.config = self.root / "configs/extraction/msa_transformer.json"
-        self.config.write_text(json.dumps({"assay_index": str(self.raw / "DMS_substitutions.csv")}))
+        self.config.write_text(json.dumps({"assay_index": str(self.index)}))
 
     def invoke(self, *args):
         environment = os.environ.copy()
