@@ -125,6 +125,39 @@ class MSAPreparationTests(unittest.TestCase):
         ])
         self.assertEqual(context.window("ACDEFG", 2, 6)[1][1], "D-F-")
 
+    def test_readiness_validates_saved_outputs_and_rejects_stale_inputs(self):
+        from feature_generation import readiness
+
+        self.assertEqual(self.run_preparation()[0]["status"], "completed")
+        runtime = self.root / "runtime.json"
+        runtime.write_text(json.dumps(self.report))
+        config = replace(self.config, runtime_config=runtime)
+        context = readiness.msa_inputs(config, self.inputs)
+        before = len(self.model.calls)
+        for kind in ("features", "scores"):
+            with self.subTest(kind=kind):
+                report = readiness.validate_output(config, "tiny", self.inputs, kind,
+                                                    msa_context=context, msa_model=self.report["checkpoint"])
+                self.assertEqual(report["num_variants"], 3)
+                with self.assertRaisesRegex(ValueError, "checkpoint_sha256"):
+                    readiness.validate_output(config, "tiny", self.inputs, kind,
+                                              msa_context=context, msa_model={"sha256": "c" * 64})
+                with self.assertRaisesRegex(ValueError, "max_depth"):
+                    readiness.validate_output(replace(config, max_depth=4), "tiny", self.inputs, kind,
+                                              msa_context=context)
+                with self.assertRaisesRegex(ValueError, "generated alignment/weight"):
+                    readiness.validate_output(config, "tiny", self.inputs, kind)
+        self.assertEqual(len(self.model.calls), before)
+        self.weights[1] = 0.25
+        self.save_pair()
+        changed = readiness.msa_inputs(config, self.inputs)
+        for kind in ("features", "scores"):
+            with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, "msa_manifest_sha256"):
+                readiness.validate_output(config, "tiny", self.inputs, kind, msa_context=changed)
+        (self.directory / "weights.npy").write_bytes(b"corrupt")
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            readiness.msa_inputs(config, self.inputs)
+
     def test_sampling_matches_proteingym_with_replacement_and_preserves_draw_order(self):
         # Golden first draws of ProteinGym's normalized non-query weighted sampler.
         expected = [[1, 2, 2, 1, 2, 2, 2, 2], [2, 2, 1, 1, 2, 2, 2, 1],

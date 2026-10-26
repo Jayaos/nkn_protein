@@ -1179,17 +1179,29 @@ After preparation finishes, submit the CPU-only readiness check:
 sbatch sbatch_run/run_prepare_rep/validate_prepared.sbatch
 ```
 
-This validates the assets selected by `prepare_esm2.sbatch` and
-`prepare_proteinmpnn.sbatch`, without an NKN experiment config: ESM2 embeddings
-and masked-marginal scores, ProteinMPNN sequence-conditioned features and
-seed-0 single-order scores, model/checkpoint files, and registered structures.
+This validates the assets selected by all five preparation jobs, without an
+NKN experiment config: ESM2 embeddings and masked-marginal scores, ProteinMPNN
+sequence-conditioned features and seed-0 single-order scores, ESM-IF1 features
+and mean log-likelihood scores, ProSST embeddings and masked-marginal scores,
+and MSA Transformer embeddings and masked-marginal scores. It also checks
+model/checkpoint files, each model's registered structures, the ProSST token
+caches referenced by its outputs, and generated MSA alignment/weight pairs.
 It verifies cache completion markers, checksums, saved recipes, and complete
 single-mutant coverage against the current catalog and assay CSVs. BRCA2, ZIKV,
 and HCV ProteinMPNN scores are explicitly skipped, matching preparation.
 Use `--esm2-config PATH` (or `ESM2_CONFIG`) if ESM2 was prepared with a different
-extraction preset; the CLI option takes precedence. ProteinMPNN uses the same
-two fixed extraction configs as its preparation job. This job does not perform
-inference, training, downloads, or modify feature caches.
+extraction preset; the CLI option takes precedence. Similarly, use
+`--prosst-config PATH` / `PROSST_CONFIG` and
+`--msa-transformer-config PATH` / `MSA_TRANSFORMER_CONFIG` to match custom
+preparation recipes. ProteinMPNN uses the same two fixed extraction configs as
+its preparation job. ESM-IF1 uses `esm_if1_142m.json` with the preparation job's
+`data/features/pretrained/singles` output-root override. ProSST defaults to
+`prosst_2048_singles.json`; MSA Transformer defaults to `msa_transformer.json`.
+MSA outputs must match the current alignment manifest, sampling settings,
+checkpoint (when available), and configured runtime provenance. The MSA model
+check verifies checkpoint files offline; it does not certify the installed MSA
+environment or GPU runtime. This job does not perform inference, training,
+downloads, quantization, or modify feature caches.
 It requests four CPUs, 64 GiB RAM, and four hours; resource limits can be
 overridden with `sbatch` options.
 
@@ -1200,7 +1212,10 @@ submission directory. A single CSV summary is also saved to
 log. Use `--summary-csv PATH` to choose a new destination (existing files are
 never overwritten). Each row contains the catalog array index, assay ID,
 per-asset READY/FAILED/SKIP statuses, output readiness, overall readiness,
-errors, and notes. Shared model statuses are repeated for each assay; `status`
+errors, and notes. Added columns include `esm_if1_features`, `esm_if1_scores`,
+`prosst_embeddings`, `prosst_scores`, `msa_transformer_embeddings`, and
+`msa_transformer_scores`, plus their model and input statuses.
+Shared model statuses are repeated for each assay; `status`
 is FAILED if a shared asset fails even when `outputs_status` is READY. Intentional
 score omissions are SKIP, not failures. Rows are flushed after each
 assay, so an interrupted job retains a partial summary; absent rows have not
@@ -1208,7 +1223,7 @@ been checked yet. No per-assay report directories are created. Failed assays
 do not stop subsequent checks. Any assay failure makes the job exit nonzero;
 a catalog/setup error stops before the final summary is printed.
 This checks preparation assets, not kernel branches or CV fold files. Wait for
-both preparation jobs to finish before running it, or use a Slurm `afterany`
+all five preparation jobs to finish before running it, or use a Slurm `afterany`
 dependency on their job IDs.
 
 The default ESM2 compact preset uses at most 1,022 residues in each model input

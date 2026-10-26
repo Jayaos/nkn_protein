@@ -99,6 +99,22 @@ class ProSSTStructureTests(unittest.TestCase):
         self.assertEqual(first.metadata["token_ids_sha256"], token_ids_sha256(first.tokens))
         self.assertEqual(sorted(p.name for p in first.path.iterdir()), ["canonical.pdb", "completion.json", "metadata.json", "tokens.pt"])
 
+    def test_readiness_validates_referenced_tokens_without_quantizing(self):
+        from feature_generation.readiness import validate_prosst_tokens
+
+        tokens = self.produce()
+        saved = {"structure_token_input_signature": tokens.input_signature, "structure_tokens": tokens.metadata}
+        before = {path.name: path.read_bytes() for path in tokens.path.iterdir()}
+        self.quantizer.side_effect = AssertionError("readiness must not quantize")
+        validate_prosst_tokens(self.config, saved, self.structure)
+        self.assertEqual({path.name: path.read_bytes() for path in tokens.path.iterdir()}, before)
+        with self.assertRaisesRegex(ValueError, "quantizer_batch_size"):
+            validate_prosst_tokens(replace(self.config, quantizer_batch_size=1), saved, self.structure)
+        (tokens.path / "tokens.pt").write_bytes(b"corrupt")
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            validate_prosst_tokens(self.config, saved, self.structure)
+        self.assertEqual(self.quantizer.call_count, 1)
+
     def test_coordinate_or_runtime_recipe_changes_create_new_identity(self):
         first = self.produce()
         coords = self.structure.coords.clone()

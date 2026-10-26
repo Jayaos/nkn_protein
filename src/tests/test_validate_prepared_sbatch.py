@@ -54,7 +54,10 @@ class ValidatePreparedSbatchTests(PreparationFixture):
                               capture_output=True, text=True, timeout=90)
 
     def test_launches_asset_audit_and_forwards_csv_destination(self):
-        arguments = ("--esm2-config", "configs/extraction/custom config.json", "--summary-csv", "results/custom summary.csv")
+        arguments = ("--esm2-config", "configs/extraction/custom config.json",
+                     "--prosst-config", "configs/extraction/custom prosst.json",
+                     "--msa-transformer-config", "configs/extraction/custom msa.json",
+                     "--summary-csv", "results/custom summary.csv")
         result = self.invoke(arguments=arguments)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("fixture asset audit", result.stdout)
