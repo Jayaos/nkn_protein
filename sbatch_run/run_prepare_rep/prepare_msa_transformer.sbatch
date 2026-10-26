@@ -6,8 +6,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=V100
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
-#SBATCH --time=1:00:00
+#SBATCH --mem=64G
+#SBATCH --time=4:00:00
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%A_%a.out
 #SBATCH --mail-type=ALL
