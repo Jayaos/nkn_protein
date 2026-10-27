@@ -112,17 +112,35 @@ def validate_prosst_tokens(config, saved, structure):
         raise ValueError("Cache recipe differs from preparation config: quantizer_batch_size")
 
 
+def preparation_cache_id(config, root, kind, cache_id):
+    """Recognize the exact historical ProteinGym name only if the new leaf is absent."""
+    if (getattr(config, "model_family", "esm2") != "proteinmpnn"
+            or config.structure_source != "proteingym" or not cache_id.startswith("proteingym--")):
+        return cache_id
+    parent = root / ("scores" if kind == "scores" else "inverse_folding") / "proteinmpnn"
+    current = parent / cache_id
+    legacy_id = cache_id.removeprefix("proteingym--")
+    # An incomplete/corrupt current leaf must still fail, even if an old copy exists.
+    if not current.exists() and not current.is_symlink() and (parent / legacy_id).is_dir():
+        return legacy_id
+    return cache_id
+
+
 def validate_output(config, assay, inputs, kind, structure=None, *, msa_context=None, msa_model=None):
     """Validate contents and compare them with the current preparation inputs."""
     family = getattr(config, "model_family", "esm2")
     root = config.output_root / assay
     if kind == "scores":
-        cache_id = config.score_cache_id if family == "msa_transformer" else default_cache_id(config, num_orders=1)
+        requested_id = config.score_cache_id if family == "msa_transformer" else default_cache_id(config, num_orders=1)
+    else:
+        requested_id = config.cache_id
+    cache_id = preparation_cache_id(config, root, kind, requested_id)
+    if kind == "scores":
         report = validate_score_cache(root, family, cache_id)
     elif family in ("esm2", "prosst", "msa_transformer"):
-        report = validate_sequence_cache(root, config.cache_id, model_family=family)
+        report = validate_sequence_cache(root, cache_id, model_family=family)
     else:
-        report = validate_inverse_cache(root, family, config.cache_id)
+        report = validate_inverse_cache(root, family, cache_id)
     if inputs is None:
         raise ValueError("Cannot verify coverage: current assay input validation failed")
     if report["input_signature"] != inputs.input_signature:
@@ -160,6 +178,8 @@ def validate_output(config, assay, inputs, kind, structure=None, *, msa_context=
             raise ValueError("Cache uses a different registered structure")
         if family == "prosst":
             validate_prosst_tokens(config, saved, structure)
+    if cache_id != requested_id:
+        report["legacy_cache_id"] = cache_id
     return report
 
 
@@ -184,6 +204,10 @@ def audit(esm2, features, scores, esm_if1, prosst, msa, summary_stream=None):
             value = action()
             statuses[key] = "READY"
             print(f"  READY  {label}", flush=True)
+            if isinstance(value, dict) and value.get("legacy_cache_id"):
+                note = f"{label}: validated legacy cache {value['path']}"
+                statuses["notes"] = " | ".join(filter(None, (statuses.get("notes"), note)))
+                print(f"         {note}", flush=True)
             return True, value
         except (OSError, ValueError, RuntimeError, KeyError, TypeError, ImportError, EOFError, AttributeError, csv.Error) as error:
             failures += 1
@@ -227,8 +251,9 @@ def audit(esm2, features, scores, esm_if1, prosst, msa, summary_stream=None):
         ):
             if assay in PROTEINMPNN_SCORE_SKIP_REASONS and label == "ProteinMPNN scores":
                 statuses[key] = "SKIP"
-                statuses["notes"] = "ProteinMPNN scores intentionally omitted: " + PROTEINMPNN_SCORE_SKIP_REASONS[assay]
-                print("  SKIP   " + statuses["notes"], flush=True)
+                note = "ProteinMPNN scores intentionally omitted: " + PROTEINMPNN_SCORE_SKIP_REASONS[assay]
+                statuses["notes"] = " | ".join(filter(None, (statuses["notes"], note)))
+                print("  SKIP   " + note, flush=True)
                 continue
             check(key, label, lambda c=config, k=kind: validate_output(c, assay, inputs, k, structure))
         for key, label, config, kind, backbone in (

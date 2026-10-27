@@ -662,6 +662,12 @@ Legacy feature caches retain their original IDs. Source-qualified copies need
 their checkpoint/config signatures and completion checksums updated consistently;
 renaming a feature directory alone is insufficient. Existing legacy cache IDs
 can still be selected explicitly for historical runs.
+The preparation readiness audit also recognizes the exact legacy ProteinMPNN
+feature and score names without `proteingym--` when the corresponding prefixed
+directory is absent. It validates the original files and checks their recipes,
+coverage, and current registered structures, then records the selected path in
+the log and CSV notes. An existing but incomplete or corrupt prefixed directory
+still fails; the audit does not replace it with an older cache or rewrite files.
 
 For a single-structure manifest, the selected chain must match the entire reference sequence with N/CA/C atoms;
 ProteinMPNN additionally requires O. Partial coverage, sequence mismatches,

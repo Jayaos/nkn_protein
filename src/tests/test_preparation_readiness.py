@@ -33,7 +33,7 @@ class ReadinessTests(unittest.TestCase):
                               structure_token_dir=self.root / "tokens")
         self.msa = replace(r.MSAConfig.load(r.CONFIG_DIR / "msa_transformer.json"), assay_index=index)
 
-    def run_audit(self, failure=None, shared_failure=False, missing_model=None, missing_msa=False):
+    def run_audit(self, failure=None, shared_failure=False, missing_model=None, missing_msa=False, legacy=False):
         calls = []
 
         def output(config, assay, inputs, kind, structure, **kwargs):
@@ -41,6 +41,8 @@ class ReadinessTests(unittest.TestCase):
             calls.append(label)
             if label == failure:
                 raise ValueError("fixture corrupt cache")
+            if legacy and label[1] == "proteinmpnn":
+                return {"legacy_cache_id": "old-cache", "path": f"{assay}/{kind}/old-cache"}
 
         def inverse_model(config):
             if missing_model == "if1" and config.model_family == "esm_if1":
@@ -88,6 +90,14 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(self.summary_rows[0]["status"], "FAILED")
         self.assertIn("fixture corrupt cache", self.summary_rows[0]["errors"])
         self.assertEqual(self.summary_rows[1]["status"], "READY")
+
+    def test_legacy_selection_is_reported_without_losing_skip_notes(self):
+        status, log, _ = self.run_audit(legacy=True)
+        self.assertEqual(status, 0, log)
+        self.assertIn("ProteinMPNN features: validated legacy cache tiny/features/old-cache", log)
+        self.assertIn("ProteinMPNN scores: validated legacy cache tiny/scores/old-cache", self.summary_rows[0]["notes"])
+        self.assertIn("validated legacy cache", self.summary_rows[1]["notes"])
+        self.assertIn("intentionally omitted", self.summary_rows[1]["notes"])
 
     def test_domain_assays_require_features_but_skip_full_reference_scores(self):
         for assay in r.PROTEINMPNN_SCORE_SKIP_REASONS:
