@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
+from assay_paths import resolve_assay_csv
 from .features import FeatureBatch, parse_substitutions, read_csv
 
 
@@ -44,18 +45,7 @@ class AssayCatalog:
             assay_id, filename, reference = row["DMS_id"], row["DMS_filename"], row["target_seq"]
             if not assay_id or assay_id in self.records or filename in filenames:
                 raise ValueError("Assay IDs and filenames must be nonempty and unique")
-            path = (self.index_path.parent / filename).resolve()
-            if not filename or not path.is_relative_to(self.index_path.parent):
-                raise ValueError("Assay filename must stay inside the index directory")
-            if not path.is_file():
-                # ProteinGym may keep its catalog above the individual assay CSVs.
-                candidate = (self.index_path.parent / "raw_substitutions" / filename).resolve()
-                if not candidate.is_relative_to(self.index_path.parent):
-                    raise ValueError("Assay filename must stay inside the index directory")
-                if candidate.is_file():
-                    path = candidate
-                else:
-                    raise FileNotFoundError(f"Assay CSV not found: {path} or {candidate}")
+            path = resolve_assay_csv(self.index_path, filename)
             parse_substitutions("WT", reference, reference)
             if row.get("seq_len") and int(row["seq_len"]) != len(reference):
                 raise ValueError(f"Reference length mismatch: {assay_id}")

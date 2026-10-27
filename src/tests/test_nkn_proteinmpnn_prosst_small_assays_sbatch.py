@@ -15,8 +15,11 @@ from src.feature_generation.prosst_config import ProSSTConfig
 
 SCRIPT = Path("sbatch_run/run_nkn/run_nkn_proteinmpnn_prosst_small_assays.sbatch")
 PRESET = Path("configs/proteinmpnn_prosst_nkn.json")
-CATALOG = (array_tests.REPOSITORY
-           / "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv")
+CATALOG = next((array_tests.REPOSITORY / path for path in (
+    "data/DMS_substitutions.csv",
+    "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv",
+    "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv",
+) if (array_tests.REPOSITORY / path).is_file()), array_tests.REPOSITORY / "data/DMS_substitutions.csv")
 SOURCE = (array_tests.REPOSITORY / SCRIPT).read_text(encoding="utf-8")
 ASSAYS = tuple(re.findall(r'^  "([^"]+)"$', SOURCE, re.MULTILINE))
 

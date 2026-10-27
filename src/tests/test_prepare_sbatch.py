@@ -52,6 +52,7 @@ class PreparationFixture(unittest.TestCase):
         (self.root / "src/feature_generation/cli.py").touch()
         self.helper = self.root / PREPARATION / "list_assays.py"
         shutil.copyfile(REPOSITORY / PREPARATION / "list_assays.py", self.helper)
+        shutil.copyfile(REPOSITORY / "src/assay_paths.py", self.root / "src/assay_paths.py")
         for filename in CONFIGS:
             shutil.copyfile(REPOSITORY / "configs/extraction" / filename,
                             self.root / "configs/extraction" / filename)

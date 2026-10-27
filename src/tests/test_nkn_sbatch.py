@@ -60,6 +60,9 @@ class NknSbatchTests(unittest.TestCase):
                 json.dumps({"assay_id": "test", "synthetic": False}), encoding="utf-8",
             )
         (self.root / "folds.csv").write_text("mutant,fold_random_5\nA1C,0\n", encoding="utf-8")
+        (self.root / "data/DMS_substitutions.csv").write_text(
+            "DMS_id,DMS_filename,target_seq\ntest,test.csv,ACD\n", encoding="utf-8",
+        )
         self.bootstrap = self.root / "bootstrap.sh"
         self.bootstrap.write_text(textwrap.dedent("""\
             export PATH="/usr/bin:/bin:$PATH"
@@ -100,6 +103,7 @@ class NknSbatchTests(unittest.TestCase):
                 if value.startswith('--') and index + 1 < len(args):
                     options[value] = args[index + 1]
             scope = {'features': options['--features'],
+                     'assay_index': options['--assay-index'],
                      'singles_only': '--singles-only' in args,
                      'full_assay': '--full-assay' in args}
             if args[2] == 'validate':
@@ -120,9 +124,9 @@ class NknSbatchTests(unittest.TestCase):
             """), encoding="utf-8")
 
     def invoke(self, cpus, *arguments, fail_setting=None, config_environment=None,
-               features="features"):
+               features="features", assay_index=None):
         environment = os.environ.copy()
-        for name in ("FOLDS_CSV", self.config_variable, "TEST_FAIL_SETTING", "SLURM_CPUS_PER_TASK", "FEATURES"):
+        for name in ("FOLDS_CSV", self.config_variable, "TEST_FAIL_SETTING", "SLURM_CPUS_PER_TASK", "FEATURES", "ASSAY_INDEX"):
             environment.pop(name, None)
         environment.update(
             BASH_ENV=self.bootstrap.as_posix(), TEST_ROOT=self.root.as_posix(),
@@ -133,6 +137,8 @@ class NknSbatchTests(unittest.TestCase):
         )
         if features is not None:
             environment["FEATURES"] = features
+        if assay_index is not None:
+            environment["ASSAY_INDEX"] = assay_index
         if cpus is not None:
             environment['SLURM_CPUS_PER_TASK'] = str(cpus)
         if fail_setting:

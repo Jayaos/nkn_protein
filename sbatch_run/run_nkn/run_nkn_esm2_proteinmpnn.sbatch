@@ -57,6 +57,8 @@
 # Set ASSAY and optionally FEATURES, SINGLES_FOLDS_CSV, MULTIPLES_FOLDS_CSV,
 # SAMPLE_RATIO (default 0.8), or SPLIT_SEED (default 2024) before sbatch.
 # SAMPLE_RATIO=1.0 trains on all singles. Relative paths use the repository root.
+# Catalog: ASSAY_INDEX overrides auto-detection of data/DMS_substitutions.csv,
+# then data/DMS_ProteinGym_substitutions/{,raw_substitutions/}DMS_substitutions.csv.
 # Logs go to the submission directory. Every job creates a new results directory.
 # --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) groups results under
 # <output-root>/NAME/<assay>/<model-run>/. Without it, NAME is omitted.
@@ -186,6 +188,7 @@ while [[ $# -gt 0 ]]; do
       fi
       shift ;;
     -h|--help)
+      printf 'Catalog: ASSAY_INDEX overrides auto-detection (data/DMS_substitutions.csv first).\n'
       printf 'Output root: --output-root PATH, then NKN_OUTPUT_ROOT, then results/. Relative paths use the repository root.\n'
       printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
       printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
@@ -288,6 +291,28 @@ for setting in "${settings[@]}"; do
   fi
 done
 
+# Locate the catalog before activating Conda or creating a results directory.
+assay_index="${ASSAY_INDEX:-}"
+if [[ -z "$assay_index" ]]; then
+  for candidate in \
+    data/DMS_substitutions.csv \
+    data/DMS_ProteinGym_substitutions/DMS_substitutions.csv \
+    data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv; do
+    if [[ -f "$candidate" ]]; then
+      assay_index="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "$assay_index" ]]; then
+  echo 'error: ProteinGym catalog not found. Set ASSAY_INDEX, or put DMS_substitutions.csv in data/, data/DMS_ProteinGym_substitutions/, or its raw_substitutions/ directory.' >&2
+  exit 1
+fi
+if [[ ! -f "$assay_index" ]]; then
+  printf 'error: ProteinGym catalog does not exist: %s\n' "$assay_index" >&2
+  exit 1
+fi
+
 # Match the environment setup in run_prepare_rep, without requesting a GPU.
 export PYTHONNOUSERSITE=1
 if ! command -v conda >/dev/null 2>&1; then
@@ -304,7 +329,6 @@ export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 export OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"
 export CUDA_VISIBLE_DEVICES=""
 
-assay_index="data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv"
 run_id="${SLURM_JOB_ID:-manual_$(date -u +%Y%m%dT%H%M%SZ)}"
 run_root="$output_root/${experiment_suffix:+$experiment_suffix/}$assay/nkn_esm2_proteinmpnn_${selection}_${run_id}"
 runtime_config="$run_root/config.json"
@@ -314,6 +338,7 @@ mkdir -p -- "$(dirname -- "$run_root")"
 mkdir -- "$run_root"
 printf 'Job: %s\nRepository: %s\nAssay: %s\nSettings: %s\nConfig: %s\nResults: %s\n' \
   "${SLURM_JOB_ID:-manual}" "$project_root" "$assay" "$selection" "$config_template" "$run_root"
+printf 'Assay catalog: %s\n' "$assay_index"
 
 # Record the worker thread budget and execution plan for sbatch CPU overrides.
 python -u - "$config_template" "$runtime_config" "$features" "$assay" \

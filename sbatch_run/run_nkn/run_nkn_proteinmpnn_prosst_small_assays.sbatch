@@ -14,7 +14,8 @@
 
 # One assay per array task: 57 assays with 1 <= DMS_number_single_mutants <= 1000.
 # This is a snapshot of the local ProteinGym catalog, in catalog order:
-# data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv.
+# data/DMS_substitutions.csv.
+# The shared runner auto-detects the catalog; ASSAY_INDEX selects an explicit path.
 # Zero-single-mutant assays cannot run singles CV and are excluded.
 # These subset indices differ from the full-catalog representation-preparation indices.
 # Regenerate the list and array bounds together if the catalog changes.
@@ -108,6 +109,7 @@ assays=(
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_proteinmpnn_prosst_small_assays.sbatch [singles|SETTING] [shared-runner options]\n'
   printf 'Default array: 0-56; 57 assays with 1-1000 single mutants (inclusive).\n'
+  printf 'Catalog: auto-detected from data/DMS_substitutions.csv or the extracted-data folder; ASSAY_INDEX overrides.\n'
   printf 'Limit concurrent assays with sbatch --array=0-56%%4 ...\n'
   printf 'Default config: configs/proteinmpnn_prosst_nkn.json; --config overrides NKN_CONFIG.\n'
   printf 'Kernel inputs: ProSST sequence_site/sequence_global; ProteinMPNN inverse_folding/inverse_folding_site; reference CA structure_distance.\n'

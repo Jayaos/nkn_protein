@@ -14,6 +14,9 @@ import sys
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from assay_paths import resolve_assay_csv
 
 
 def list_assays(config_path: Path) -> list[str]:
@@ -38,15 +41,10 @@ def list_assays(config_path: Path) -> list[str]:
                 raise ValueError(f"Duplicate assay ID: {assay}")
             if not filename or filename in filenames:
                 raise ValueError(f"Missing or duplicate assay filename for {assay}")
-            assay_path = (index_path.parent / filename).resolve()
-            if not assay_path.is_relative_to(index_path.parent):
-                raise ValueError(f"Assay filename leaves the catalog directory: {filename}")
-            if not assay_path.is_file():
-                candidate = (index_path.parent / "raw_substitutions" / filename).resolve()
-                if not candidate.is_relative_to(index_path.parent):
-                    raise ValueError(f"Assay filename leaves the catalog directory: {filename}")
-                if not candidate.is_file():
-                    raise ValueError(f"Assay CSV does not exist: {assay_path} or {candidate}")
+            try:
+                resolve_assay_csv(index_path, filename)
+            except FileNotFoundError as error:
+                raise ValueError(str(error)) from error
             assays.append(assay)
             filenames.add(filename)
     if not assays:
