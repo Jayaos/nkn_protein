@@ -26,6 +26,10 @@
 #
 # From the repository root (or a subdirectory):
 #   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch [singles|all|SETTING] [--config PATH] [--parallel] [--held-out-interval N]
+# To run the ProSST/ProteinMPNN preset on all 57 catalog assays with 1-1000
+# single mutants (one assay per task):
+#   sbatch sbatch_run/run_nkn/run_nkn_proteinmpnn_prosst_small_assays.sbatch
+# The wrapper selects configs/proteinmpnn_prosst_nkn.json and forwards all arguments.
 # Add --held-out-interval 100 to record held-out Spearman every 100 updates.
 # Diagnostics are off by default; 0 disables them. They never select checkpoints.
 # Add --stopping-criterion validation_spearman for three train / one validation /
