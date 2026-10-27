@@ -669,6 +669,28 @@ coverage, and current registered structures, then records the selected path in
 the log and CSV notes. An existing but incomplete or corrupt prefixed directory
 still fails; the audit does not replace it with an older cache or rewrite files.
 
+If ProteinGym structure manifests were deleted but the ProteinMPNN feature
+caches and referenced raw structure files remain, recover the original JSON
+snapshots embedded in each completed feature cache's `config.json`:
+
+```bash
+# Preview recoverable manifests, then restore missing files.
+python sbatch_run/run_prepare_rep/restore_proteinmpnn_manifests.py
+python sbatch_run/run_prepare_rep/restore_proteinmpnn_manifests.py --apply
+```
+
+The recovery command uses only the Python standard library. It checks saved
+config checksums/identities and referenced raw-file checksums, preserves nested
+fragment/mapping metadata, and never overwrites an existing manifest or modifies
+a cache. It refuses conflicting snapshots and reports missing/corrupt source
+files instead of downloading or generating replacements. Defaults are
+`data/features/pretrained/singles` and `data/structures/proteingym/manifests`;
+override with `--output-root` and `--manifest-dir`, or select assays with repeated
+`--assay ID`. It covers saved assay directories only; assays without a completed
+ProteinMPNN feature cache need a separate backup or structure registration.
+After recovery, run `validate_prepared.sbatch` to check the restored manifests
+against current assay inputs and cached outputs.
+
 For a single-structure manifest, the selected chain must match the entire reference sequence with N/CA/C atoms;
 ProteinMPNN additionally requires O. Partial coverage, sequence mismatches,
 noncanonical residues, and ambiguous backbone alternate conformations are rejected.
