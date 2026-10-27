@@ -27,13 +27,13 @@
   },
   "feature_selection": {
     "sequence": "prosst/protssn_proteingym--ProSST-2048-layer12-fixed-backbone-e94ffee7846d-mean-all-nonoverlap2046-centered-sites",
-    "inverse_folding": "proteinmpnn/proteingym--v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb"
+    "inverse_folding": "proteinmpnn/v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb"
   },
   "inverse_folding_policy": "sequence_conditional",
   "structure_manifest_dir": "data/structures/proteingym/manifests",
   "score_sources": [
     "scores/prosst/protssn_proteingym--ProSST-2048-masked_marginals-fixed-backbone-float32-e94ffee7846d-centered2046",
-    "scores/proteinmpnn/proteingym--v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb"
+    "scores/proteinmpnn/v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb"
   ],
   "training": {
     "max_steps": 10000,

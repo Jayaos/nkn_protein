@@ -72,7 +72,8 @@ class ProteinMPNNProSSTPresetTests(unittest.TestCase):
         inverse = InverseFoldingConfig.load(root / "configs/extraction/proteinmpnn_v48_020_kermut.json")
         self.assertEqual(config["feature_selection"], {
             "sequence": f"prosst/{prosst.cache_id}",
-            "inverse_folding": f"proteinmpnn/{inverse.cache_id}",
+            # Existing ProteinMPNN caches predate the structure-source prefix.
+            "inverse_folding": f"proteinmpnn/{inverse.cache_id.removeprefix('proteingym--')}",
         })
         self.assertTrue({"sequence_site", "sequence_global", "inverse_folding", "inverse_folding_site"}
                         <= set(config["model"]["enabled_branches"]))
@@ -80,6 +81,30 @@ class ProteinMPNNProSSTPresetTests(unittest.TestCase):
         self.assertEqual((prosst.site_embeddings, prosst.global_window), ("centered", "non_overlapping"))
         self.assertEqual([source.split("/")[1] for source in config["score_sources"]],
                          ["prosst", "proteinmpnn"])
+
+    def test_selected_paths_match_local_saved_cache_metadata(self):
+        root = array_tests.REPOSITORY
+        config = json.loads((root / PRESET).read_text(encoding="utf-8"))
+        cache_root = root / "data/features/pretrained/singles"
+        selections = [f"{kind}/{selection}"
+                      for kind, selection in config["feature_selection"].items()]
+        selections.extend(config["score_sources"])
+        checked = 0
+        for selection in selections:
+            kind, family, checkpoint = selection.split("/")
+            # Inspect only locally available families; the full HPC catalog is
+            # not required. The selected recipe must exist when that family does.
+            for family_root in cache_root.glob(f"*/{kind}/{family}"):
+                with self.subTest(assay=family_root.parent.parent.name, selection=selection):
+                    path = family_root / checkpoint / "config.json"
+                    self.assertTrue(path.is_file(), f"Selected cache does not exist: {path}")
+                    metadata = json.loads(path.read_text(encoding="utf-8"))
+                    self.assertEqual(metadata["checkpoint"], checkpoint)
+                    self.assertEqual(metadata["model_family"], family)
+                    self.assertEqual(metadata["feature_type"], kind)
+                    checked += 1
+        if not checked:
+            self.skipTest("No local pretrained caches are available")
 
     @unittest.skipUnless(runner_tests.BASH, "Bash is required for the shared-runner check")
     def test_shared_runner_resolves_the_new_preset(self):
