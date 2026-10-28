@@ -202,9 +202,9 @@ case "$task_index" in
 esac
 
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
-while [[ ! -f "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch" ]]; do
+while [[ ! -f "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch" ]]; do
   if [[ "$project_root" == "/" ]]; then
-    echo "error: Submit this job from the nkn_protein repository or a subdirectory." >&2
+    printf 'error: Cannot find sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch under submission directory "%s" or its parents. Submit from a complete nkn_protein checkout.\n' "${SLURM_SUBMIT_DIR:-$PWD}" >&2
     exit 1
   fi
   project_root="$(dirname -- "$project_root")"
@@ -215,4 +215,4 @@ export NKN_ASSAY_OVERRIDE="$ASSAY"
 default_config="configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json"
 export NKN_CONFIG="${NKN_CONFIG:-$default_config}"
 printf 'Array task: %s_%s; assay: %s\n' "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$ASSAY"
-exec bash "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch" "$@"
+exec bash "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch" "$@"

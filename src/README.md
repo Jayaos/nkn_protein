@@ -251,10 +251,10 @@ adjacent `resolved_config.json` unless an explicit configuration is supplied.
 
 ### CPU batch job with published ProteinGym folds
 
-The [ESM2 + ProteinMPNN job](../sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch)
-defaults to the real shared cache for `A0A1I9GEU1_NEIME_Kennouche_2019` and
+The [ESM2 + ProteinMPNN job](../sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch)
+selects 57 catalog assays with 1-999 single mutants, one assay per array task, using
 [`configs/esm2_proteinmpnn_nkn.json`](../configs/esm2_proteinmpnn_nkn.json).
-It requests 15 CPUs and no GPU. ESM2 650M layer-33 centered windows provide
+It requests 15 CPUs and no GPU per assay. ESM2 650M layer-33 centered windows provide
 `sequence_site` vectors at mutation positions, while `sequence_global` vectors
 average every residue of each variant using fixed non-overlapping windows of
 up to 1,022 residues, weighted by each window's residue count.
@@ -314,8 +314,8 @@ standardized by the existing GP preprocessing using training-fold statistics.
 
 The NKN launcher uses the cluster's existing `nkn_protein` Conda environment.
 
-By default, the job runs `singles`: the three singles settings, five folds each.
-This matches the default assay, whose 922 variants are all single mutants.
+By default, each assay task runs `singles`: the three singles settings, up to five
+populated folds each. Array indices select assays; inherited `ASSAY` values are ignored.
 `all` requests all six settings on an assay with singles and doubles: three
 singles CV runs, one mixed CV run reporting both domains, and one extrapolation
 fit. This totals 21 fits, with one initialization per fit in the preset.
@@ -373,34 +373,34 @@ each task writes its own
 Slurm's `%A` and `%a` log tokens identify the array and task respectively;
 see [Slurm job arrays](https://slurm.schedmd.com/job_array.html).
 
-The generic launcher also remains available:
+Submit the ESM2 small-assay launcher as follows:
 
 ```bash
-# Default assay, all three singles settings: 15 fold fits
-sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch
+# All 57 assays, four tasks at a time; up to 15 singles fold fits per assay
+sbatch --array=0-56%4 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch
 
-# All 15 singles fits concurrently: 3 settings x 5 folds x 1 CPU thread
-sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles --parallel
+# One assay (index 0), parallel fits: 3 settings x 5 folds x 1 CPU thread
+sbatch --array=0 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch singles --parallel
 
 # One setting: 5 folds concurrently with 1 CPU thread each
-sbatch --cpus-per-task=5 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles_random --parallel
+sbatch --array=0 --cpus-per-task=5 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch singles_random --parallel
 
 # One setting
-sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles_modulo
+sbatch --array=0 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch singles_modulo
 
 # One setting with your own JSON hyperparameters
 cp configs/esm2_proteinmpnn_nkn.json configs/my_nkn.json
 # Edit configs/my_nkn.json before submitting:
-sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles_random --config configs/my_nkn.json
+sbatch --array=0 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch singles_random --config configs/my_nkn.json
 
-# All six settings; prepare the complete ESM2 + ProteinMPNN cache first
-ASSAY=A4_HUMAN_Seuma_2022 sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch all
+# All six settings for A4_HUMAN_Seuma_2022 (index 1); prepare its full-variant cache first
+sbatch --array=1 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch all
 
 # Only extrapolation, using an 80% sample of singles for training
-ASSAY=A4_HUMAN_Seuma_2022 SAMPLE_RATIO=0.8 SPLIT_SEED=2024 sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch single_to_double
+SAMPLE_RATIO=0.8 SPLIT_SEED=2024 sbatch --array=1 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch single_to_double
 
 # Extrapolation with all singles for training
-ASSAY=A4_HUMAN_Seuma_2022 SAMPLE_RATIO=1.0 sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch single_to_double
+SAMPLE_RATIO=1.0 sbatch --array=1 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch single_to_double
 ```
 
 You can edit the default preset directly or copy it to keep separate experiments.
@@ -472,7 +472,7 @@ fold, and one outer test fold, submit:
 sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch singles --parallel --stopping-criterion validation_spearman
 ```
 
-The same flags work with `run_nkn_esm2_proteinmpnn.sbatch` and the direct NKN
+The same flags work with `run_nkn_esm2_proteinmpnn_small_assays.sbatch` and the direct NKN
 `experiments.cli cv` command. This option supports five-fold `singles_random`,
 `singles_modulo`, and `singles_contiguous` CV. For outer test fold `k`, validation
 uses fold `(k + 1) % 5`; the other three folds train the model. Supplied fold
@@ -522,8 +522,8 @@ held-out Spearman every 100 optimizer updates:
 
 ```bash
 sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch singles --parallel --held-out-interval 100
-# Or for the assay selected by ASSAY:
-sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles --held-out-interval 100
+# Or for the small-assay launcher's index 0:
+sbatch --array=0 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch singles --held-out-interval 100
 ```
 
 The flag overrides `training.held_out_interval` in the JSON. Diagnostics are

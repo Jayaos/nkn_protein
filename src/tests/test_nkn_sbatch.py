@@ -13,7 +13,7 @@ import unittest
 
 
 REPOSITORY = Path(__file__).resolve().parents[2]
-SCRIPT = REPOSITORY / "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
+SCRIPT = REPOSITORY / "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch"
 
 
 def available_bash():

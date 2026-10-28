@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=nkn_proteinmpnn_prosst_small_assays
+#SBATCH --job-name=nkn_prosst_proteinmpnn_small_assays
 #SBATCH --account=gts-yxie77-paid
 #SBATCH --array=0-56
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=15
 #SBATCH --mem=16G
-#SBATCH --time=24:00:00
+#SBATCH --time=24:00:00s
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%A_%a.out
 #SBATCH --mail-type=ALL
@@ -24,7 +24,7 @@
 #   sbatch sbatch_run/run_nkn/run_nkn_prosst_proteinmpnn_small_assays.sbatch
 # Limit concurrent assay jobs (resources above are per assay):
 #   sbatch --array=0-56%4 sbatch_run/run_nkn/run_nkn_prosst_proteinmpnn_small_assays.sbatch
-# All arguments are forwarded to run_nkn_esm2_proteinmpnn.sbatch, for example:
+# All arguments are forwarded to run_nkn_esm2_proteinmpnn_small_assays.sbatch, for example:
 #   sbatch sbatch_run/run_nkn/run_nkn_prosst_proteinmpnn_small_assays.sbatch singles_random --parallel
 # Default: singles (random, modulo, contiguous; populated published folds).
 # Kernel inputs: ProSST-2048 layer-12 centered-site and full-sequence mean embeddings
@@ -46,7 +46,7 @@
 # Results: results/<assay>/nkn_prosst_proteinmpnn_<selection>_<task-job-id>/
 # NKN_RUN_PREFIX overrides the model name in result folders.
 # --output-root and --experiment-suffix are forwarded to the shared runner.
-# Logs: nkn_proteinmpnn_prosst_small_assays-<array-job-id>_<task-index>.out in the submission directory.
+# Logs: nkn_prosst_proteinmpnn_small_assays-<array-job-id>_<task-index>.out in the submission directory.
 set -eo pipefail
 
 assays=(
@@ -138,9 +138,9 @@ case "$task_index" in
 esac
 
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
-while [[ ! -f "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch" ]]; do
+while [[ ! -f "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch" ]]; do
   if [[ "$project_root" == "/" ]]; then
-    echo "error: Submit this job from the nkn_protein repository or a subdirectory." >&2
+    printf 'error: Cannot find sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch under submission directory "%s" or its parents. Submit from a complete nkn_protein checkout.\n' "${SLURM_SUBMIT_DIR:-$PWD}" >&2
     exit 1
   fi
   project_root="$(dirname -- "$project_root")"
@@ -151,5 +151,5 @@ export NKN_ASSAY_OVERRIDE="$ASSAY"
 export NKN_CONFIG="${NKN_CONFIG:-configs/proteinmpnn_prosst_nkn.json}"
 export NKN_RUN_PREFIX="${NKN_RUN_PREFIX:-nkn_prosst_proteinmpnn}"
 printf 'Array task: %s_%s; assay: %s\n' "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$ASSAY"
-exec bash "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch" "$@"
+exec bash "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch" "$@"
 

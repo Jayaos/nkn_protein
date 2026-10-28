@@ -30,11 +30,11 @@
 # matching the ProSST small-assay launcher. Update the list and array bounds together.
 # Resources above are per assay; --parallel controls fits within each assay.
 # From the repository root (or a subdirectory):
-#   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch [singles|all|SETTING] [--config PATH] [--parallel] [--held-out-interval N]
+#   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch [singles|all|SETTING] [--config PATH] [--parallel] [--held-out-interval N]
 # Limit concurrent assay tasks to four:
-#   sbatch --array=0-56%4 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch
+#   sbatch --array=0-56%4 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch
 # Test one assay (index 56) with just the random-fold protocol:
-#   sbatch --array=56 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles_random
+#   sbatch --array=56 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch singles_random
 # To run the ProSST/ProteinMPNN preset on all 57 catalog assays with 1-1000
 # single mutants (one assay per task):
 #   sbatch sbatch_run/run_nkn/run_nkn_prosst_proteinmpnn_small_assays.sbatch
@@ -47,7 +47,7 @@
 # Optional noise prior: --noise-prior half_cauchy --noise-prior-scale 0.1.
 # Use --noise-prior none for the original unregularized likelihood objective.
 # To run all 15 singles folds concurrently, with one CPU thread per fold:
-#   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles --parallel
+#   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch singles --parallel
 # Without --parallel, settings and folds run sequentially using all allocated CPUs.
 # --parallel divides CPUs between settings, folds, and threads per fold. Memory
 # is shared by all workers: size --mem for concurrent fits, not for one fit.
@@ -267,13 +267,13 @@ while [[ $# -gt 0 ]]; do
       printf 'Catalog: ASSAY_INDEX overrides auto-detection (data/DMS_substitutions.csv first).\n'
       printf 'Output root: --output-root PATH, then NKN_OUTPUT_ROOT, then results/. Relative paths use the repository root.\n'
       printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
-      printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
+      printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch"
       printf 'Diagnostic example: --held-out-interval 100 (0 disables; overrides training.held_out_interval in JSON)\n'
       printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'
       printf 'NKN overrides: --validation-interval 100 --patience 100 --min-steps 1000 (optimizer steps)\n'
       printf 'Noise prior: --noise-prior none|half_cauchy; --noise-prior-scale 0.1 (overrides JSON)\n'
       printf 'Config precedence: --config, NKN_CONFIG, configs/esm2_proteinmpnn_nkn.json\n'
-      printf 'Parallel example: sbatch %s singles --parallel\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
+      printf 'Parallel example: sbatch %s singles --parallel\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch"
       for index in "${!small_assays[@]}"; do
         printf '  %s: %s\n' "$index" "${small_assays[$index]}"
       done

@@ -192,7 +192,7 @@ class Brca2PipelineTests(unittest.TestCase):
             self.assertFalse((self.root / name).exists())
 
     def test_sbatch_resolves_assay_before_writing_runtime_config_and_preflight(self):
-        script = (REPOSITORY / "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch").read_text()
+        script = (REPOSITORY / "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch").read_text()
         runtime_source = script.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
         metadata_path = self.features / "assay.json"
         metadata = json.loads(metadata_path.read_text())

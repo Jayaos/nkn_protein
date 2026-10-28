@@ -102,7 +102,7 @@ class PopulatedFoldLauncherTests(unittest.TestCase):
         fit.assert_not_called()
 
     def test_cpu_preflight_records_populated_folds_and_caps_workers(self):
-        script = ROOT / "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
+        script = ROOT / "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch"
         preflight = re.findall(r"<<'PY'\n(.*?)\nPY", script.read_text(), re.DOTALL)[-1]
         self.output.mkdir()
         config_path = self.output / "config.json"
