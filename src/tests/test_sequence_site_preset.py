@@ -53,6 +53,8 @@ class SequenceSitePresetTests(unittest.TestCase):
                 REPOSITORY / "configs/extraction/proteinmpnn_v48_020_kermut.json"),
                 **paths, structure_manifest_dir=root / "manifests")
             config = ExperimentConfig.load(REPOSITORY / "configs/esm2_proteinmpnn_nkn.json")
+            # Reproduce the existing unprefixed ProteinMPNN cache selected by the preset.
+            inverse = replace(inverse, cache_id=config.feature_selection["inverse_folding"].split("/", 1)[1])
             self.assertEqual(config.feature_selection["sequence"], f"esm2/{centered.cache_id}")
             self.assertNotEqual(centered.cache_id, pooled.cache_id)
             self.assertEqual(centered.global_window, "non_overlapping")

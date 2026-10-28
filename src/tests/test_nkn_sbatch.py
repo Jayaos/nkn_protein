@@ -124,9 +124,10 @@ class NknSbatchTests(unittest.TestCase):
             """), encoding="utf-8")
 
     def invoke(self, cpus, *arguments, fail_setting=None, config_environment=None,
-               features="features", assay_index=None):
+               features="features", assay_index=None, task_index=None):
         environment = os.environ.copy()
-        for name in ("FOLDS_CSV", self.config_variable, "TEST_FAIL_SETTING", "SLURM_CPUS_PER_TASK", "FEATURES", "ASSAY_INDEX"):
+        for name in ("FOLDS_CSV", self.config_variable, "TEST_FAIL_SETTING", "SLURM_CPUS_PER_TASK",
+                     "FEATURES", "ASSAY_INDEX", "SLURM_ARRAY_TASK_ID", "NKN_ASSAY_OVERRIDE", "NKN_RUN_PREFIX"):
             environment.pop(name, None)
         environment.update(
             BASH_ENV=self.bootstrap.as_posix(), TEST_ROOT=self.root.as_posix(),
@@ -137,6 +138,8 @@ class NknSbatchTests(unittest.TestCase):
         )
         if features is not None:
             environment["FEATURES"] = features
+        if task_index is not None:
+            environment["SLURM_ARRAY_TASK_ID"] = str(task_index)
         if assay_index is not None:
             environment["ASSAY_INDEX"] = assay_index
         if cpus is not None:

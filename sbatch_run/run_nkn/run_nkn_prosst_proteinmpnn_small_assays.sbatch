@@ -21,11 +21,11 @@
 # Regenerate the list and array bounds together if the catalog changes.
 #
 # Submit from the repository root or a subdirectory:
-#   sbatch sbatch_run/run_nkn/run_nkn_proteinmpnn_prosst_small_assays.sbatch
+#   sbatch sbatch_run/run_nkn/run_nkn_prosst_proteinmpnn_small_assays.sbatch
 # Limit concurrent assay jobs (resources above are per assay):
-#   sbatch --array=0-56%4 sbatch_run/run_nkn/run_nkn_proteinmpnn_prosst_small_assays.sbatch
+#   sbatch --array=0-56%4 sbatch_run/run_nkn/run_nkn_prosst_proteinmpnn_small_assays.sbatch
 # All arguments are forwarded to run_nkn_esm2_proteinmpnn.sbatch, for example:
-#   sbatch sbatch_run/run_nkn/run_nkn_proteinmpnn_prosst_small_assays.sbatch singles_random --parallel
+#   sbatch sbatch_run/run_nkn/run_nkn_prosst_proteinmpnn_small_assays.sbatch singles_random --parallel
 # Default: singles (random, modulo, contiguous; populated published folds).
 # Kernel inputs: ProSST-2048 layer-12 centered-site and full-sequence mean embeddings
 # for sequence_site and sequence_global; sequence-conditioned ProteinMPNN
@@ -110,7 +110,7 @@ assays=(
 )
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-  printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_proteinmpnn_prosst_small_assays.sbatch [singles|SETTING] [shared-runner options]\n'
+  printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_prosst_proteinmpnn_small_assays.sbatch [singles|SETTING] [shared-runner options]\n'
   printf 'Default array: 0-56; 57 assays with 1-1000 single mutants (inclusive).\n'
   printf 'Catalog: auto-detected from data/DMS_substitutions.csv or the extracted-data folder; ASSAY_INDEX overrides.\n'
   printf 'Limit concurrent assays with sbatch --array=0-56%%4 ...\n'
@@ -147,6 +147,7 @@ while [[ ! -f "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
 done
 
 export ASSAY="${assays[$task_index]}"
+export NKN_ASSAY_OVERRIDE="$ASSAY"
 export NKN_CONFIG="${NKN_CONFIG:-configs/proteinmpnn_prosst_nkn.json}"
 export NKN_RUN_PREFIX="${NKN_RUN_PREFIX:-nkn_prosst_proteinmpnn}"
 printf 'Array task: %s_%s; assay: %s\n' "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$ASSAY"

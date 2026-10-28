@@ -211,6 +211,7 @@ while [[ ! -f "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
 done
 
 export ASSAY="${assays[$task_index]}"
+export NKN_ASSAY_OVERRIDE="$ASSAY"
 default_config="configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json"
 export NKN_CONFIG="${NKN_CONFIG:-$default_config}"
 printf 'Array task: %s_%s; assay: %s\n' "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$ASSAY"

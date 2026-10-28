@@ -1,13 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=nkn_esm2_proteinmpnn
 #SBATCH --account=gts-yxie77-paid
+#SBATCH --array=0-56
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=15
 #SBATCH --mem=16G
 #SBATCH --time=24:00:00
 #SBATCH --qos=inferno
-#SBATCH --output=%x-%j.out
+#SBATCH --output=%x-%A_%a.out
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
@@ -24,11 +25,19 @@
 # joins separate structure fragments; the other selected branches remain active.
 # It also drops ProteinMPNN mean scores from two-score presets, retaining ESM2.
 #
+# One assay per array task: 57 assays with 0 < DMS_number_single_mutants < 1000.
+# The list below is a snapshot of data/DMS_substitutions.csv, in catalog order,
+# matching the ProSST small-assay launcher. Update the list and array bounds together.
+# Resources above are per assay; --parallel controls fits within each assay.
 # From the repository root (or a subdirectory):
 #   sbatch sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch [singles|all|SETTING] [--config PATH] [--parallel] [--held-out-interval N]
+# Limit concurrent assay tasks to four:
+#   sbatch --array=0-56%4 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch
+# Test one assay (index 56) with just the random-fold protocol:
+#   sbatch --array=56 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch singles_random
 # To run the ProSST/ProteinMPNN preset on all 57 catalog assays with 1-1000
 # single mutants (one assay per task):
-#   sbatch sbatch_run/run_nkn/run_nkn_proteinmpnn_prosst_small_assays.sbatch
+#   sbatch sbatch_run/run_nkn/run_nkn_prosst_proteinmpnn_small_assays.sbatch
 # The wrapper selects configs/proteinmpnn_prosst_nkn.json and forwards all arguments.
 # Add --held-out-interval 100 to record held-out Spearman every 100 updates.
 # Diagnostics are off by default; 0 disables them. They never select checkpoints.
@@ -53,8 +62,9 @@
 # data/features/pretrained/<ASSAY>. FEATURES overrides either default.
 # all: three singles CV runs, one shared mixed CV run, one extrapolation fit
 # (21 fits). The mixed run reports both singles and doubles evaluation settings.
-# The default ASSAY has only singles; all requires another assay with doubles.
-# Set ASSAY and optionally FEATURES, SINGLES_FOLDS_CSV, MULTIPLES_FOLDS_CSV,
+# all requires an assay with doubles and does not work for every selected assay.
+# Array tasks select ASSAY by index. Manual bash runs without an array ID honor ASSAY.
+# Optionally set FEATURES, SINGLES_FOLDS_CSV, MULTIPLES_FOLDS_CSV,
 # SAMPLE_RATIO (default 0.8), or SPLIT_SEED (default 2024) before sbatch.
 # SAMPLE_RATIO=1.0 trains on all singles. Relative paths use the repository root.
 # Catalog: ASSAY_INDEX overrides auto-detection of data/DMS_substitutions.csv,
@@ -66,6 +76,66 @@
 # Relative output roots are resolved from the repository root.
 # NKN_RUN_PREFIX sets the model name in result folders (default nkn_esm2_proteinmpnn).
 set -eo pipefail
+
+small_assays=(
+  "A0A1I9GEU1_NEIME_Kennouche_2019"
+  "A4_HUMAN_Seuma_2022"
+  "AICDA_HUMAN_Gajula_2014_3cycles"
+  "AMFR_HUMAN_Tsuboyama_2023_4G3O"
+  "B2L11_HUMAN_Dutta_2010_binding-Mcl-1"
+  "BCHB_CHLTE_Tsuboyama_2023_2KRU"
+  "BLAT_ECOLX_Jacquier_2013"
+  "BRCA2_HUMAN_Erwood_2022_HEK293T"
+  "CAPSD_AAV2S_Sinai_2021"
+  "CBX4_HUMAN_Tsuboyama_2023_2K28"
+  "CUE1_YEAST_Tsuboyama_2023_2MYX"
+  "ENV_HV1B9_DuenasDecamp_2016"
+  "ERBB2_HUMAN_Elazar_2016"
+  "F7YBW8_MESOW_Ding_2023"
+  "F7YBW8_MESOW_Aakre_2015"
+  "GCN4_YEAST_Staller_2018"
+  "GLPA_HUMAN_Elazar_2016"
+  "HIS7_YEAST_Pokusaeva_2019"
+  "ISDH_STAAW_Tsuboyama_2023_2LHR"
+  "KCNH2_HUMAN_Kozek_2020"
+  "LYAM1_HUMAN_Elazar_2016"
+  "MAFG_MOUSE_Tsuboyama_2023_1K1V"
+  "MYO3_YEAST_Tsuboyama_2023_2BTT"
+  "NPC1_HUMAN_Erwood_2022_HEK293T"
+  "NPC1_HUMAN_Erwood_2022_RPE1"
+  "NRAM_I33A0_Jiang_2016"
+  "ODP2_GEOSE_Tsuboyama_2023_1W4G"
+  "OPSD_HUMAN_Wan_2019"
+  "OTU7A_HUMAN_Tsuboyama_2023_2L2D"
+  "PIN1_HUMAN_Tsuboyama_2023_1I6C"
+  "PITX2_HUMAN_Tsuboyama_2023_2L7M"
+  "POLG_PESV_Tsuboyama_2023_2MXD"
+  "Q837P4_ENTFA_Meier_2023"
+  "Q837P5_ENTFA_Meier_2023"
+  "RAD_ANTMA_Tsuboyama_2023_2CJJ"
+  "RAF1_HUMAN_Zinkus-Boltz_2019"
+  "RBP1_HUMAN_Tsuboyama_2023_2KWH"
+  "RCD1_ARATH_Tsuboyama_2023_5OAO"
+  "RD23A_HUMAN_Tsuboyama_2023_1IFY"
+  "RFAH_ECOLI_Tsuboyama_2023_2LCL"
+  "RPC1_LAMBD_Li_2019_high-expression"
+  "RPC1_LAMBD_Li_2019_low-expression"
+  "SAV1_MOUSE_Tsuboyama_2023_2YSB"
+  "SCN5A_HUMAN_Glazer_2019"
+  "SDA_BACSU_Tsuboyama_2023_1PV0"
+  "SPG1_STRSG_Wu_2016"
+  "SQSTM_MOUSE_Tsuboyama_2023_2RRU"
+  "SR43C_ARATH_Tsuboyama_2023_2N88"
+  "TCRG1_MOUSE_Tsuboyama_2023_1E0L"
+  "THO1_YEAST_Tsuboyama_2023_2WQG"
+  "TPOR_HUMAN_Bridgford_2020"
+  "UBE4B_MOUSE_Starita_2013"
+  "VG08_BPP22_Tsuboyama_2023_2GP8"
+  "VKOR1_HUMAN_Chiasson_2020_activity"
+  "YAIA_ECOLI_Tsuboyama_2023_2KVT"
+  "YAP1_HUMAN_Araya_2012"
+  "YNZC_BACSU_Tsuboyama_2023_2JVD"
+)
 
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
 while [[ ! -f "$project_root/src/experiments/cli.py" || ! -f "$project_root/configs/esm2_proteinmpnn_nkn.json" ]]; do
@@ -190,6 +260,9 @@ while [[ $# -gt 0 ]]; do
       fi
       shift ;;
     -h|--help)
+      printf 'Default array: 0-56; 57 assays with fewer than 1000 single mutants (excluding zero).\n'
+      printf 'Limit concurrent assays: sbatch --array=0-56%%4 ...; one assay: sbatch --array=56 ... singles_random\n'
+      printf 'Array tasks select assays by index; manual bash runs without an array ID honor ASSAY.\n'
       printf 'Result directory prefix: NKN_RUN_PREFIX (default nkn_esm2_proteinmpnn).\n'
       printf 'Catalog: ASSAY_INDEX overrides auto-detection (data/DMS_substitutions.csv first).\n'
       printf 'Output root: --output-root PATH, then NKN_OUTPUT_ROOT, then results/. Relative paths use the repository root.\n'
@@ -201,6 +274,9 @@ while [[ $# -gt 0 ]]; do
       printf 'Noise prior: --noise-prior none|half_cauchy; --noise-prior-scale 0.1 (overrides JSON)\n'
       printf 'Config precedence: --config, NKN_CONFIG, configs/esm2_proteinmpnn_nkn.json\n'
       printf 'Parallel example: sbatch %s singles --parallel\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch"
+      for index in "${!small_assays[@]}"; do
+        printf '  %s: %s\n' "$index" "${small_assays[$index]}"
+      done
       exit 0 ;;
     -*)
       echo "error: Unknown option: $1" >&2
@@ -258,6 +334,21 @@ if [[ ! -f "$config_template" ]]; then
   exit 1
 fi
 assay="${ASSAY:-A0A1I9GEU1_NEIME_Kennouche_2019}"
+# Wrappers supply their own selected assay; their array indices may refer to a
+# different list. Direct array submissions ignore an inherited ASSAY value.
+if [[ -n "${NKN_ASSAY_OVERRIDE:-}" ]]; then
+  assay="$NKN_ASSAY_OVERRIDE"
+elif [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
+  task_index="$SLURM_ARRAY_TASK_ID"
+  case "$task_index" in
+    [0-9]|[1-4][0-9]|5[0-6]) ;;
+    *)
+      printf 'error: SLURM_ARRAY_TASK_ID must be 0-56 (got "%s").\n' "$task_index" >&2
+      exit 1 ;;
+  esac
+  assay="${small_assays[$task_index]}"
+  printf 'Array task: %s_%s; assay: %s\n' "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$assay"
+fi
 if [[ -z "$assay" || "$assay" == *[/\\]* || "$assay" == "." || "$assay" == ".." ]]; then
   echo "error: ASSAY must be a ProteinGym assay ID, not a path." >&2
   exit 1

@@ -13,7 +13,7 @@ from src.feature_generation.inverse_config import InverseFoldingConfig
 from src.feature_generation.prosst_config import ProSSTConfig
 
 
-SCRIPT = Path("sbatch_run/run_nkn/run_nkn_proteinmpnn_prosst_small_assays.sbatch")
+SCRIPT = Path("sbatch_run/run_nkn/run_nkn_prosst_proteinmpnn_small_assays.sbatch")
 PRESET = Path("configs/proteinmpnn_prosst_nkn.json")
 CATALOG = next((array_tests.REPOSITORY / path for path in (
     "data/DMS_substitutions.csv",
