@@ -64,6 +64,7 @@
 # <output-root>/NAME/<assay>/<model-run>/. Without it, NAME is omitted.
 # --output-root PATH overrides NKN_OUTPUT_ROOT (default results/).
 # Relative output roots are resolved from the repository root.
+# NKN_RUN_PREFIX sets the model name in result folders (default nkn_esm2_proteinmpnn).
 set -eo pipefail
 
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
@@ -81,6 +82,7 @@ selection_given=false
 parallel=false
 experiment_suffix="${EXPERIMENT_SUFFIX:-}"
 output_root="${NKN_OUTPUT_ROOT:-results}"
+run_prefix="${NKN_RUN_PREFIX:-nkn_esm2_proteinmpnn}"
 held_out_interval=""
 stopping_criterion=""
 validation_interval=""
@@ -188,6 +190,7 @@ while [[ $# -gt 0 ]]; do
       fi
       shift ;;
     -h|--help)
+      printf 'Result directory prefix: NKN_RUN_PREFIX (default nkn_esm2_proteinmpnn).\n'
       printf 'Catalog: ASSAY_INDEX overrides auto-detection (data/DMS_substitutions.csv first).\n'
       printf 'Output root: --output-root PATH, then NKN_OUTPUT_ROOT, then results/. Relative paths use the repository root.\n'
       printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
@@ -214,6 +217,10 @@ while [[ $# -gt 0 ]]; do
 done
 if [[ "$experiment_suffix" == *[/\\]* || "$experiment_suffix" == "." || "$experiment_suffix" == ".." ]]; then
   echo "error: Experiment suffix must be a single folder name, not a path." >&2
+  exit 1
+fi
+if [[ ! "$run_prefix" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+  echo "error: NKN_RUN_PREFIX must be a name using letters, digits, dots, underscores, or hyphens, starting with a letter or digit." >&2
   exit 1
 fi
 case "$selection" in
@@ -330,7 +337,7 @@ export OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"
 export CUDA_VISIBLE_DEVICES=""
 
 run_id="${SLURM_JOB_ID:-manual_$(date -u +%Y%m%dT%H%M%SZ)}"
-run_root="$output_root/${experiment_suffix:+$experiment_suffix/}$assay/nkn_esm2_proteinmpnn_${selection}_${run_id}"
+run_root="$output_root/${experiment_suffix:+$experiment_suffix/}$assay/${run_prefix}_${selection}_${run_id}"
 runtime_config="$run_root/config.json"
 
 # Refuse to reuse a previous run's directory or overwrite its results.
