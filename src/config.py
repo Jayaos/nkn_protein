@@ -223,6 +223,7 @@ class ExperimentConfig:
     score_sources: list | None = None
     inverse_folding_policy: str = "normalized"
     structure_manifest_dir: str = "data/structures/proteingym/manifests"
+    structure_consistency: str = "shared"
     pooling: str = "mean"
     device: str = "cpu"
     num_threads: int = 1
@@ -241,6 +242,8 @@ class ExperimentConfig:
         if not isinstance(self.structure_manifest_dir, (str, Path)) or not str(self.structure_manifest_dir).strip():
             raise ValueError("structure_manifest_dir must be a nonempty path")
         self.structure_manifest_dir = str(self.structure_manifest_dir)
+        if self.structure_consistency not in ("shared", "per_cache"):
+            raise ValueError("structure_consistency must be 'shared' or 'per_cache'")
 
     def for_assay(self, assay_id):
         """Resolve known assay restrictions before loading features or saving a run."""

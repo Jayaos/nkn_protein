@@ -113,6 +113,7 @@ def _load_batch(args, config, feature_loader=None):
         enabled_branches=config.model.enabled_branches,
         inverse_folding_policy=config.inverse_folding_policy,
         structure_manifest_dir=config.structure_manifest_dir,
+        structure_consistency=config.structure_consistency,
     )
     if args.singles_only:
         counts = torch.bincount(batch.owners, minlength=batch.num_variants)

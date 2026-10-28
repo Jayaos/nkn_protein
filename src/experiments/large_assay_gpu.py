@@ -95,6 +95,7 @@ def main(argv=None):
             enabled_branches=config.model.enabled_branches,
             inverse_folding_policy=config.inverse_folding_policy,
             structure_manifest_dir=config.structure_manifest_dir,
+            structure_consistency=config.structure_consistency,
         )
         if batch.assay_id != assay:
             raise ValueError(f"Loaded feature batch does not identify {assay}")

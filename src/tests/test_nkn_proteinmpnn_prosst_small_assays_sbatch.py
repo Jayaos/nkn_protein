@@ -81,6 +81,7 @@ class ProteinMPNNProSSTPresetTests(unittest.TestCase):
         self.assertTrue({"sequence_site", "sequence_global", "inverse_folding", "inverse_folding_site"}
                         <= set(config["model"]["enabled_branches"]))
         self.assertEqual(config["inverse_folding_policy"], "sequence_conditional")
+        self.assertEqual(config["structure_consistency"], "per_cache")
         self.assertEqual((prosst.site_embeddings, prosst.global_window), ("centered", "non_overlapping"))
         self.assertEqual([source.split("/")[1] for source in config["score_sources"]],
                          ["prosst", "proteinmpnn"])
@@ -123,6 +124,7 @@ class ProteinMPNNProSSTPresetTests(unittest.TestCase):
         requested = json.loads((array_tests.REPOSITORY / PRESET).read_text())
         self.assertEqual(resolved["feature_selection"], requested["feature_selection"])
         self.assertEqual(resolved["score_sources"], requested["score_sources"])
+        self.assertEqual(resolved["structure_consistency"], "per_cache")
         self.assertEqual(set(resolved["model"]["enabled_branches"]),
                          set(requested["model"]["enabled_branches"]))
 

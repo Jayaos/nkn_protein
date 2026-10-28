@@ -277,12 +277,14 @@ def kermut_probability_recipe(config: Mapping) -> dict | None:
     return {**expected, "num_orders": num_orders, "seed": seed}
 
 
-def _structure_distance_features(manifest_dir, assay_id, reference, root, stores, configs, sources):
+def _structure_distance_features(manifest_dir, assay_id, reference, root, stores, configs, sources,
+                                 structure_consistency="shared"):
     """Load mapped CA atoms and check any cached structural provenance."""
     from feature_generation.structure_fragments import (
         StructureFragments, load_inverse_structure as load_structure,
         validate_inverse_structure_metadata as validate_structure_metadata,
     )
+    from structure_provenance import validate_feature_structure
 
     manifest_root = Path(manifest_dir)
     if not manifest_root.is_absolute():
@@ -303,28 +305,24 @@ def _structure_distance_features(manifest_dir, assay_id, reference, root, stores
         cached_structure = config.get("structure")
         if cached_structure is not None:
             validate_structure_metadata(cached_structure, reference)
-            if cached_structure.get("assay_id") != assay_id:
-                raise ValueError(f"{name} structure provenance belongs to a different assay")
-            if cached_structure["input_signature"] != structure.input_signature:
-                raise ValueError(f"Selected structure differs from the {name} feature structure")
         recorded_provenance = [config, store]
         if "provenance" in store:
             recorded_provenance.append(store["provenance"])
         provenance_path = _inside(root, f"{sources[name]}/provenance.json")
         if provenance_path.exists():
             recorded_provenance.append(json.loads(provenance_path.read_text(encoding="utf-8")))
-        for recorded in recorded_provenance:
-            if not isinstance(recorded, Mapping):
-                raise ValueError(f"{name} structure provenance must be an object")
-            for key, expected in (("structure_sha256", structure.structure_sha256),
-                                  ("structure_input_signature", structure.input_signature)):
-                if key in recorded and recorded[key] != expected:
-                    raise ValueError(f"{name} provenance disagrees with selected structure: {key}")
+        validate_feature_structure(
+            name, assay_id,
+            {"input_signature": structure.input_signature, "structure_sha256": structure.structure_sha256},
+            cached_structure, recorded_provenance, structure_consistency,
+        )
     signature = {
         "structure_distance.input_signature": structure.input_signature,
         "structure_distance.structure_sha256": structure.structure_sha256,
         "structure_distance.coordinates": "reference_CA_angstrom",
     }
+    if structure_consistency != "shared":
+        signature["structure_distance.feature_structure_consistency"] = structure_consistency
     coordinates = torch.full((len(reference), 3), float("nan"), dtype=torch.float64)
     coordinates[structure.positions - 1] = structure.coords[:, 1].double()
     return coordinates, signature
@@ -340,6 +338,7 @@ def load_feature_bundle(
     *,
     inverse_folding_policy: str = "normalized",
     structure_manifest_dir: str | Path = "data/structures/proteingym/manifests",
+    structure_consistency: str = "shared",
 ) -> FeatureBatch:
     """Load schema-v2 caches; selection and score sources never depend on labels.
 
@@ -360,9 +359,14 @@ def load_feature_bundle(
     verified structure manifests; relative manifest directories resolve from
     the project root. It adds no representation cache or mean score source.
     A physical-distance-only selection therefore needs explicit score_sources.
+    structure_consistency='shared' requires structure-conditioned caches to use
+    the distance branch's structure. 'per_cache' validates each cache against its
+    own declared structure, while all reference mappings remain checked.
     """
     if inverse_folding_policy not in ("normalized", "sequence_conditional", "kermut"):
         raise ValueError("inverse_folding_policy must be 'normalized', 'sequence_conditional', or 'kermut'")
+    if structure_consistency not in ("shared", "per_cache"):
+        raise ValueError("structure_consistency must be 'shared' or 'per_cache'")
     branches = DEFAULT_BRANCHES if enabled_branches is None else validate_enabled_branches(enabled_branches)
     needed_types = {"sequence" if name.startswith("sequence_") else
                     "inverse_folding" if name == "inverse_folding_site" else name
@@ -555,6 +559,7 @@ def load_feature_bundle(
     if "structure_distance" in branches:
         coordinates, geometry_signature = _structure_distance_features(
             structure_manifest_dir, assay_id, reference, root, stores, configs, sources,
+            structure_consistency,
         )
         local_features["structure_distance"] = coordinates[positions - 1]
         if not torch.isfinite(local_features["structure_distance"]).all():

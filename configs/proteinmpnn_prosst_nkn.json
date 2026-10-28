@@ -31,6 +31,7 @@
   },
   "inverse_folding_policy": "sequence_conditional",
   "structure_manifest_dir": "data/structures/proteingym/manifests",
+  "structure_consistency": "per_cache",
   "score_sources": [
     "scores/prosst/protssn_proteingym--ProSST-2048-masked_marginals-fixed-backbone-float32-e94ffee7846d-centered2046",
     "scores/proteinmpnn/v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb"

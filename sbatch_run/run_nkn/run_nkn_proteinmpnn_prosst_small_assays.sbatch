@@ -33,6 +33,8 @@
 # ProteinMPNN features and scores use the existing unprefixed v_48_020-* directories
 # under data/features/pretrained/singles/<assay> (no proteingym-- prefix).
 # ProSST caches match configs/extraction/prosst_2048_singles.json (protssn_proteingym).
+# Each cache is checked against its own recorded structure (structure_consistency=per_cache).
+# ProteinMPNN and CA distances use proteingym; ProSST uses protssn_proteingym.
 # structure_distance uses the reference CA coordinates. The GP mean uses both
 # ProSST masked-marginal scores and ProteinMPNN sequence log-likelihood scores.
 # BRCA2 retains its existing ProteinMPNN-score exclusion and uses ProSST scores only.
@@ -114,6 +116,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'Default config: configs/proteinmpnn_prosst_nkn.json; --config overrides NKN_CONFIG.\n'
   printf 'Kernel inputs: ProSST sequence_site/sequence_global; ProteinMPNN inverse_folding/inverse_folding_site; reference CA structure_distance.\n'
   printf 'GP mean scores: ProSST and ProteinMPNN (ProSST only for BRCA2).\n'
+  printf 'Structure consistency: per_cache; ProSST and ProteinMPNN retain their independently validated structures.\n'
   printf 'ProteinMPNN features/scores: existing unprefixed v_48_020-* cache directories.\n'
   printf 'ProSST embeddings and scores must match configs/extraction/prosst_2048_singles.json.\n'
   printf 'Default settings: singles; --parallel also parallelizes settings and folds within each assay.\n'

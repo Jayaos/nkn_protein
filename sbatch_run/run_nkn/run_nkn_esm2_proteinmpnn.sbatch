@@ -411,6 +411,7 @@ print(f"Kernel branches: {', '.join(config.model.enabled_branches)}")
 print(f"Sequence cache: {config.feature_selection.get('sequence')}")
 print(f"ProteinMPNN cache: {config.feature_selection.get('inverse_folding')}")
 print(f"ProteinMPNN input policy: {config.inverse_folding_policy}")
+print(f"Structure consistency: {config.structure_consistency}; distance manifests: {config.structure_manifest_dir}")
 print(f"Mean score caches: {config.score_sources}")
 print(f"GP mean score sources: {len(config.score_sources) if config.score_sources is not None else 'cache defaults'}")
 print(f"Training: up to {config.training.max_steps} steps per initialization; seeds {config.training.seeds}")
@@ -455,6 +456,7 @@ batch = load_feature_bundle(
     score_sources=config.score_sources, pooling=config.pooling,
     inverse_folding_policy=config.inverse_folding_policy,
     structure_manifest_dir=config.structure_manifest_dir,
+    structure_consistency=config.structure_consistency,
     device=config.device, enabled_branches=config.model.enabled_branches,
 )
 output = Path(sys.argv[1]).parent
