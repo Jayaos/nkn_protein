@@ -43,7 +43,7 @@
 # published folds for each selected assay must already exist.
 # "all" and mixed/double settings require doubles and do not work for every assay.
 # --parallel additionally divides each assay task's CPUs between settings/folds.
-# Results: results/<assay>/nkn_proteinmpnn_prosst_<selection>_<task-job-id>/
+# Results: results/<assay>/nkn_prosst_proteinmpnn_<selection>_<task-job-id>/
 # NKN_RUN_PREFIX overrides the model name in result folders.
 # --output-root and --experiment-suffix are forwarded to the shared runner.
 # Logs: nkn_proteinmpnn_prosst_small_assays-<array-job-id>_<task-index>.out in the submission directory.
@@ -115,7 +115,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'Catalog: auto-detected from data/DMS_substitutions.csv or the extracted-data folder; ASSAY_INDEX overrides.\n'
   printf 'Limit concurrent assays with sbatch --array=0-56%%4 ...\n'
   printf 'Default config: configs/proteinmpnn_prosst_nkn.json; --config overrides NKN_CONFIG.\n'
-  printf 'Results: results/<assay>/nkn_proteinmpnn_prosst_<selection>_<task-job-id>/ (NKN_RUN_PREFIX overrides the prefix).\n'
+  printf 'Results: results/<assay>/nkn_prosst_proteinmpnn_<selection>_<task-job-id>/ (NKN_RUN_PREFIX overrides the prefix).\n'
   printf 'Kernel inputs: ProSST sequence_site/sequence_global; ProteinMPNN inverse_folding/inverse_folding_site; reference CA structure_distance.\n'
   printf 'GP mean scores: ProSST and ProteinMPNN (ProSST only for BRCA2).\n'
   printf 'Structure consistency: per_cache; ProSST and ProteinMPNN retain their independently validated structures.\n'
@@ -148,7 +148,7 @@ done
 
 export ASSAY="${assays[$task_index]}"
 export NKN_CONFIG="${NKN_CONFIG:-configs/proteinmpnn_prosst_nkn.json}"
-export NKN_RUN_PREFIX="${NKN_RUN_PREFIX:-nkn_proteinmpnn_prosst}"
+export NKN_RUN_PREFIX="${NKN_RUN_PREFIX:-nkn_prosst_proteinmpnn}"
 printf 'Array task: %s_%s; assay: %s\n' "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$ASSAY"
 exec bash "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn.sbatch" "$@"
 
