@@ -32,7 +32,7 @@ BASH = available_bash()
 @unittest.skipUnless(BASH, "Bash is required for Slurm orchestration tests")
 class NknSbatchTests(unittest.TestCase):
     script = SCRIPT
-    config_file = "configs/esm2_proteinmpnn_nkn.json"
+    config_file = "configs/esm2_proteinmpnn_nkn_four_branches_noise_initial_0p5.json"
     config_variable = "NKN_CONFIG"
     cli_module = "experiments.cli"
     cli_file = "src/experiments/cli.py"

@@ -17,12 +17,14 @@
 # shared NKN runner with four branches and initial noise variance 0.5.
 # Default: singles (random, modulo, contiguous; populated published folds), with the
 # additive two-score preset and caches under data/features/pretrained/singles.
+# Uses the same default config as the ESM2 small-assay launcher; ProteinMPNN
+# features and scores use unprefixed v_48_020-* cache directories.
 # Branches: [1]; final NKN: [8, 4, 4, 2, 1]. Minimum optimizer steps: 1000.
 # Observation-noise variance prior: none. Initial noise variance: 0.5.
 # Enabled: sequence_site, sequence_global, inverse_folding, structure_distance.
 # Resources above apply to each assay. --parallel divides the task's CPUs
 # between its settings and folds.
-# Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]
+# Usage: sbatch sbatch_run/run_nkn/run_nkn_cpu.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]
 # Add --held-out-interval 100 to record diagnostic Spearman every 100 updates.
 # Add --stopping-criterion validation_spearman for three train / one validation /
 # one test folds. --validation-interval 100 --patience 100 --min-steps 1000 are defaults.
@@ -179,9 +181,10 @@ assays=(
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'Output root: --output-root PATH, then NKN_OUTPUT_ROOT, then results/. Relative paths use the repository root.\n'
   printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
-  printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_assays.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n'
+  printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_cpu.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n'
   printf 'Default array: 0-130; 131 assays with fewer than 2,000 single-mutant variants.\n'
-  printf 'Default config for every assay: configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json\n'
+  printf 'Default config for every assay: configs/esm2_proteinmpnn_nkn_four_branches_noise_initial_0p5.json\n'
+  printf 'ProteinMPNN features/scores: unprefixed v_48_020-* cache directories, matching the ESM2 small-assay launcher.\n'
   printf 'Initial noise variance: 0.5 (explicit --config or NKN_CONFIG overrides the default).\n'
   printf 'Branches: sequence_site, sequence_global, inverse_folding, structure_distance\n'
   printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'
@@ -212,7 +215,7 @@ done
 
 export ASSAY="${assays[$task_index]}"
 export NKN_ASSAY_OVERRIDE="$ASSAY"
-default_config="configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json"
+default_config="configs/esm2_proteinmpnn_nkn_four_branches_noise_initial_0p5.json"
 export NKN_CONFIG="${NKN_CONFIG:-$default_config}"
 printf 'Array task: %s_%s; assay: %s\n' "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$ASSAY"
 exec bash "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch" "$@"

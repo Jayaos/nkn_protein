@@ -16,8 +16,9 @@
 
 # 14 assays with 8,000 < n <= 12,000 single-mutant variants; array indices 0-13.
 # GPU: V100 with 32GB VRAM.
-# Same default four-branch NKN preset as run_nkn_assays.sbatch:
+# Same default four-branch NKN preset as run_nkn_cpu.sbatch:
 # initial noise variance 0.5, in float64.
+# ProteinMPNN features and scores use unprefixed v_48_020-* cache directories.
 # Load prepared features/scores and published singles assignments; run populated folds.
 # Default: all three singles settings; assay-specific config rules still apply.
 # Settings and folds run sequentially on one GPU per task.
@@ -74,8 +75,9 @@ Usage: sbatch sbatch_run/run_nkn/run_nkn_gpu_v100_32G.sbatch [NAME] [singles|SET
 SETTINGS: singles_random, singles_modulo, singles_contiguous
 NAME: optional leading results-group folder name (must not be a setting).
 Default singles runs all three sequentially, using each scheme's populated folds.
-Default config: configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json
-Initial noise variance: 0.5; same model/training defaults as run_nkn_assays.sbatch.
+Default config: configs/esm2_proteinmpnn_nkn_four_branches_noise_initial_0p5.json
+Initial noise variance: 0.5; same model/training defaults as run_nkn_cpu.sbatch.
+ProteinMPNN features/scores: unprefixed v_48_020-* cache directories, matching run_nkn_cpu.sbatch.
 Config precedence: --config PATH, NKN_CONFIG, then the default above.
 Default: 14 ProteinGym assays with 8,000 < n <= 12,000 single-mutant variants.
 GPU request: V100 with 32GB VRAM (V100-32GB).
@@ -207,7 +209,7 @@ case "${1:-}" in
   singles|singles_random|singles_modulo|singles_contiguous) selection="$1" ;;
 esac
 run_root="$output_root/${experiment_suffix:+$experiment_suffix/}$assay/nkn_esm2_proteinmpnn_${selection}_gpu_${run_id}_${task_index}"
-config="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json}"
+config="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn_four_branches_noise_initial_0p5.json}"
 printf 'Job: %s\nRepository: %s\nPython: %s\n' "$run_id" "$project_root" "$python_exec"
 printf 'Array task: %s_%s; assay: %s\n' \
   "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$assay"

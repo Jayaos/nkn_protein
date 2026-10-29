@@ -17,10 +17,13 @@
 # for sequence_site (mutation positions) and fixed non-overlapping windows for
 # sequence_global (a residue-weighted full-sequence mean),
 # plus sequence-conditioned ProteinMPNN features (10 orders, seed 37), preserved
-# without renormalization (distribution and mutant log-probability branches),
+# without renormalization for inverse_folding,
 # and physical-distance kernels on reference CA atoms
-# loaded from structure_manifest_dir. Only ESM2 650M masked-marginal scores feed the
-# learned GP mean in the default preset. CPU only.
+# loaded from structure_manifest_dir. ESM2 650M masked-marginal scores and ProteinMPNN
+# sequence log-likelihood scores feed the learned GP mean. CPU only.
+# Branches: sequence_site, sequence_global, inverse_folding, structure_distance.
+# Branch widths: [1]; final NKN widths: [8, 4, 4, 2, 1]. Initial noise variance: 0.5.
+# ProteinMPNN features and scores use the existing unprefixed v_48_020-* cache directories.
 # BRCA2_HUMAN_Erwood_2022_HEK293T disables structure_distance because its reference
 # joins separate structure fragments; the other selected branches remain active.
 # It also drops ProteinMPNN mean scores from two-score presets, retaining ESM2.
@@ -38,7 +41,8 @@
 # To run the ProSST/ProteinMPNN preset on all 57 catalog assays with 1-1000
 # single mutants (one assay per task):
 #   sbatch sbatch_run/run_nkn/run_nkn_prosst_proteinmpnn_small_assays.sbatch
-# The wrapper selects configs/proteinmpnn_prosst_nkn.json and forwards all arguments.
+# The wrapper selects configs/proteinmpnn_prosst_nkn_four_branches_noise_initial_0p5.json
+# and forwards all arguments (ProSST embeddings; ProSST and ProteinMPNN mean scores).
 # Add --held-out-interval 100 to record held-out Spearman every 100 updates.
 # Diagnostics are off by default; 0 disables them. They never select checkpoints.
 # Add --stopping-criterion validation_spearman for three train / one validation /
@@ -51,11 +55,11 @@
 # Without --parallel, settings and folds run sequentially using all allocated CPUs.
 # --parallel divides CPUs between settings, folds, and threads per fold. Memory
 # is shared by all workers: size --mem for concurrent fits, not for one fit.
-# Hyperparameters come from configs/esm2_proteinmpnn_nkn.json by default.
+# Hyperparameters come from configs/esm2_proteinmpnn_nkn_four_branches_noise_initial_0p5.json by default.
 # Copy/edit that JSON and select it with --config PATH or NKN_CONFIG=PATH.
 # --config takes precedence over NKN_CONFIG; paths use the repository root.
-# For additive branches [1], final NKN [8, 4, 4, 2, 1], and both mean scores:
-#   --config configs/esm2_proteinmpnn_nkn_two_scores_additive_branches.json
+# For the original five-branch preset with ESM2-only mean scores and noise variance 0.01:
+#   --config configs/esm2_proteinmpnn_nkn.json
 # Default: singles, the three published singles CV protocols (up to 15 fold fits).
 # Use only populated published fold IDs; preserve assignments and original IDs.
 # Singles use data/features/pretrained/singles/<ASSAY>; other selections use
@@ -138,7 +142,7 @@ small_assays=(
 )
 
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
-while [[ ! -f "$project_root/src/experiments/cli.py" || ! -f "$project_root/configs/esm2_proteinmpnn_nkn.json" ]]; do
+while [[ ! -f "$project_root/src/experiments/cli.py" || ! -f "$project_root/configs/esm2_proteinmpnn_nkn_four_branches_noise_initial_0p5.json" ]]; do
   if [[ "$project_root" == "/" ]]; then
     echo "error: Submit this job from the nkn_protein repository or a subdirectory." >&2
     exit 1
@@ -160,7 +164,7 @@ patience=""
 min_steps=""
 noise_prior=""
 noise_prior_scale=""
-config_template="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn.json}"
+config_template="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn_four_branches_noise_initial_0p5.json}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --noise-prior|--noise-prior-scale)
@@ -272,7 +276,10 @@ while [[ $# -gt 0 ]]; do
       printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'
       printf 'NKN overrides: --validation-interval 100 --patience 100 --min-steps 1000 (optimizer steps)\n'
       printf 'Noise prior: --noise-prior none|half_cauchy; --noise-prior-scale 0.1 (overrides JSON)\n'
-      printf 'Config precedence: --config, NKN_CONFIG, configs/esm2_proteinmpnn_nkn.json\n'
+      printf 'Config precedence: --config, NKN_CONFIG, configs/esm2_proteinmpnn_nkn_four_branches_noise_initial_0p5.json\n'
+      printf 'Branches: sequence_site, sequence_global, inverse_folding, structure_distance (disabled for BRCA2).\n'
+      printf 'Branch widths: [1]; final NKN widths: [8, 4, 4, 2, 1]; initial noise variance: 0.5.\n'
+      printf 'GP mean scores: ESM2 and ProteinMPNN (ESM2 only for BRCA2).\n'
       printf 'Parallel example: sbatch %s singles --parallel\n' "sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch"
       for index in "${!small_assays[@]}"; do
         printf '  %s: %s\n' "$index" "${small_assays[$index]}"

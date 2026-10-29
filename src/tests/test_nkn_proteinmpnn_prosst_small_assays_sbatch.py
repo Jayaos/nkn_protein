@@ -14,7 +14,7 @@ from src.feature_generation.prosst_config import ProSSTConfig
 
 
 SCRIPT = Path("sbatch_run/run_nkn/run_nkn_prosst_proteinmpnn_small_assays.sbatch")
-PRESET = Path("configs/proteinmpnn_prosst_nkn.json")
+PRESET = Path("configs/proteinmpnn_prosst_nkn_four_branches_noise_initial_0p5.json")
 CATALOG = next((array_tests.REPOSITORY / path for path in (
     "data/DMS_substitutions.csv",
     "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv",
@@ -78,13 +78,17 @@ class ProteinMPNNProSSTPresetTests(unittest.TestCase):
             # Existing ProteinMPNN caches predate the structure-source prefix.
             "inverse_folding": f"proteinmpnn/{inverse.cache_id.removeprefix('proteingym--')}",
         })
-        self.assertTrue({"sequence_site", "sequence_global", "inverse_folding", "inverse_folding_site"}
-                        <= set(config["model"]["enabled_branches"]))
+        cpu = json.loads((root / "configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json")
+                         .read_text(encoding="utf-8"))
+        self.assertEqual(config["model"], cpu["model"])
+        self.assertEqual(config["training"], cpu["training"])
         self.assertEqual(config["inverse_folding_policy"], "sequence_conditional")
         self.assertEqual(config["structure_consistency"], "per_cache")
         self.assertEqual((prosst.site_embeddings, prosst.global_window), ("centered", "non_overlapping"))
         self.assertEqual([source.split("/")[1] for source in config["score_sources"]],
                          ["prosst", "proteinmpnn"])
+        original = json.loads((root / "configs/proteinmpnn_prosst_nkn.json").read_text(encoding="utf-8"))
+        self.assertEqual(config["score_sources"], original["score_sources"])
 
     def test_selected_paths_match_local_saved_cache_metadata(self):
         root = array_tests.REPOSITORY
@@ -127,6 +131,10 @@ class ProteinMPNNProSSTPresetTests(unittest.TestCase):
         self.assertEqual(resolved["structure_consistency"], "per_cache")
         self.assertEqual(set(resolved["model"]["enabled_branches"]),
                          set(requested["model"]["enabled_branches"]))
+        for name in requested["model"]["enabled_branches"]:
+            self.assertEqual(resolved["model"]["branches"][name], requested["model"]["branches"][name])
+        self.assertEqual(resolved["model"]["final_widths"], requested["model"]["final_widths"])
+        self.assertEqual(resolved["training"]["noise_initial"], 0.5)
 
 
 if __name__ == "__main__":

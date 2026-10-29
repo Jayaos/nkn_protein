@@ -27,12 +27,18 @@ class SmallAssayCatalogTests(unittest.TestCase):
 
     def test_esm2_preset_uses_the_existing_proteinmpnn_cache(self):
         root = runner_tests.REPOSITORY
-        esm2 = json.loads((root / "configs/esm2_proteinmpnn_nkn.json").read_text())
+        esm2 = json.loads((root / runner_tests.NknSbatchTests.config_file).read_text())
         prosst = json.loads((root / prosst_tests.PRESET).read_text())
+        cpu = json.loads((root / "configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json")
+                         .read_text())
+        self.assertEqual(esm2["model"], cpu["model"])
+        self.assertEqual(esm2["training"], cpu["training"])
         self.assertEqual(esm2["feature_selection"]["inverse_folding"],
                          prosst["feature_selection"]["inverse_folding"])
         self.assertTrue(esm2["feature_selection"]["sequence"].startswith("esm2/"))
-        self.assertEqual([source.split("/")[1] for source in esm2["score_sources"]], ["esm2"])
+        self.assertEqual([source.split("/")[1] for source in esm2["score_sources"]], ["esm2", "proteinmpnn"])
+        self.assertEqual(esm2["score_sources"][0], cpu["score_sources"][0])
+        self.assertEqual(esm2["score_sources"][1], prosst["score_sources"][1])
 
 
 @unittest.skipUnless(runner_tests.BASH, "Bash is required for Slurm orchestration tests")
@@ -56,8 +62,16 @@ class SmallAssayDispatchTests(unittest.TestCase):
                 self.assertEqual(len(records), 1)
                 fixture.assert_feature_scope(records, features=f"data/features/pretrained/singles/{assay}",
                                              singles_only=True)
-                self.assertTrue((fixture.root / "results" / assay /
-                                 "nkn_esm2_proteinmpnn_singles_random_1234/config.json").is_file())
+                saved = fixture.root / "results" / assay / "nkn_esm2_proteinmpnn_singles_random_1234/config.json"
+                resolved = json.loads(saved.read_text())
+                requested = json.loads((runner_tests.REPOSITORY / fixture.config_file).read_text())
+                self.assertEqual(set(resolved["model"]["enabled_branches"]),
+                                 set(requested["model"]["enabled_branches"]))
+                for name in requested["model"]["enabled_branches"]:
+                    self.assertEqual(resolved["model"]["branches"][name], requested["model"]["branches"][name])
+                self.assertEqual(resolved["model"]["final_widths"], [8, 4, 4, 2, 1])
+                self.assertEqual(resolved["score_sources"], requested["score_sources"])
+                self.assertEqual(resolved["training"]["noise_initial"], 0.5)
 
     def test_invalid_array_ids_fail_before_launching_workers(self):
         fixture = self.fixture_for_assay("test")
@@ -72,7 +86,7 @@ class SmallAssayDispatchTests(unittest.TestCase):
     def test_wrappers_preserve_their_own_assay_selection_and_model_config(self):
         for filename, index, config_path, prefix in (
             ("run_nkn_cpu.sbatch", 130,
-             "configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json",
+             runner_tests.NknSbatchTests.config_file,
              "nkn_esm2_proteinmpnn"),
             (prosst_tests.SCRIPT.name, 56, prosst_tests.PRESET.as_posix(), "nkn_prosst_proteinmpnn"),
         ):
@@ -91,8 +105,10 @@ class SmallAssayDispatchTests(unittest.TestCase):
                 self.assertEqual(len(records), 1)
                 saved = fixture.root / "results" / assay / f"{prefix}_singles_random_1234/config.json"
                 self.assertTrue(saved.is_file())
-                self.assertEqual(json.loads(saved.read_text())["feature_selection"],
-                                 json.loads((fixture.root / config_path).read_text())["feature_selection"])
+                resolved = json.loads(saved.read_text())
+                requested = json.loads((fixture.root / config_path).read_text())
+                self.assertEqual(resolved["feature_selection"], requested["feature_selection"])
+                self.assertEqual(resolved["score_sources"], requested["score_sources"])
 
 
 if __name__ == "__main__":
