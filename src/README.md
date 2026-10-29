@@ -455,7 +455,7 @@ Runs missing required setting metrics are still skipped and listed in
 The Python API supports the same option with `aggregate_results(..., all_runs=True)`.
 
 To print mean and standard deviation of Spearman across assays for the random,
-modulo, and contiguous singles settings, grouped by exact `run_id`:
+modulo, and contiguous singles settings, grouped by run prefix:
 
 ```bash
 python src/reporting/summarize.py results/comparison_v1/aggregate/summary.csv
@@ -466,8 +466,15 @@ prints population standard deviation (`ddof=0`) across those values. It does
 not average the saved within-assay `std_spearman` column. Each setting shows
 the usable assay count and skipped row count; missing/non-finite/non-numeric
 scores and incomplete/invalid rows are skipped. No usable scores prints `N/A`;
-one usable assay has standard deviation zero. Full run IDs (including job/task
-suffixes) stay separate. The script only prints and creates no report files.
+one usable assay has standard deviation zero. Numeric job IDs and optional
+array task suffixes are removed for grouping: for example,
+`nkn_esm2_proteinmpnn_singles_14521140` and
+`nkn_esm2_proteinmpnn_singles_14521255` share the group
+`nkn_esm2_proteinmpnn_singles`. Different prefixes remain separate. For repeated
+assays within a group and split, the highest numeric job ID with a valid score
+wins; superseded scores count as skipped so each assay contributes once.
+Names without numeric job IDs, including manual run names, are kept intact.
+The script only prints and creates no report files.
 
 CV results are saved under `cv/<setting>/`; extrapolation is under
 `fit/single_to_double/`. For `all`, both mixed-domain results are in

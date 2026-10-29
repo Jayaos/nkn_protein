@@ -1,4 +1,4 @@
-"""Across-assay Spearman summaries retain exact run IDs and equal assay weights."""
+"""Across-assay Spearman summaries group job IDs and retain equal assay weights."""
 
 from contextlib import redirect_stdout
 import csv
@@ -31,12 +31,13 @@ class ReportingSummaryTests(unittest.TestCase):
                 "status": "complete", "avg_spearman": value, "std_spearman": 0.99,
                 "n_variants": 1, **changes}
 
-    def test_equal_assay_weights_and_exact_run_ids(self):
+    def test_equal_assay_weights_and_run_prefixes(self):
         rows = []
         for setting, values in (("random", (0.2, 0.6)), ("modulo", (0.1, 0.7)),
                                 ("contiguous", (-0.4, 0.2))):
             rows.extend([self.row("a", values[0], setting=f"singles_{setting}"),
-                         self.row("b", values[1], setting=f"singles_{setting}", n_variants=999)])
+                         self.row("b", values[1], run="nkn_esm2_proteinmpnn_singles_14521140",
+                                  setting=f"singles_{setting}", n_variants=999)])
         other_run = "nkn_prosst_proteinmpnn_singles_14522762"
         rows.append(self.row("a", 0.9, run=other_run))
         self.write(rows)
@@ -48,7 +49,8 @@ class ReportingSummaryTests(unittest.TestCase):
             self.assertEqual(actual["n_assays"], 2)
             self.assertAlmostEqual(actual["mean"], mean)
             self.assertAlmostEqual(actual["std"], std)
-        self.assertEqual(summary[3], {"run_id": other_run, "setting": "random",
+        self.assertEqual(summary[0]["run_id"], "nkn_esm2_proteinmpnn_singles")
+        self.assertEqual(summary[3], {"run_id": "nkn_prosst_proteinmpnn_singles", "setting": "random",
                          "n_assays": 1, "mean": 0.9, "std": 0.0, "skipped": 0})
         self.assertIsNone(summary[4]["mean"])
         self.assertIsNone(summary[4]["std"])
@@ -72,18 +74,54 @@ class ReportingSummaryTests(unittest.TestCase):
 
     def test_cli_prints_both_runs_without_writing_files(self):
         self.write([self.row("a", 0.2, run="nkn_singles_10"),
-                    self.row("b", 0.6, run="nkn_singles_10"),
-                    self.row("a", 0.9, run="nkn_singles_11")])
+                    self.row("b", 0.6, run="nkn_singles_11"),
+                    self.row("a", 0.9, run="kermut_singles_12")])
         original = self.path.read_bytes()
         output = io.StringIO()
         with patch("sys.argv", ["summarize", str(self.path)]), redirect_stdout(output):
             main()
-        self.assertIn("run_id: nkn_singles_10", output.getvalue())
-        self.assertIn("run_id: nkn_singles_11", output.getvalue())
+        self.assertIn("run prefix: nkn_singles\n", output.getvalue())
+        self.assertIn("run prefix: kermut_singles\n", output.getvalue())
+        self.assertNotIn("nkn_singles_10", output.getvalue())
+        self.assertNotIn("nkn_singles_11", output.getvalue())
         self.assertIn("0.400000", output.getvalue())
         self.assertIn("0.200000", output.getvalue())
         self.assertEqual(self.path.read_bytes(), original)
         self.assertEqual(list(self.path.parent.iterdir()), [self.path])
+
+    def test_gpu_job_and_task_suffixes_group_by_prefix(self):
+        self.write([self.row("a", 0.2, run="nkn_esm2_proteinmpnn_singles_gpu_14521140_99"),
+                    self.row("b", 0.6, run="nkn_esm2_proteinmpnn_singles_gpu_14521255_1"),
+                    self.row("a", 0.9, run="nkn_prosst_proteinmpnn_singles_gpu_14522762_0")])
+        summary = summarize_csv(self.path)
+        self.assertEqual(len(summary), 6)
+        self.assertEqual(summary[0]["run_id"], "nkn_esm2_proteinmpnn_singles_gpu")
+        self.assertEqual(summary[0]["n_assays"], 2)
+        self.assertAlmostEqual(summary[0]["mean"], 0.4)
+        self.assertAlmostEqual(summary[0]["std"], 0.2)
+        self.assertEqual(summary[3]["run_id"], "nkn_prosst_proteinmpnn_singles_gpu")
+
+    def test_latest_valid_job_per_assay_is_independent_of_csv_order(self):
+        rows = [self.row("a", 0.9, run="nkn_singles_gpu_9_99"),
+                self.row("a", 0.2, run="nkn_singles_gpu_10_1"),
+                self.row("a", 0.8, run="nkn_singles_gpu_11_2", status="incomplete"),
+                self.row("a", "nan", run="nkn_singles_gpu_12_3"),
+                self.row("b", 0.6, run="nkn_singles_gpu_13_4")]
+        for order in (rows, list(reversed(rows))):
+            with self.subTest(order=order):
+                self.write(order)
+                summary = summarize_csv(self.path)
+                self.assertEqual(len(summary), 3)
+                self.assertEqual(summary[0]["n_assays"], 2)
+                self.assertEqual(summary[0]["skipped"], 3)
+                self.assertAlmostEqual(summary[0]["mean"], 0.4)
+                self.assertAlmostEqual(summary[0]["std"], 0.2)
+
+    def test_names_without_job_ids_and_manual_runs_keep_their_names(self):
+        names = ("nkn_esm2_proteinmpnn_singles", "nkn_custom_v2",
+                 "nkn_singles_gpu_manual_20261017T120000Z_99")
+        self.write([self.row("a", 0.2, run=name) for name in names])
+        self.assertEqual({row["run_id"] for row in summarize_csv(self.path)}, set(names))
 
     def test_duplicate_assay_does_not_silently_change_weights(self):
         self.write([self.row("a", 0.2), self.row("a", 0.6)])

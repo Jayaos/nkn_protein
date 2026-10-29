@@ -4,7 +4,8 @@ Usage: python src/reporting/summarize.py results/EXPERIMENT/aggregate/summary.cs
 
 Each complete CV row contributes its avg_spearman with equal weight. Standard
 deviation is across assays (population SD, ddof=0), not the saved within-assay
-fold std_spearman. Exact run IDs, including job/task suffixes, stay separate.
+fold std_spearman. Runs sharing a prefix are grouped after removing numeric
+job/task suffixes. For repeated assays, use the latest valid job per split.
 """
 
 import argparse
@@ -12,6 +13,7 @@ from collections import Counter
 import csv
 import math
 from pathlib import Path
+import re
 from statistics import fmean, pstdev
 
 
@@ -19,9 +21,16 @@ SETTINGS = ("random", "modulo", "contiguous")
 SETTING_NAMES = {f"singles_{name}": name for name in SETTINGS}
 
 
+def _run_group(run_id: str) -> tuple[str, int]:
+    """Remove a numeric Slurm job ID and optional array task index."""
+    # A manual run's trailing task index is not a job ID.
+    match = None if "_manual_" in run_id else re.search(r"_(\d+)(?:_\d+)?$", run_id)
+    return (run_id[:match.start()], int(match[1])) if match else (run_id, -1)
+
+
 def summarize_csv(path: str | Path) -> list[dict]:
-    """Summarize finite avg_spearman values per exact run ID and singles split."""
-    groups: dict[str, dict[str, list[float]]] = {}
+    """Summarize finite avg_spearman values per run prefix and singles split."""
+    groups: dict[str, dict[str, dict[str, tuple[int, str, float]]]] = {}
     skipped: Counter = Counter()
     seen = set()
     with Path(path).open(newline="", encoding="utf-8-sig") as handle:
@@ -44,35 +53,44 @@ def summarize_csv(path: str | Path) -> list[dict]:
                     f"{assay_id}/{setting} (line {reader.line_num})"
                 )
             seen.add(identity)
-            values = groups.setdefault(run_id, {name: [] for name in SETTINGS})
+            group_id, job_id = _run_group(run_id)
+            values = groups.setdefault(group_id, {name: {} for name in SETTINGS})
             if row.get("status", "complete") != "complete":
-                skipped[run_id, setting] += 1
+                skipped[group_id, setting] += 1
                 continue
             try:
                 value = float(row["avg_spearman"])
             except (TypeError, ValueError):
-                skipped[run_id, setting] += 1
+                skipped[group_id, setting] += 1
                 continue
             if not math.isfinite(value):
-                skipped[run_id, setting] += 1
+                skipped[group_id, setting] += 1
                 continue
-            values[setting].append(value)
+            candidate = (job_id, run_id, value)
+            previous = values[setting].get(assay_id)
+            if previous is not None:
+                skipped[group_id, setting] += 1
+                if candidate[:2] <= previous[:2]:
+                    continue
+            values[setting][assay_id] = candidate
 
-    return [
-        {
-            "run_id": run_id, "setting": setting, "n_assays": len(values),
-            "mean": fmean(values) if values else None,
-            "std": pstdev(values) if values else None,
-            "skipped": skipped[run_id, setting],
-        }
-        for run_id, settings in sorted(groups.items())
-        for setting, values in settings.items()
-    ]
+    summary = []
+    for group_id, settings in sorted(groups.items()):
+        for setting, assays in settings.items():
+            values = [score for _, _, score in assays.values()]
+            summary.append({
+                "run_id": group_id, "setting": setting, "n_assays": len(values),
+                "mean": fmean(values) if values else None,
+                "std": pstdev(values) if values else None,
+                "skipped": skipped[group_id, setting],
+            })
+    return summary
 
 
 def print_summary(rows: list[dict]) -> None:
     print("Spearman across assays: mean and population std (ddof=0) of avg_spearman.")
-    print("Skipped: incomplete/invalid rows or missing/non-finite/non-numeric scores.")
+    print("Grouped by run prefix; numeric job/task suffixes are ignored.")
+    print("Skipped: incomplete/invalid rows, missing/non-finite/non-numeric scores, or superseded jobs.")
     if not rows:
         print("No random, modulo, or contiguous singles CV rows found.")
         return
@@ -80,7 +98,7 @@ def print_summary(rows: list[dict]) -> None:
     for row in rows:
         if row["run_id"] != current_run:
             current_run = row["run_id"]
-            print(f"\nrun_id: {current_run}")
+            print(f"\nrun prefix: {current_run}")
             print(f"{'Setting':<12} {'Assays':>6} {'Mean':>10} {'Std':>10} {'Skipped':>8}")
         mean = f"{row['mean']:.6f}" if row["mean"] is not None else "N/A"
         std = f"{row['std']:.6f}" if row["std"] is not None else "N/A"
