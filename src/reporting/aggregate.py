@@ -79,8 +79,10 @@ def _job_id(run: Path) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _select_runs(root: Path, issues: list[dict]) -> list[tuple[Path, dict, dict]]:
-    """Select one run with all aggregate metric files per assay and model."""
+def _select_runs(
+    root: Path, issues: list[dict], *, all_runs: bool = False,
+) -> list[tuple[Path, dict, dict]]:
+    """Select eligible runs, keeping only the latest per model by default."""
     candidates: dict[tuple[str, str], list[tuple[Path, dict, dict]]] = {}
     for run in sorted(root.glob("*/*")):
         model = run.name.split("_", 1)[0]
@@ -117,6 +119,9 @@ def _select_runs(root: Path, issues: list[dict]) -> list[tuple[Path, dict, dict]
     selected = []
     for key in sorted(candidates):
         runs = candidates[key]
+        if all_runs:
+            selected.extend(runs)
+            continue
         # Job IDs order Slurm submissions numerically, independent of task
         # index or copied-directory timestamps. Legacy/manual groups without
         # comparable job IDs fall back to directory modification time.
@@ -187,8 +192,9 @@ def _expected_fold_ids(
 
 def aggregate_results(
     results_dir: str | Path = "results", output_dir: str | Path | None = None,
+    *, all_runs: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Return tables for the latest eligible run per assay and model.
+    """Return tables for eligible runs, selecting the latest per model by default.
 
     Scan results/<assay>/{nkn,kermut}_*/{cv,fit}/<setting>/metrics.json.
     Every discovered or requested setting must have a readable, nonempty JSON
@@ -198,6 +204,8 @@ def aggregate_results(
     Select the highest numeric Slurm job ID, ignoring the array task index. If
     any eligible run in a group lacks a job ID, use directory modification time.
     NKN and Kermut are selected independently within each assay.
+    With all_runs=True, include every eligible run instead, retaining run_id
+    in both summary and fold rows to distinguish configurations and reruns.
 
     CV metrics are copied from the selected runner aggregate, not recomputed
     from partial folds. Existing fold and identity checks still annotate its
@@ -212,7 +220,7 @@ def aggregate_results(
     if not root.is_dir():
         raise FileNotFoundError(f"Results directory does not exist: {root}")
     summary, folds, issues = [], [], []
-    for run, manifest, saved_metrics in _select_runs(root, issues):
+    for run, manifest, saved_metrics in _select_runs(root, issues, all_runs=all_runs):
         model = run.name.split("_", 1)[0]
         config = _read(run / "config.json", issues) or {}
         expected = config.get("evaluation", {}).get("n_folds")

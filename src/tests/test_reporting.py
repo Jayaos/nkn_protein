@@ -1,13 +1,17 @@
 """Aggregation selects the latest run with metrics for every requested setting."""
 
 import csv
+from contextlib import redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from reporting import aggregate_results
+from reporting.__main__ import main
 
 
 class ReportingTests(unittest.TestCase):
@@ -52,6 +56,51 @@ class ReportingTests(unittest.TestCase):
             rows = list(csv.DictReader(handle))
         self.assertEqual(rows[0]["pair_ece"], "")
         self.assertEqual(aggregate_results(self.root), tables)
+
+    def test_all_runs_preserves_configurations_and_reruns_in_csvs(self):
+        runs = [self.run_dir(model, job) for model, job in (
+            ("nkn_esm2_proteinmpnn", 14521254),
+            ("nkn_esm2_proteinmpnn", 14521255),
+            ("nkn_prosst_proteinmpnn", 14522762),
+            ("kermut_esm2_proteinmpnn", 14522763),
+        )]
+        for run in runs:
+            self.write(run / "cv/singles_random/metrics.json", self.metrics())
+        output = self.root / "aggregate"
+        tables = aggregate_results(self.root, output, all_runs=True)
+        self.assertEqual(len(tables["summary"]), 4)
+        self.assertEqual(len(tables["folds"]), 8)
+        self.assertEqual(tables["issues"], [])
+        for table in ("summary", "folds"):
+            with (output / f"{table}.csv").open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual({row["run_id"] for row in rows}, {run.name for run in runs})
+            self.assertEqual({row["model"] for row in rows}, {"nkn", "kermut"})
+        self.assertEqual({row["run_id"] for row in aggregate_results(self.root)["summary"]},
+                         {runs[2].name, runs[3].name})
+
+    def test_all_runs_cli_still_excludes_unstarted_settings(self):
+        runs = [self.run_dir(model, job) for model, job in (
+            ("nkn_esm2_proteinmpnn", 14521255),
+            ("nkn_prosst_proteinmpnn", 14522762),
+            ("nkn_prosst_proteinmpnn", 14522763),
+        )]
+        for run in runs:
+            self.write(run / "cv/singles_random/metrics.json", self.metrics())
+        self.write(runs[2] / "fold_manifest.json", {
+            "requested_settings": ["singles_random", "singles_modulo"]})
+        output = self.root / "aggregate"
+        with patch("sys.argv", ["reporting", "--results", str(self.root),
+                               "--output", str(output), "--all-runs"]):
+            with redirect_stdout(io.StringIO()):
+                main()
+        with (output / "summary.csv").open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual({row["run_id"] for row in rows}, {run.name for run in runs[:2]})
+        with (output / "issues.csv").open(newline="", encoding="utf-8") as handle:
+            issues = list(csv.DictReader(handle))
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0]["path"], str(runs[2] / "cv/singles_modulo/metrics.json"))
 
     def test_partial_unstarted_and_corrupt_settings(self):
         run = self.run_dir("nkn", 1)

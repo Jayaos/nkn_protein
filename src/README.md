@@ -439,6 +439,21 @@ selected run. Existing fold-coverage and identity checks still set each summary
 row's status; selection itself checks the aggregate metric files. Source run
 directories are never modified or deleted.
 
+To include multiple NKN configurations under the same assay (for example,
+`nkn_esm2_proteinmpnn_singles_14521255` and
+`nkn_prosst_proteinmpnn_singles_14522762`), pass `--all-runs`:
+
+```bash
+PYTHONPATH=src python -m reporting --results results/comparison_v1 --output results/comparison_v1/aggregate --all-runs
+```
+
+Set `--results` to the directory containing the assay directories, not an
+individual assay or run. This exports every eligible run, including older
+reruns, with distinct `run_id` values in `summary.csv` and `folds.csv`.
+Runs missing required setting metrics are still skipped and listed in
+`issues.csv`; inspect the summary `status` for fold-coverage or identity issues.
+The Python API supports the same option with `aggregate_results(..., all_runs=True)`.
+
 CV results are saved under `cv/<setting>/`; extrapolation is under
 `fit/single_to_double/`. For `all`, both mixed-domain results are in
 `cv/mixed_random_singles/metrics.json` under `setting_metrics`.
