@@ -71,9 +71,12 @@ default combines both sources:
 ```json
 "score_sources": [
   "scores/esm2/esm2_t33_650M_UR50D-masked_marginals-float32-08e4846e5371-centered1022",
-  "scores/proteinmpnn/proteingym--v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb"
+  "scores/proteinmpnn/v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb"
 ]
 ```
+
+Both Kermut presets select the existing unprefixed `v_48_020-*` ProteinMPNN
+feature and score directories; their cache paths do not include `proteingym--`.
 
 Keeping only the first entry uses the publication's ESM2-only mean; keeping
 only the second uses a ProteinMPNN-only mean. Multiple entries

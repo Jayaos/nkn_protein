@@ -7,7 +7,7 @@
 #SBATCH --constraint=V100
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
-#SBATCH --time=4:00:00
+#SBATCH --time=12:00:00
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%A_%a.out
 #SBATCH --mail-type=ALL
