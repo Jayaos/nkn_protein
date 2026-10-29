@@ -78,6 +78,12 @@ default combines both sources:
 Both Kermut presets select the existing unprefixed `v_48_020-*` ProteinMPNN
 feature and score directories; their cache paths do not include `proteingym--`.
 
+The Slurm launchers prefer the catalog at
+`data/DMS_ProteinGym_substitutions/DMS_substitutions.csv`, falling back to
+`data/DMS_substitutions.csv` and then the legacy `raw_substitutions` location.
+Set `ASSAY_INDEX` to explicitly select a catalog. The selected path is printed
+in the job log and used for validation, CV, and extrapolation.
+
 Keeping only the first entry uses the publication's ESM2-only mean; keeping
 only the second uses a ProteinMPNN-only mean. Multiple entries
 give `mean(x) = intercept + sum(coefficient[j] * score[j](x))`; all coefficients
@@ -164,7 +170,7 @@ python -m baselines.kermut.cli --help
 For the current assay's five-fold random single-mutant evaluation:
 
 ```powershell
-python -m baselines.kermut.cli cv --features data/features/pretrained/singles/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/kermut_esm2_proteinmpnn.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --assay-index data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv --full-assay --singles-only --output results/A0A1I9GEU1_NEIME_Kennouche_2019/kermut_random
+python -m baselines.kermut.cli cv --features data/features/pretrained/singles/A0A1I9GEU1_NEIME_Kennouche_2019 --config configs/kermut_esm2_proteinmpnn.json --folds data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/A0A1I9GEU1_NEIME_Kennouche_2019.csv --setting singles_random --assay-index data/DMS_ProteinGym_substitutions/DMS_substitutions.csv --full-assay --singles-only --output results/A0A1I9GEU1_NEIME_Kennouche_2019/kermut_random
 ```
 
 Output directories must be new or empty. `validate` checks inputs without

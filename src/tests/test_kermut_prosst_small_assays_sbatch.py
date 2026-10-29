@@ -14,6 +14,7 @@ from . import test_nkn_sbatch as runner_tests
 ROOT = runner_tests.REPOSITORY
 SCRIPT = Path("sbatch_run/run_kermut/run_kermut_prosst_proteinmpnn_small_assays.sbatch")
 PRESET = Path("configs/kermut_prosst_proteinmpnn.json")
+CATALOG_PATH = Path("data/DMS_ProteinGym_substitutions/DMS_substitutions.csv")
 SOURCE = (ROOT / SCRIPT).read_text(encoding="utf-8")
 ASSAYS = tuple(re.findall(r'^  "([^"]+)"$', SOURCE, re.MULTILINE))
 
@@ -84,6 +85,9 @@ class ProSSTSharedRunnerTests(unittest.TestCase):
         fixture.config_type = ("baselines.kermut.config", "KermutConfig")
         self.addCleanup(fixture.doCleanups)
         fixture.setUp()
+        catalog = fixture.root / CATALOG_PATH
+        catalog.parent.mkdir(parents=True)
+        shutil.copyfile(fixture.root / "data/DMS_substitutions.csv", catalog)
         for package in ("baselines", "baselines/kermut"):
             (fixture.root / package / "__init__.py").touch()
         shutil.copyfile(ROOT / PRESET, fixture.root / PRESET)
@@ -116,6 +120,9 @@ class ProSSTSharedRunnerTests(unittest.TestCase):
         self.assertEqual((plan["setting_workers"], plan["fold_workers"]), (3, 5))
         self.assertEqual({record["setting"] for record in records},
                          {"singles_random", "singles_modulo", "singles_contiguous"})
+        validation = json.loads((fixture.root / "validation.json").read_text())
+        for record in [validation, *records]:
+            self.assertEqual(record["assay_index"], CATALOG_PATH.as_posix())
 
     def test_shared_runner_keeps_esm2_default_results(self):
         fixture = self.fixture(wrapper=False)
@@ -125,6 +132,48 @@ class ProSSTSharedRunnerTests(unittest.TestCase):
         output = fixture.root / "results/test/kermut_esm2_proteinmpnn_singles_random_1234"
         self.assertTrue((output / "config.json").is_file())
         self.assertEqual(len(records), 1)
+        validation = json.loads((fixture.root / "validation.json").read_text())
+        for record in [validation, *records]:
+            self.assertEqual(record["assay_index"], CATALOG_PATH.as_posix())
+
+    def test_catalog_override_reaches_validation_and_extrapolation(self):
+        fixture = self.fixture(wrapper=False)
+        override = fixture.root / "custom catalog.csv"
+        shutil.copyfile(fixture.root / CATALOG_PATH, override)
+        with patch.dict("os.environ", {"KERMUT_RUN_PREFIX": "", "EXPERIMENT_SUFFIX": ""}):
+            result, records, _ = fixture.invoke(1, "single_to_double", assay_index=override.as_posix())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        validation = json.loads((fixture.root / "validation.json").read_text())
+        self.assertEqual(len(records), 1)
+        for record in [validation, *records]:
+            self.assertEqual(record["assay_index"], override.as_posix())
+
+    def test_legacy_catalog_locations_remain_usable(self):
+        for relative in ("data/DMS_substitutions.csv",
+                         "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv"):
+            with self.subTest(catalog=relative):
+                fixture = self.fixture(wrapper=False)
+                (fixture.root / CATALOG_PATH).unlink()
+                root_catalog = fixture.root / "data/DMS_substitutions.csv"
+                if relative != "data/DMS_substitutions.csv":
+                    target = fixture.root / relative
+                    target.parent.mkdir(parents=True)
+                    shutil.copyfile(root_catalog, target)
+                    root_catalog.unlink()
+                with patch.dict("os.environ", {"KERMUT_RUN_PREFIX": "", "EXPERIMENT_SUFFIX": ""}):
+                    result, records, _ = fixture.invoke(1, "singles_random")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(records[0]["assay_index"], relative)
+
+    def test_missing_catalog_override_fails_without_using_a_fallback(self):
+        fixture = self.fixture(wrapper=False)
+        with patch.dict("os.environ", {"KERMUT_RUN_PREFIX": "", "EXPERIMENT_SUFFIX": ""}):
+            result, records, plan = fixture.invoke(1, assay_index="missing.csv")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ProteinGym catalog not found", result.stderr)
+        self.assertEqual(records, [])
+        self.assertIsNone(plan)
+        self.assertFalse((fixture.root / "results").exists())
 
     def test_invalid_result_prefix_fails_before_creating_results(self):
         fixture = self.fixture(wrapper=False)

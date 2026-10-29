@@ -48,6 +48,9 @@
 # --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) groups results under
 # results/NAME/<assay>/<model-run>/. Without it, existing paths are preserved.
 # KERMUT_RUN_PREFIX changes the result-folder prefix (default kermut_esm2_proteinmpnn).
+# ASSAY_INDEX overrides catalog detection: data/DMS_ProteinGym_substitutions/
+# DMS_substitutions.csv first, then data/DMS_substitutions.csv, then the legacy
+# data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv.
 set -eo pipefail
 
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
@@ -99,6 +102,7 @@ while [[ $# -gt 0 ]]; do
       printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH] [--parallel]\n' "sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch"
       printf 'Config precedence: --config, KERMUT_CONFIG, configs/kermut_esm2_proteinmpnn.json\n'
       printf 'Result prefix: KERMUT_RUN_PREFIX (default kermut_esm2_proteinmpnn)\n'
+      printf 'Catalog: ASSAY_INDEX overrides detection; data/DMS_ProteinGym_substitutions/DMS_substitutions.csv is preferred.\n'
       printf 'Parallel example: sbatch %s singles --parallel\n' "sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch"
       exit 0 ;;
     -*)
@@ -213,7 +217,23 @@ export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 export OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"
 export CUDA_VISIBLE_DEVICES=""
 
-assay_index="data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv"
+assay_index="${ASSAY_INDEX:-}"
+if [[ -z "$assay_index" ]]; then
+  for candidate in \
+    data/DMS_ProteinGym_substitutions/DMS_substitutions.csv \
+    data/DMS_substitutions.csv \
+    data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv; do
+    if [[ -f "$candidate" ]]; then
+      assay_index="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "$assay_index" || ! -f "$assay_index" ]]; then
+  echo 'error: ProteinGym catalog not found. Set ASSAY_INDEX, or put DMS_substitutions.csv in data/DMS_ProteinGym_substitutions/, data/, or the legacy raw_substitutions/ directory.' >&2
+  exit 1
+fi
+printf 'Catalog: %s\n' "$assay_index"
 run_id="${SLURM_JOB_ID:-manual_$(date -u +%Y%m%dT%H%M%SZ)}"
 run_root="results/${experiment_suffix:+$experiment_suffix/}$assay/${run_prefix}_${selection}_${run_id}"
 runtime_config="$run_root/config.json"
