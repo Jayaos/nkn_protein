@@ -47,6 +47,7 @@
 # Logs go to the submission directory. Every job creates a new results directory.
 # --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) groups results under
 # results/NAME/<assay>/<model-run>/. Without it, existing paths are preserved.
+# KERMUT_RUN_PREFIX changes the result-folder prefix (default kermut_esm2_proteinmpnn).
 set -eo pipefail
 
 project_root="$(cd -- "${SLURM_SUBMIT_DIR:-$PWD}" && pwd -P)"
@@ -63,6 +64,7 @@ selection="singles"
 selection_given=false
 parallel=false
 experiment_suffix="${EXPERIMENT_SUFFIX:-}"
+run_prefix="${KERMUT_RUN_PREFIX:-kermut_esm2_proteinmpnn}"
 config_template="${KERMUT_CONFIG:-configs/kermut_esm2_proteinmpnn.json}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -96,6 +98,7 @@ while [[ $# -gt 0 ]]; do
       printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
       printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH] [--parallel]\n' "sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch"
       printf 'Config precedence: --config, KERMUT_CONFIG, configs/kermut_esm2_proteinmpnn.json\n'
+      printf 'Result prefix: KERMUT_RUN_PREFIX (default kermut_esm2_proteinmpnn)\n'
       printf 'Parallel example: sbatch %s singles --parallel\n' "sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch"
       exit 0 ;;
     -*)
@@ -113,6 +116,10 @@ while [[ $# -gt 0 ]]; do
 done
 if [[ "$experiment_suffix" == *[/\\]* || "$experiment_suffix" == "." || "$experiment_suffix" == ".." ]]; then
   echo "error: Experiment suffix must be a single folder name, not a path." >&2
+  exit 1
+fi
+if [[ ! "$run_prefix" =~ ^kermut_[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+  echo "error: KERMUT_RUN_PREFIX must start with kermut_ and contain only letters, digits, underscores, dots, or hyphens." >&2
   exit 1
 fi
 case "$selection" in
@@ -208,7 +215,7 @@ export CUDA_VISIBLE_DEVICES=""
 
 assay_index="data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv"
 run_id="${SLURM_JOB_ID:-manual_$(date -u +%Y%m%dT%H%M%SZ)}"
-run_root="results/${experiment_suffix:+$experiment_suffix/}$assay/kermut_esm2_proteinmpnn_${selection}_${run_id}"
+run_root="results/${experiment_suffix:+$experiment_suffix/}$assay/${run_prefix}_${selection}_${run_id}"
 runtime_config="$run_root/config.json"
 
 # Refuse to reuse a previous run's directory or overwrite its results.

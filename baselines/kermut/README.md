@@ -170,6 +170,51 @@ posterior, supports unlabeled cached variants and defaults to the adjacent
 resolved configuration. Prediction verifies assay, reference, feature sources,
 structure identity and ordered score sources against the checkpoint.
 
+To run the 57 assays with **1-1,000 single mutants (inclusive)** in the local
+ProteinGym catalog, use the dedicated small-assay launcher:
+
+```bash
+sbatch sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn_small_assays.sbatch
+
+# At most four assays at once; parallelize fits within each assay:
+sbatch --array=0-56%4 sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn_small_assays.sbatch singles --parallel
+
+# Group outputs with related NKN runs:
+sbatch sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn_small_assays.sbatch singles --experiment-suffix comparison_v1
+
+# Show the task-to-assay mapping without submitting a job:
+bash sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn_small_assays.sbatch --help
+```
+
+This delegates to `run_kermut_esm2_proteinmpnn.sbatch`, preserving its model,
+configuration, feature/score inputs, fold handling, and result paths. It requests
+15 CPUs, 16 GB RAM, and 24 hours per assay. All arguments, including `--config`,
+`--parallel`, and `--experiment-suffix`, are forwarded. The selection is a fixed
+catalog snapshot in catalog order; update the list and array bounds together
+when updating the catalog. Assays with no single mutants are excluded. FKBP3
+has 1,237 single mutants and is therefore outside this subset.
+
+For the same small-assay setup using **ProSST instead of ESM2**:
+
+```bash
+sbatch sbatch_run/run_kermut/run_kermut_prosst_proteinmpnn_small_assays.sbatch
+
+sbatch --array=0-56%4 sbatch_run/run_kermut/run_kermut_prosst_proteinmpnn_small_assays.sbatch singles --parallel --experiment-suffix comparison_v1
+```
+
+The preset `configs/kermut_prosst_proteinmpnn.json` replaces the ESM2 global
+embeddings and masked-marginal scores with ProSST-2048 layer-12 embeddings and
+ProSST scores from `configs/extraction/prosst_2048_singles.json`. Kermut uses the
+pooled global vectors from that cache. ProteinMPNN features/scores, reference
+coordinates, training hyperparameters, evaluation settings, the 57 assay indices,
+and Slurm resources match the ESM2 version. Prepare the ProSST caches before
+submission; the default singles scope is `data/features/pretrained/singles`.
+Full-assay selections require matching full-assay caches and double mutants.
+Results use `kermut_prosst_proteinmpnn_<selection>_<job-id>` directories, allowing
+the summarizer to distinguish configurations. The shared runner accepts
+`KERMUT_RUN_PREFIX` to customize this prefix, which must start with `kermut_`.
+`--config`, `KERMUT_CONFIG`, `--parallel`, and `--experiment-suffix` work as usual.
+
 Use the five-assay CPU array launcher from the repository root on the cluster:
 
 ```bash

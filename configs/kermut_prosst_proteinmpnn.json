@@ -1,0 +1,43 @@
+{
+  "model": {
+    "raw_h_scale": 1.0,
+    "raw_h_lengthscale": 0.1,
+    "raw_d_lengthscale": 0.1,
+    "raw_p_lengthscale": 0.1,
+    "raw_alpha": 0.5,
+    "raw_sequence_lengthscale": 0.0
+  },
+  "feature_selection": {
+    "sequence": "prosst/protssn_proteingym--ProSST-2048-layer12-fixed-backbone-e94ffee7846d-mean-all-nonoverlap2046-centered-sites",
+    "inverse_folding": "proteinmpnn/proteingym--v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb"
+  },
+  "score_sources": [
+    "scores/prosst/protssn_proteingym--ProSST-2048-masked_marginals-fixed-backbone-float32-e94ffee7846d-centered2046",
+    "scores/proteinmpnn/proteingym--v_48_020-sequence_log_likelihood-orders1-seed0-8907e6671bfb"
+  ],
+  "structure_manifest_dir": "data/structures/proteingym/manifests",
+  "training": {
+    "n_steps": 150,
+    "learning_rate": 0.1,
+    "weight_decay": 0.01,
+    "betas": [0.9, 0.999],
+    "epsilon": 1e-8,
+    "seed": 2024,
+    "dtype": "float32",
+    "raw_noise": 0.0,
+    "noise_floor": 0.0001,
+    "noise_prior_scale": 0.1,
+    "jitter_initial": 1e-6,
+    "jitter_max": 0.001,
+    "max_train_variants": null
+  },
+  "evaluation": {
+    "n_folds": 5,
+    "coverage_levels": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95],
+    "n_bins": 10,
+    "pair_block_size": 512
+  },
+  "pooling": "mean",
+  "device": "cpu",
+  "num_threads": 4
+}
