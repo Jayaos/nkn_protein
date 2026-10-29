@@ -6,6 +6,8 @@ Each complete CV row contributes its avg_spearman with equal weight. Standard
 deviation is across assays (population SD, ddof=0), not the saved within-assay
 fold std_spearman. Runs sharing a prefix are grouped after removing numeric
 job/task suffixes. For repeated assays, use the latest valid job per split.
+The average row combines all three splits within each assay, then summarizes
+those per-assay averages. Only assays with three valid split scores contribute.
 """
 
 import argparse
@@ -31,6 +33,7 @@ def _run_group(run_id: str) -> tuple[str, int]:
 def summarize_csv(path: str | Path) -> list[dict]:
     """Summarize finite avg_spearman values per run prefix and singles split."""
     groups: dict[str, dict[str, dict[str, tuple[int, str, float]]]] = {}
+    group_assays: dict[str, set[str]] = {}
     skipped: Counter = Counter()
     seen = set()
     with Path(path).open(newline="", encoding="utf-8-sig") as handle:
@@ -54,6 +57,7 @@ def summarize_csv(path: str | Path) -> list[dict]:
                 )
             seen.add(identity)
             group_id, job_id = _run_group(run_id)
+            group_assays.setdefault(group_id, set()).add(assay_id)
             values = groups.setdefault(group_id, {name: {} for name in SETTINGS})
             if row.get("status", "complete") != "complete":
                 skipped[group_id, setting] += 1
@@ -84,6 +88,17 @@ def summarize_csv(path: str | Path) -> list[dict]:
                 "std": pstdev(values) if values else None,
                 "skipped": skipped[group_id, setting],
             })
+        complete_assays = set.intersection(*(set(assays) for assays in settings.values()))
+        averages = [
+            fmean(settings[setting][assay][2] for setting in SETTINGS)
+            for assay in sorted(complete_assays)
+        ]
+        summary.append({
+            "run_id": group_id, "setting": "average", "n_assays": len(averages),
+            "mean": fmean(averages) if averages else None,
+            "std": pstdev(averages) if averages else None,
+            "skipped": len(group_assays[group_id]) - len(averages),
+        })
     return summary
 
 
@@ -91,6 +106,7 @@ def print_summary(rows: list[dict]) -> None:
     print("Spearman across assays: mean and population std (ddof=0) of avg_spearman.")
     print("Grouped by run prefix; numeric job/task suffixes are ignored.")
     print("Skipped: incomplete/invalid rows, missing/non-finite/non-numeric scores, or superseded jobs.")
+    print("Average combines the three settings per assay; its Skipped count is assays missing any valid setting.")
     if not rows:
         print("No random, modulo, or contiguous singles CV rows found.")
         return

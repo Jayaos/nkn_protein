@@ -42,7 +42,7 @@ class ReportingSummaryTests(unittest.TestCase):
         rows.append(self.row("a", 0.9, run=other_run))
         self.write(rows)
         summary = summarize_csv(self.path)
-        self.assertEqual(len(summary), 6)
+        self.assertEqual(len(summary), 8)
         for actual, setting, mean, std in zip(summary[:3],
                 ("random", "modulo", "contiguous"), (0.4, 0.4, -0.1), (0.2, 0.3, 0.3)):
             self.assertEqual(actual["setting"], setting)
@@ -50,10 +50,33 @@ class ReportingSummaryTests(unittest.TestCase):
             self.assertAlmostEqual(actual["mean"], mean)
             self.assertAlmostEqual(actual["std"], std)
         self.assertEqual(summary[0]["run_id"], "nkn_esm2_proteinmpnn_singles")
-        self.assertEqual(summary[3], {"run_id": "nkn_prosst_proteinmpnn_singles", "setting": "random",
+        self.assertEqual((summary[3]["setting"], summary[3]["n_assays"], summary[3]["skipped"]),
+                         ("average", 2, 0))
+        self.assertAlmostEqual(summary[3]["mean"], 7 / 30)
+        self.assertAlmostEqual(summary[3]["std"], 4 / 15)
+        self.assertEqual(summary[4], {"run_id": "nkn_prosst_proteinmpnn_singles", "setting": "random",
                          "n_assays": 1, "mean": 0.9, "std": 0.0, "skipped": 0})
-        self.assertIsNone(summary[4]["mean"])
-        self.assertIsNone(summary[4]["std"])
+        self.assertIsNone(summary[5]["mean"])
+        self.assertIsNone(summary[5]["std"])
+        self.assertEqual(summary[7], {"run_id": "nkn_prosst_proteinmpnn_singles", "setting": "average",
+                         "n_assays": 0, "mean": None, "std": None, "skipped": 1})
+
+    def test_average_uses_matching_assays_and_std_of_per_assay_averages(self):
+        rows = []
+        for assay, scores in (("a", (0.2, 0.8, 0.5)), ("b", (0.8, 0.2, 0.5)),
+                              ("invalid", (0.4, 0.5, "nan"))):
+            for setting, score in zip(("random", "modulo", "contiguous"), scores):
+                rows.append(self.row(assay, score, setting=f"singles_{setting}"))
+        rows.extend([self.row("partial", 0.9),
+                     self.row("a", 0.0, run="nkn_esm2_proteinmpnn_singles_14521254")])
+        self.write(rows)
+        summary = summarize_csv(self.path)
+        self.assertEqual(summary[-1], {
+            "run_id": "nkn_esm2_proteinmpnn_singles", "setting": "average",
+            "n_assays": 2, "mean": 0.5, "std": 0.0, "skipped": 2,
+        })
+        self.assertGreater(summary[0]["std"], 0)
+        self.assertGreater(summary[1]["std"], 0)
 
     def test_skipped_scores_and_unrelated_settings(self):
         rows = [self.row(str(i), value) for i, value in enumerate(("", "nan", "inf", "bad"))]
@@ -67,6 +90,9 @@ class ReportingSummaryTests(unittest.TestCase):
         self.assertEqual((summary[0]["n_assays"], summary[0]["skipped"]), (0, 6))
         self.assertIsNone(summary[0]["mean"])
         self.assertEqual((summary[1]["n_assays"], summary[1]["mean"]), (1, -0.2))
+        self.assertEqual((summary[3]["n_assays"], summary[3]["skipped"]), (0, 7))
+        self.assertIsNone(summary[3]["mean"])
+        self.assertIsNone(summary[3]["std"])
         output = io.StringIO()
         with redirect_stdout(output):
             print_summary(summary)
@@ -86,6 +112,7 @@ class ReportingSummaryTests(unittest.TestCase):
         self.assertNotIn("nkn_singles_11", output.getvalue())
         self.assertIn("0.400000", output.getvalue())
         self.assertIn("0.200000", output.getvalue())
+        self.assertEqual(sum(line.startswith("average ") for line in output.getvalue().splitlines()), 2)
         self.assertEqual(self.path.read_bytes(), original)
         self.assertEqual(list(self.path.parent.iterdir()), [self.path])
 
@@ -94,12 +121,12 @@ class ReportingSummaryTests(unittest.TestCase):
                     self.row("b", 0.6, run="nkn_esm2_proteinmpnn_singles_gpu_14521255_1"),
                     self.row("a", 0.9, run="nkn_prosst_proteinmpnn_singles_gpu_14522762_0")])
         summary = summarize_csv(self.path)
-        self.assertEqual(len(summary), 6)
+        self.assertEqual(len(summary), 8)
         self.assertEqual(summary[0]["run_id"], "nkn_esm2_proteinmpnn_singles_gpu")
         self.assertEqual(summary[0]["n_assays"], 2)
         self.assertAlmostEqual(summary[0]["mean"], 0.4)
         self.assertAlmostEqual(summary[0]["std"], 0.2)
-        self.assertEqual(summary[3]["run_id"], "nkn_prosst_proteinmpnn_singles_gpu")
+        self.assertEqual(summary[4]["run_id"], "nkn_prosst_proteinmpnn_singles_gpu")
 
     def test_latest_valid_job_per_assay_is_independent_of_csv_order(self):
         rows = [self.row("a", 0.9, run="nkn_singles_gpu_9_99"),
@@ -111,7 +138,7 @@ class ReportingSummaryTests(unittest.TestCase):
             with self.subTest(order=order):
                 self.write(order)
                 summary = summarize_csv(self.path)
-                self.assertEqual(len(summary), 3)
+                self.assertEqual(len(summary), 4)
                 self.assertEqual(summary[0]["n_assays"], 2)
                 self.assertEqual(summary[0]["skipped"], 3)
                 self.assertAlmostEqual(summary[0]["mean"], 0.4)
