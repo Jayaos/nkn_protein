@@ -4,7 +4,7 @@
   "structure_source": "proteingym",
   "model_id": "dauparas/ProteinMPNN/v_48_020",
   "revision": "8907e6671bfbfc92303b5f79c4b5e6ce47cdef57",
-  "cache_id": "proteingym--v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb",
+  "cache_id": "v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb",
   "model_dir": "data/models/proteinmpnn",
   "output_root": "data/features/pretrained/singles",
   "assay_index": "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv",

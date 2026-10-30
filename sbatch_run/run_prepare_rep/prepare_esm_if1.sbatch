@@ -21,6 +21,7 @@
 # Uses the pinned esm_if1_142m.json recipe: WT reference-prefix conditioning,
 # float32 inference, and normalized probabilities over the 20 canonical residues.
 # Selects single mutants only, saved under data/features/pretrained/singles/.
+# Cache directories use model recipes; structure collection is stored in metadata.
 # Also prepares ProteinGym-style full-variant mean log-likelihoods for the GP mean.
 # Scores use variant prefixes and the native vocabulary, without WT subtraction.
 # Scoring batch size follows the full reference length: <=300: 16, <=600: 8,

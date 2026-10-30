@@ -1,4 +1,4 @@
-"""Collection isolation without changing structure or model calculations."""
+"""Source-specific inputs and recipe-only output names for structure models."""
 
 from pathlib import Path
 import tempfile
@@ -11,20 +11,22 @@ from feature_generation.score_runner import default_cache_id
 
 
 class StructureSourceTests(unittest.TestCase):
-    def test_collections_have_independent_paths_and_automatic_cache_names(self):
-        for cls in (InverseFoldingConfig, ProSSTConfig):
-            with self.subTest(config=cls.__name__):
-                official = cls(structure_source="proteingym")
-                alternative = cls(structure_source="protssn_proteingym")
+    def test_collections_have_independent_inputs_and_source_independent_cache_names(self):
+        for cls, kwargs in ((InverseFoldingConfig, {"model_family": "proteinmpnn"}),
+                            (InverseFoldingConfig, {"model_family": "esm_if1"}),
+                            (ProSSTConfig, {})):
+            with self.subTest(config=cls.__name__, **kwargs):
+                official = cls(structure_source="proteingym", **kwargs)
+                alternative = cls(structure_source="protssn_proteingym", **kwargs)
                 for config in (official, alternative):
                     root = PROJECT_ROOT / "data/structures" / config.structure_source
                     self.assertEqual(config.structure_manifest_dir, root / "manifests")
-                    self.assertTrue(config.cache_id.startswith(config.structure_source + "--"))
-                    self.assertTrue(default_cache_id(config).startswith(config.structure_source + "--"))
+                    self.assertNotIn("proteingym", config.cache_id)
+                    self.assertNotIn("proteingym", default_cache_id(config))
                     if isinstance(config, ProSSTConfig):
                         self.assertEqual(config.structure_token_dir, root / "tokens/prosst")
-                self.assertNotEqual(official.cache_id, alternative.cache_id)
-                self.assertNotEqual(default_cache_id(official), default_cache_id(alternative))
+                self.assertEqual(official.cache_id, alternative.cache_id)
+                self.assertEqual(default_cache_id(official), default_cache_id(alternative))
 
     def test_crossed_collections_and_unknown_source_are_rejected(self):
         for cls in (InverseFoldingConfig, ProSSTConfig):

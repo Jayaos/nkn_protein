@@ -206,7 +206,8 @@ class ProsstPreparationSbatchTests(unittest.TestCase):
         self.assertEqual(extraction['device'], 'cuda')
         self.assertEqual(Path(extraction['output_root']), self.root / 'data/features/pretrained/singles')
         self.assertEqual(extraction['layer'], 12)
-        self.assertTrue(extraction['cache_id'].startswith('protssn_proteingym--'))
+        self.assertEqual(extraction['cache_id'],
+                         'ProSST-2048-layer12-fixed-backbone-e94ffee7846d-mean-all-nonoverlap2046-centered-sites')
         self.assertEqual(Path(extraction['token_dir']),
                          self.root / 'data/structures/protssn_proteingym/tokens/prosst')
         structure = next(r for r in records if r['kind'] == 'structure-verify')

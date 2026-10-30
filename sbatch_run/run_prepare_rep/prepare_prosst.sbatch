@@ -17,6 +17,7 @@
 # The default singles preset automatically registers local protssn_proteingym
 # structures using the collection's source.json inventory. Matching caches
 # are reused; first model downloads require HTTPS.
+# Cache directories use model recipes; structure collection is stored in metadata.
 # From the repository root or a subdirectory:
 #   sbatch sbatch_run/run_prepare_rep/prepare_prosst.sbatch
 # Config precedence: --config PATH, PROSST_CONFIG, then the singles preset below.

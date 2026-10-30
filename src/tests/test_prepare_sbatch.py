@@ -285,7 +285,7 @@ class PreparationSbatchTests(PreparationFixture):
             module('feature_generation.inverse_storage', validate_inverse_cache=validate_inverse_cache)
             module('feature_generation.score_storage', validate_score_cache=validate_score_cache)
             module('feature_generation.score_runner', default_cache_id=lambda config:
-                   f'{config.structure_source}--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b')
+                   'esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b')
             module('feature_generation.structure_inputs',
                    ensure_structure_manifest=ensure_structure, load_structure=load_structure)
             module('feature_generation.structure_fragments', load_inverse_structure=load_structure)
@@ -556,11 +556,11 @@ class PreparationSbatchTests(PreparationFixture):
         self.assertEqual([Path(args[0]) for args in validations],
                          [self.root / "data/features/pretrained/singles" / assay for assay in expected])
         for args in validations:
-            self.assertEqual(args[1:], ["esm_if1", "protssn_proteingym--esm_if1_gvp4_t16_142M_UR50-reference_prefix-2b369911bb5b"])
+            self.assertEqual(args[1:], ["esm_if1", "esm_if1_gvp4_t16_142M_UR50-reference_prefix-2b369911bb5b"])
         score_validations = [record["args"] for record in records if record["kind"] == "validate-score"]
         self.assertEqual([args[0] for args in score_validations], [args[0] for args in validations])
         for args in score_validations:
-            self.assertEqual(args[1:], ["esm_if1", "protssn_proteingym--esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b"])
+            self.assertEqual(args[1:], ["esm_if1", "esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b"])
 
     def test_esm_if1_cleanup_setting_reaches_both_stages(self):
         for value, enabled in ((None, False), ("True", True), ("False", False), ("1", True), ("0", False)):
@@ -630,7 +630,6 @@ class PreparationSbatchTests(PreparationFixture):
                     config = json.loads(config_path.read_text())
                     config["structure_source"] = "protssn_proteingym"
                     config["structure_manifest_dir"] = "data/structures/protssn_proteingym/manifests"
-                    config["cache_id"] = "protssn_proteingym--" + config["cache_id"].split("--", 1)[1]
                     config_path.write_text(json.dumps(config), encoding="utf-8")
                 (self.protssn_manifests / f"{ASSAYS[0]}.json").unlink(missing_ok=True)
                 result, records = self.invoke(script)

@@ -30,6 +30,7 @@ from .score_storage import validate_score_cache
 from .storage import validate_sequence_cache
 from .structure_fragments import load_inverse_structure
 from .structure_inputs import load_structure
+from .structure_sources import STRUCTURE_SOURCES
 
 
 BRCA2 = "BRCA2_HUMAN_Erwood_2022_HEK293T"
@@ -113,13 +114,15 @@ def validate_prosst_tokens(config, saved, structure):
 
 
 def preparation_cache_id(config, root, kind, cache_id):
-    """Recognize the exact historical ProteinGym name only if the new leaf is absent."""
-    if (getattr(config, "model_family", "esm2") != "proteinmpnn"
-            or config.structure_source != "proteingym" or not cache_id.startswith("proteingym--")):
+    """Audit historical source-prefixed names only if the recipe-only leaf is absent."""
+    family = getattr(config, "model_family", "esm2")
+    if (family not in ("proteinmpnn", "esm_if1", "prosst")
+            or any(cache_id.startswith(source + "--") for source in STRUCTURE_SOURCES)):
         return cache_id
-    parent = root / ("scores" if kind == "scores" else "inverse_folding") / "proteinmpnn"
+    feature_type = "sequence" if family == "prosst" else "inverse_folding"
+    parent = root / ("scores" if kind == "scores" else feature_type) / family
     current = parent / cache_id
-    legacy_id = cache_id.removeprefix("proteingym--")
+    legacy_id = f"{config.structure_source}--{cache_id}"
     # An incomplete/corrupt current leaf must still fail, even if an old copy exists.
     if not current.exists() and not current.is_symlink() and (parent / legacy_id).is_dir():
         return legacy_id

@@ -75,8 +75,9 @@ default combines both sources:
 ]
 ```
 
-Both Kermut presets select the existing unprefixed `v_48_020-*` ProteinMPNN
-feature and score directories; their cache paths do not include `proteingym--`.
+Both Kermut presets select recipe-only `v_48_020-*` ProteinMPNN feature and score
+directories. ProSST cache names also omit the structure collection; configuration
+and saved provenance identify each cache's input structures.
 
 The Slurm launchers prefer the catalog at
 `data/DMS_ProteinGym_substitutions/DMS_substitutions.csv`, falling back to

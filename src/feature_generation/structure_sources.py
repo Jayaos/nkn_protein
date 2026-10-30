@@ -30,9 +30,9 @@ def structure_path(source: str, value: str | Path | None, relative: str) -> Path
 
 
 def structure_cache_id(source: str, recipe: str) -> str:
-    """Namespace automatic cache names without changing model recipes."""
+    """Name caches by model recipe; structure identity stays in their metadata."""
     structure_root(source)
-    return f"{source}--{recipe}"
+    return recipe
 
 
 def validate_structure_cache_id(source: str, cache_id: str) -> None:

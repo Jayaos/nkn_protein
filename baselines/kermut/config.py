@@ -19,7 +19,7 @@ from assay_policies import PROTEINMPNN_SCORE_SKIP_REASONS, STRUCTURE_DISTANCE_DI
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_FEATURE_SELECTION = {
     "sequence": "esm2/esm2_t6_8M_UR50D-layer6-c731040fcd8d-mean-first1022",
-    "inverse_folding": "proteinmpnn/proteingym--v_48_020-backbone_only-8907e6671bfb",
+    "inverse_folding": "proteinmpnn/v_48_020-backbone_only-8907e6671bfb",
 }
 DEFAULT_SCORE_SOURCES = (
     "scores/esm2/esm2_t6_8M_UR50D-masked_marginals-float32-c731040fcd8d",

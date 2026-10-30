@@ -41,7 +41,22 @@ def snapshot(path, assay):
             or not metadata.get("input_signature")
             or completion.get("structure_input_signature") != metadata["input_signature"]):
         raise ValueError(f"Cached manifest identity mismatch: {path}")
+    verify_collection(config)
     return metadata
+
+
+def verify_collection(value):
+    """Check saved source metadata; recipe-only cache names do not identify it."""
+    if isinstance(value, dict):
+        archive = value.get("source_archive") or {}
+        sources = (value.get("structure_source"), archive.get("source_id"))
+        if any(source is not None and source != "proteingym" for source in sources):
+            raise ValueError("Cached structure belongs to another collection, not ProteinGym")
+        for child in value.values():
+            verify_collection(child)
+    elif isinstance(value, list):
+        for child in value:
+            verify_collection(child)
 
 
 def verify_referenced_files(metadata, manifest_dir):
@@ -98,7 +113,8 @@ def restore_one(root, manifest_dir, assay, apply=False):
     if destination.exists() or destination.is_symlink():
         return "EXISTS", destination
     parent = root / assay / "inverse_folding/proteinmpnn"
-    # Only ProteinGym or historical unprefixed snapshots belong in this collection.
+    # Accept recipe-only names and historical ProteinGym prefixes. Saved metadata
+    # verifies the collection even when the directory name does not identify it.
     candidates = [path for path in sorted(parent.glob("*/config.json"))
                   if not path.parent.name.startswith(".")
                   and (path.parent.name.startswith("proteingym--") or "--" not in path.parent.name)

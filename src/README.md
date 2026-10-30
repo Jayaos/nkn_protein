@@ -854,7 +854,7 @@ for extraction commands and cache details.
 `feature_selection` independently chooses the family/checkpoint for each feature
 type. The NKN batch preset selects
 `esm2/esm2_t33_650M_UR50D-layer33-08e4846e5371-mean-all-nonoverlap1022-centered-sites` for `sequence` and
-`proteinmpnn/proteingym--v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb` for
+`proteinmpnn/v_48_020-sequence_conditional-orders10-seed37-8907e6671bfb` for
 `inverse_folding`. Enabling an NKN branch does not select a different pretrained
 model or regenerate its representations.
 

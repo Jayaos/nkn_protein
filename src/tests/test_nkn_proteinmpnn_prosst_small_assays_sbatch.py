@@ -75,8 +75,7 @@ class ProteinMPNNProSSTPresetTests(unittest.TestCase):
         inverse = InverseFoldingConfig.load(root / "configs/extraction/proteinmpnn_v48_020_kermut.json")
         self.assertEqual(config["feature_selection"], {
             "sequence": f"prosst/{prosst.cache_id}",
-            # Existing ProteinMPNN caches predate the structure-source prefix.
-            "inverse_folding": f"proteinmpnn/{inverse.cache_id.removeprefix('proteingym--')}",
+            "inverse_folding": f"proteinmpnn/{inverse.cache_id}",
         })
         cpu = json.loads((root / "configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches_noise_initial_0p5.json")
                          .read_text(encoding="utf-8"))
@@ -94,20 +93,30 @@ class ProteinMPNNProSSTPresetTests(unittest.TestCase):
         root = array_tests.REPOSITORY
         config = json.loads((root / PRESET).read_text(encoding="utf-8"))
         cache_root = root / "data/features/pretrained/singles"
+        structure_sources = {
+            "prosst": ProSSTConfig.load(root / "configs/extraction/prosst_2048_singles.json").structure_source,
+            "proteinmpnn": InverseFoldingConfig.load(
+                root / "configs/extraction/proteinmpnn_v48_020_kermut.json").structure_source,
+        }
         selections = [f"{kind}/{selection}"
                       for kind, selection in config["feature_selection"].items()]
         selections.extend(config["score_sources"])
         checked = 0
         for selection in selections:
             kind, family, checkpoint = selection.split("/")
-            # Inspect only locally available families; the full HPC catalog is
-            # not required. The selected recipe must exist when that family does.
+            # Existing local examples may retain the historical source prefix.
+            # Compare their recipe and metadata without migrating saved files.
             for family_root in cache_root.glob(f"*/{kind}/{family}"):
                 with self.subTest(assay=family_root.parent.parent.name, selection=selection):
-                    path = family_root / checkpoint / "config.json"
+                    leaf = family_root / checkpoint
+                    prefix = structure_sources[family] + "--"
+                    if not leaf.exists():
+                        leaf = family_root / (prefix + checkpoint)
+                    path = leaf / "config.json"
                     self.assertTrue(path.is_file(), f"Selected cache does not exist: {path}")
                     metadata = json.loads(path.read_text(encoding="utf-8"))
-                    self.assertEqual(metadata["checkpoint"], checkpoint)
+                    self.assertEqual(metadata["checkpoint"], leaf.name)
+                    self.assertEqual(leaf.name.removeprefix(prefix), checkpoint)
                     self.assertEqual(metadata["model_family"], family)
                     self.assertEqual(metadata["feature_type"], kind)
                     checked += 1

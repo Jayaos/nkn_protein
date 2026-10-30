@@ -97,15 +97,22 @@ class StructureProvenanceTests(unittest.TestCase):
     def test_local_prosst_and_proteinmpnn_metadata_can_use_independent_structures(self):
         preset = ExperimentConfig.load(ROOT / "configs/proteinmpnn_prosst_nkn.json")
         feature_root = ROOT / "data/features/pretrained/singles"
+        sources = {
+            family: json.loads((ROOT / "configs/extraction" / filename).read_text())["structure_source"]
+            for family, filename in (("prosst", "prosst_2048_singles.json"),
+                                     ("proteinmpnn", "proteinmpnn_v48_020_kermut.json"))
+        }
         checked = 0
-        for path in feature_root.glob(f"*/sequence/{preset.feature_selection['sequence']}/config.json"):
-            assay_root = path.parents[3]
+        for assay_root in feature_root.glob("*"):
             manifest = ROOT / preset.structure_manifest_dir / f"{assay_root.name}.json"
             if not manifest.is_file():
                 continue
             geometry = json.loads(manifest.read_text())
             for name, selection in preset.feature_selection.items():
                 leaf = assay_root / name / selection
+                if not leaf.exists():
+                    family, recipe = selection.split("/", 1)
+                    leaf = assay_root / name / family / f"{sources[family]}--{recipe}"
                 if not (leaf / "config.json").is_file():
                     continue
                 config = json.loads((leaf / "config.json").read_text())

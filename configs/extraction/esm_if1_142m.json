@@ -4,7 +4,7 @@
   "structure_source": "protssn_proteingym",
   "model_id": "facebookresearch/esm/esm_if1_gvp4_t16_142M_UR50",
   "revision": "2b369911bb5b4b0dda914521b9475cad1656b2ac",
-  "cache_id": "protssn_proteingym--esm_if1_gvp4_t16_142M_UR50-reference_prefix-2b369911bb5b",
+  "cache_id": "esm_if1_gvp4_t16_142M_UR50-reference_prefix-2b369911bb5b",
   "model_dir": "data/models/esm_if1",
   "output_root": "data/features/pretrained",
   "assay_index": "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv",

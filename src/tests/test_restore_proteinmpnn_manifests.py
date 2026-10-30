@@ -33,11 +33,11 @@ class ManifestRecoveryTests(unittest.TestCase):
         }
         self.leaf = self.make_cache("legacy", self.metadata)
 
-    def make_cache(self, name, metadata):
+    def make_cache(self, name, metadata, **model_metadata):
         leaf = self.outputs / metadata["assay_id"] / "inverse_folding/proteinmpnn" / name
         leaf.mkdir(parents=True)
         config = {"model_family": "proteinmpnn", "feature_type": "inverse_folding", "checkpoint": name,
-                  "structure": metadata}
+                  "structure": metadata, **model_metadata}
         path = leaf / "config.json"
         path.write_text(json.dumps(config))
         completion = {
@@ -83,9 +83,29 @@ class ManifestRecoveryTests(unittest.TestCase):
             recovery.restore_one(self.outputs, self.manifests, "tiny", apply=True)
         self.assertFalse(self.manifests.exists())
 
-    def test_matching_current_and_legacy_snapshots_can_restore(self):
+    def test_matching_recipe_only_and_prefixed_snapshots_can_restore(self):
         self.make_cache("proteingym--legacy", self.metadata)
         self.assertEqual(recovery.restore_one(self.outputs, self.manifests, "tiny", apply=True)[0], "RESTORED")
+
+    def test_unprefixed_foreign_collection_is_rejected_by_metadata(self):
+        for fields in ({"structure_source": "protssn_proteingym"},
+                       {"source_archive": {"source_id": "protssn_proteingym"}},
+                       {"fragments": [{"source_archive": {"source_id": "protssn_proteingym"}}]}):
+            with self.subTest(fields=fields):
+                self.make_cache("recipe_only", dict(self.metadata, **fields))
+                with self.assertRaisesRegex(ValueError, "another collection"):
+                    recovery.restore_one(self.outputs, self.manifests, "tiny", apply=True)
+                self.assertFalse(self.manifests.exists())
+                leaf = self.outputs / "tiny/inverse_folding/proteinmpnn/recipe_only"
+                for path in leaf.iterdir():
+                    path.unlink()
+                leaf.rmdir()
+
+    def test_unprefixed_foreign_model_source_is_rejected(self):
+        self.make_cache("recipe_only", self.metadata, structure_source="protssn_proteingym")
+        with self.assertRaisesRegex(ValueError, "another collection"):
+            recovery.restore_one(self.outputs, self.manifests, "tiny", apply=True)
+        self.assertFalse(self.manifests.exists())
 
     def test_missing_raw_file_fails_without_creating_manifest(self):
         self.raw.unlink()

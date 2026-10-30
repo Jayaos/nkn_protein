@@ -20,6 +20,7 @@
 # outbound HTTPS from the compute node. No downloaded checkpoint or structure needed.
 # This job downloads and verifies the assets before extraction and scoring.
 # It prepares Kermut's sequence-conditioned cache and variant mean scores.
+# Cache directories use model recipes; structure collection is stored in metadata.
 # Feature extraction uses ten conditional passes over every reference position.
 # The default presets have no sequence-length cap. BRCA2 fragments and ZIKV/HCV
 # domains support inverse-folding features; those assays use ESM2 mean scores.

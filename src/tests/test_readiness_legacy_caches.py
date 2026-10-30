@@ -32,7 +32,7 @@ class LegacyReadinessTests(unittest.TestCase):
         self.backbone = SimpleNamespace(input_signature=self.structure["input_signature"])
         self.ids = {kind: config.cache_id if kind == "features" else r.default_cache_id(config)
                     for kind, config in self.configs.items()}
-        self.leaves = {kind: self.write_cache(kind, name.removeprefix("proteingym--"))
+        self.leaves = {kind: self.write_cache(kind, "proteingym--" + name)
                        for kind, name in self.ids.items()}
 
     def write_cache(self, kind, cache_id):
@@ -106,12 +106,32 @@ class LegacyReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "preparation config: seed"):
             r.validate_output(changed, "tiny", self.inputs, "features", self.backbone)
 
-    def test_other_structure_sources_do_not_use_unprefixed_caches(self):
+    def test_other_structure_sources_do_not_use_foreign_prefixed_caches(self):
         for kind, cache_id in self.ids.items():
-            other_id = cache_id.replace("proteingym--", "protssn_proteingym--", 1)
             config = SimpleNamespace(model_family="proteinmpnn", structure_source="protssn_proteingym")
             with self.subTest(kind=kind):
-                self.assertEqual(r.preparation_cache_id(config, self.root, kind, other_id), other_id)
+                self.assertEqual(r.preparation_cache_id(config, self.root, kind, cache_id), cache_id)
+
+    def test_all_structure_models_recognize_only_their_own_prefixed_cache(self):
+        for family, feature_type in (("proteinmpnn", "inverse_folding"),
+                                     ("esm_if1", "inverse_folding"), ("prosst", "sequence")):
+            for kind in ("features", "scores"):
+                with self.subTest(family=family, kind=kind):
+                    config = SimpleNamespace(model_family=family, structure_source="protssn_proteingym")
+                    parent = self.root / ("scores" if kind == "scores" else feature_type) / family
+                    (parent / "proteingym--recipe").mkdir(parents=True)
+                    self.assertEqual(r.preparation_cache_id(config, self.root, kind, "recipe"), "recipe")
+                    (parent / "protssn_proteingym--recipe").mkdir()
+                    self.assertEqual(r.preparation_cache_id(config, self.root, kind, "recipe"),
+                                     "protssn_proteingym--recipe")
+                    (parent / "recipe").mkdir()
+                    self.assertEqual(r.preparation_cache_id(config, self.root, kind, "recipe"), "recipe")
+
+    def test_explicit_historical_selection_is_not_redirected(self):
+        config = self.configs["features"]
+        self.write_cache("features", self.ids["features"])
+        historical = self.leaves["features"].name
+        self.assertEqual(r.preparation_cache_id(config, self.root, "features", historical), historical)
 
 
 if __name__ == "__main__":
