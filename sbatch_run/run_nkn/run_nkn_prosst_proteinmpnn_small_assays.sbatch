@@ -34,6 +34,9 @@
 # ProteinMPNN features and scores use v_48_020-* directories
 # under data/features/pretrained/singles/<assay>. All cache names use model recipes
 # without structure-collection prefixes.
+# ProSST feature/score directories start with ProSST-2048-. Migrate prior
+# prefixed ProSST/ESM-IF1 outputs with:
+#   sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch
 # ProSST caches match configs/extraction/prosst_2048_singles.json (protssn_proteingym).
 # Each cache is checked against its own recorded structure (structure_consistency=per_cache).
 # ProteinMPNN and CA distances use proteingym; ProSST uses protssn_proteingym.
@@ -124,6 +127,8 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'GP mean scores: ProSST and ProteinMPNN (ProSST only for BRCA2). ProSST score caches are required.\n'
   printf 'Structure consistency: per_cache; ProSST and ProteinMPNN retain their independently validated structures.\n'
   printf 'ProteinMPNN features/scores: recipe-only v_48_020-* cache directories.\n'
+  printf 'ProSST features/scores: recipe-only ProSST-2048-* cache directories.\n'
+  printf 'Migrate prior prefixed ProSST/ESM-IF1 outputs: sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch\n'
   printf 'ProSST embeddings and scores must match configs/extraction/prosst_2048_singles.json.\n'
   printf 'Default settings: singles; --parallel also parallelizes settings and folds within each assay.\n'
   printf 'Resources per assay: 15 CPUs, 16G memory, 24 hours; prepared inputs are required.\n'

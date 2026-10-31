@@ -21,6 +21,10 @@
 # distributions (10 orders, seed 37), with reference CA coordinates. The mean
 # learns a combination of ESM2 650M masked-marginal and ProteinMPNN sequence
 # log-likelihood scores. Cache selections come from the JSON.
+# Structure-conditioned cache IDs contain the model recipe without a collection
+# prefix. Existing prefixed ProSST/ESM-IF1 caches can be migrated before training:
+#   sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch
+# Custom JSON selections are used exactly as supplied, including historical IDs.
 # Runs our baselines.kermut.cli in the existing nkn_protein environment, on CPU.
 #
 # From the repository root (or a subdirectory):
@@ -101,6 +105,8 @@ while [[ $# -gt 0 ]]; do
       printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
       printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH] [--parallel]\n' "sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch"
       printf 'Config precedence: --config, KERMUT_CONFIG, configs/kermut_esm2_proteinmpnn.json\n'
+      printf 'Default cache IDs use model recipes without a structure-collection prefix; custom JSON selections are used exactly.\n'
+      printf 'Migrate existing prefixed ProSST/ESM-IF1 caches first: sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch\n'
       printf 'Result prefix: KERMUT_RUN_PREFIX (default kermut_esm2_proteinmpnn)\n'
       printf 'Catalog: ASSAY_INDEX overrides detection; data/DMS_ProteinGym_substitutions/DMS_substitutions.csv is preferred.\n'
       printf 'Parallel example: sbatch %s singles --parallel\n' "sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch"
@@ -301,7 +307,7 @@ print(f"PyTorch: {torch.__version__}; device: cpu; threads: {config.num_threads}
 print(f"Kernel branches: {', '.join(config.model.enabled_branches)}")
 print(f"Structure distance factor: {'enabled' if config.model.use_structure_distance else 'disabled'}")
 print(f"Sequence cache: {config.feature_selection.get('sequence')}")
-print(f"ProteinMPNN cache: {config.feature_selection.get('inverse_folding')}")
+print(f"Inverse-folding cache: {config.feature_selection.get('inverse_folding')}")
 print(f"Mean score caches: {config.score_sources}")
 print(f"GP mean score sources: {len(config.score_sources) if config.score_sources is not None else 'cache defaults'}")
 print(f"Training: {config.training.n_steps} AdamW updates; one initialization; seed {config.training.seed}; final iterate")

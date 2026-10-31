@@ -21,6 +21,9 @@
 # Default: singles (random, modulo, contiguous), using prepared ProSST-2048 and
 # ProteinMPNN caches and configs/kermut_prosst_proteinmpnn.json. CPU only.
 # ProSST embeddings and scores use configs/extraction/prosst_2048_singles.json.
+# Cache IDs begin with ProSST-2048- and v_48_020-, without a structure collection.
+# Migrate existing prefixed ProSST caches before submitting this launcher:
+#   sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch
 # ProteinMPNN inputs and all training/evaluation hyperparameters match the ESM2 version.
 # KERMUT_RUN_PREFIX overrides the default kermut_prosst_proteinmpnn result prefix.
 # --parallel enables concurrent fits within each assay's CPU allocation.
@@ -102,6 +105,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'Default array: 0-56; 1-1000 single mutants (inclusive), one assay per task.\n'
   printf 'Uses run_kermut_esm2_proteinmpnn.sbatch with all arguments forwarded.\n'
   printf 'Default config: configs/kermut_prosst_proteinmpnn.json; --config overrides KERMUT_CONFIG.\n'
+  printf 'Cache IDs: ProSST-2048-* and v_48_020-*. Migrate old prefixes with sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch\n'
   printf 'Results use kermut_prosst_proteinmpnn_<selection>_<job-id> (KERMUT_RUN_PREFIX overrides).\n'
   for index in "${!assays[@]}"; do
     printf '  %s: %s\n' "$index" "${assays[$index]}"

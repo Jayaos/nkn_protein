@@ -23,7 +23,12 @@
 # sequence log-likelihood scores feed the learned GP mean. CPU only.
 # Branches: sequence_site, sequence_global, inverse_folding, structure_distance.
 # Branch widths: [1]; final NKN widths: [8, 4, 4, 2, 1]. Initial noise variance: 0.5.
-# ProteinMPNN features and scores use the existing unprefixed v_48_020-* cache directories.
+# Prepared feature/score cache IDs use model recipes without structure-collection prefixes.
+# ProteinMPNN directories start with v_48_020-; ProSST starts with ProSST-2048-;
+# ESM-IF1 starts with esm_if1_gvp4_t16_142M_UR50- when selected in a custom config.
+# Migrate prior prefixed ProSST/ESM-IF1 outputs before using these recipe-only paths:
+#   sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch
+# Config feature_selection and score_sources are used exactly as supplied.
 # BRCA2_HUMAN_Erwood_2022_HEK293T disables structure_distance because its reference
 # joins separate structure fragments; the other selected branches remain active.
 # It also drops ProteinMPNN mean scores from two-score presets, retaining ESM2.
@@ -277,6 +282,8 @@ while [[ $# -gt 0 ]]; do
       printf 'NKN overrides: --validation-interval 100 --patience 100 --min-steps 1000 (optimizer steps)\n'
       printf 'Noise prior: --noise-prior none|half_cauchy; --noise-prior-scale 0.1 (overrides JSON)\n'
       printf 'Config precedence: --config, NKN_CONFIG, configs/esm2_proteinmpnn_nkn_four_branches_noise_initial_0p5.json\n'
+      printf 'Prepared caches use recipe-only IDs; explicit feature_selection and score_sources are preserved.\n'
+      printf 'Migrate prior prefixed ProSST/ESM-IF1 outputs: sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch\n'
       printf 'Branches: sequence_site, sequence_global, inverse_folding, structure_distance (disabled for BRCA2).\n'
       printf 'Branch widths: [1]; final NKN widths: [8, 4, 4, 2, 1]; initial noise variance: 0.5.\n'
       printf 'GP mean scores: ESM2 and ProteinMPNN (ESM2 only for BRCA2).\n'
@@ -514,8 +521,8 @@ print(f"Python: {sys.executable}")
 print(f"PyTorch: {torch.__version__}; device: cpu; threads: {config.num_threads}")
 print(f"Kernel branches: {', '.join(config.model.enabled_branches)}")
 print(f"Sequence cache: {config.feature_selection.get('sequence')}")
-print(f"ProteinMPNN cache: {config.feature_selection.get('inverse_folding')}")
-print(f"ProteinMPNN input policy: {config.inverse_folding_policy}")
+print(f"Inverse-folding cache: {config.feature_selection.get('inverse_folding')}")
+print(f"Inverse-folding input policy: {config.inverse_folding_policy}")
 print(f"Structure consistency: {config.structure_consistency}; distance manifests: {config.structure_manifest_dir}")
 print(f"Mean score caches: {config.score_sources}")
 print(f"GP mean score sources: {len(config.score_sources) if config.score_sources is not None else 'cache defaults'}")

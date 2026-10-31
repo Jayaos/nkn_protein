@@ -219,6 +219,14 @@ pooled global vectors from that cache. ProteinMPNN features/scores, reference
 coordinates, training hyperparameters, evaluation settings, the 57 assay indices,
 and Slurm resources match the ESM2 version. Prepare the ProSST caches before
 submission; the default singles scope is `data/features/pretrained/singles`.
+The presets select `prosst/ProSST-2048-...` and `proteinmpnn/v_48_020-...`
+feature paths, with the same recipe-only naming under `scores/`. If prepared
+ProSST or ESM-IF1 caches still have `protssn_proteingym--` prefixes, complete
+`sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch` before
+training. The runner reads custom JSON selections exactly as supplied; it does
+not infer a different cache from its structure collection. A custom ESM-IF1
+selection uses `esm_if1/esm_if1_gvp4_t16_142M_UR50-...` and needs matching
+`structure_manifest_dir` coordinates when the structure distance factor is enabled.
 Full-assay selections require matching full-assay caches and double mutants.
 Results use `kermut_prosst_proteinmpnn_<selection>_<job-id>` directories, allowing
 the summarizer to distinguish configurations. The shared runner accepts
