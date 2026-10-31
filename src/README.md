@@ -423,6 +423,25 @@ Results use `nkn_msa_proteinmpnn_<selection>_<job-id>`; `NKN_RUN_PREFIX`,
 The existing five-branch `msa_transformer_proteinmpnn_nkn.json` remains a separate
 preset and can be selected explicitly with `--config`.
 
+To use MSA Transformer embeddings with ESM-IF1 inverse-folding features and
+both models' mean scores on the same small-assay array:
+
+```bash
+sbatch sbatch_run/run_nkn/run_nkn_msa_esmif_small_assays.sbatch
+sbatch --array=0-56%4 sbatch_run/run_nkn/run_nkn_msa_esmif_small_assays.sbatch singles --parallel --experiment-suffix comparison_v1
+```
+
+This selects `configs/msa_transformer_esm_if1_nkn_four_branches_noise_initial_0p5.json`
+and keeps the ESM2 reference's four-branch architecture and training settings.
+It reads `sequence/msa_transformer/msa1b-layer12-depth32-seed1-msaregion1022-sites-v3`
+and `inverse_folding/esm_if1/esm_if1_gvp4_t16_142M_UR50-reference_prefix-2b369911bb5b`
+under `data/features/pretrained/singles/<assay>`, plus the MSA masked-marginal and
+ESM-IF1 native sequence-log-likelihood score caches. ESM-IF1 uses the normalized
+inverse-folding policy. The structure-distance branch uses matching manifests
+from `data/structures/protssn_proteingym/manifests`; shared structure identity
+checks remain enabled. BRCA2 disables structure distance while retaining both
+mean score sources. Results use `nkn_msa_esmif_<selection>_<job-id>`.
+
 You can edit the default preset directly or copy it to keep separate experiments.
 `--config PATH` can appear before or after the optional setting; omitting the
 setting still runs `singles`. Alternatively, set `NKN_CONFIG=PATH` when submitting.

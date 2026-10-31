@@ -251,6 +251,26 @@ The usual `--config`, `KERMUT_CONFIG`, `KERMUT_RUN_PREFIX`, `--parallel`, and
 disabling the ProteinMPNN score and structure distance factor, as in the other
 Kermut presets.
 
+For MSA Transformer embeddings with **ESM-IF1 inverse-folding features and both
+models' mean scores**, use:
+
+```bash
+sbatch sbatch_run/run_kermut/run_kermut_msa_esmif_small_assays.sbatch
+sbatch --array=0-56%4 sbatch_run/run_kermut/run_kermut_msa_esmif_small_assays.sbatch singles --parallel --experiment-suffix comparison_v1
+```
+
+The preset `configs/kermut_msa_esmif.json` selects the prepared MSA Transformer
+global embeddings and masked-marginal scores, plus ESM-IF1 normalized WT-prefix
+probabilities and native sequence-log-likelihood scores. Cache names match
+`configs/extraction/msa_transformer.json` and `configs/extraction/esm_if1_142m.json`
+under `data/features/pretrained/singles/<assay>`. Structure-distance coordinates
+come from `data/structures/protssn_proteingym/manifests` to match ESM-IF1's recorded
+backbone. Training settings, evaluation, the 57-assay mapping, and resources
+match the ESM2/ProteinMPNN reference. BRCA2 disables the structure-distance
+factor while retaining both mean scores. Results use
+`kermut_msa_esmif_<selection>_<job-id>`; the standard config, result-prefix,
+parallelism, and experiment-suffix overrides remain available.
+
 Use the five-assay CPU array launcher from the repository root on the cluster:
 
 ```bash

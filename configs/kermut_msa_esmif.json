@@ -1,0 +1,43 @@
+{
+  "model": {
+    "raw_h_scale": 1.0,
+    "raw_h_lengthscale": 0.1,
+    "raw_d_lengthscale": 0.1,
+    "raw_p_lengthscale": 0.1,
+    "raw_alpha": 0.5,
+    "raw_sequence_lengthscale": 0.0
+  },
+  "feature_selection": {
+    "sequence": "msa_transformer/msa1b-layer12-depth32-seed1-msaregion1022-sites-v3",
+    "inverse_folding": "esm_if1/esm_if1_gvp4_t16_142M_UR50-reference_prefix-2b369911bb5b"
+  },
+  "score_sources": [
+    "scores/msa_transformer/msa1b-depth32-seed1-proteingym-masked-marginals-v2",
+    "scores/esm_if1/esm_if1_gvp4_t16_142M_UR50-sequence_log_likelihood-native-v1-2b369911bb5b"
+  ],
+  "structure_manifest_dir": "data/structures/protssn_proteingym/manifests",
+  "training": {
+    "n_steps": 150,
+    "learning_rate": 0.1,
+    "weight_decay": 0.01,
+    "betas": [0.9, 0.999],
+    "epsilon": 1e-8,
+    "seed": 2024,
+    "dtype": "float32",
+    "raw_noise": 0.0,
+    "noise_floor": 0.0001,
+    "noise_prior_scale": 0.1,
+    "jitter_initial": 1e-6,
+    "jitter_max": 0.001,
+    "max_train_variants": null
+  },
+  "evaluation": {
+    "n_folds": 5,
+    "coverage_levels": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95],
+    "n_bins": 10,
+    "pair_block_size": 512
+  },
+  "pooling": "mean",
+  "device": "cpu",
+  "num_threads": 4
+}
