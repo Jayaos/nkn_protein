@@ -403,6 +403,26 @@ SAMPLE_RATIO=0.8 SPLIT_SEED=2024 sbatch --array=1 sbatch_run/run_nkn/run_nkn_esm
 SAMPLE_RATIO=1.0 sbatch --array=1 sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch single_to_double
 ```
 
+For the same 57-assay NKN setup using MSA Transformer embeddings and ProteinMPNN:
+
+```bash
+sbatch sbatch_run/run_nkn/run_nkn_msa_proteinmpnn_small_assays.sbatch
+sbatch --array=0-56%4 sbatch_run/run_nkn/run_nkn_msa_proteinmpnn_small_assays.sbatch singles --parallel --experiment-suffix comparison_v1
+```
+
+This wrapper selects
+`configs/msa_transformer_proteinmpnn_nkn_four_branches_noise_initial_0p5.json`.
+It uses MSA Transformer site/global embeddings and masked-marginal scores from
+`configs/extraction/msa_transformer.json`, plus ProteinMPNN inverse-folding
+features and scores. The four branches, widths, initial noise variance of 0.5,
+training settings, and Slurm resources match the ESM2 reference. Prepare both
+models' caches under `data/features/pretrained/singles/<assay>` first. BRCA2
+disables the structure-distance branch and retains only the MSA mean score.
+Results use `nkn_msa_proteinmpnn_<selection>_<job-id>`; `NKN_RUN_PREFIX`,
+`NKN_CONFIG`, `--config`, and all shared-runner options remain supported.
+The existing five-branch `msa_transformer_proteinmpnn_nkn.json` remains a separate
+preset and can be selected explicitly with `--config`.
+
 You can edit the default preset directly or copy it to keep separate experiments.
 `--config PATH` can appear before or after the optional setting; omitting the
 setting still runs `singles`. Alternatively, set `NKN_CONFIG=PATH` when submitting.

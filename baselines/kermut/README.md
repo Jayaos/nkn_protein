@@ -233,6 +233,24 @@ the summarizer to distinguish configurations. The shared runner accepts
 `KERMUT_RUN_PREFIX` to customize this prefix, which must start with `kermut_`.
 `--config`, `KERMUT_CONFIG`, `--parallel`, and `--experiment-suffix` work as usual.
 
+For the same 57 assays using **MSA Transformer embeddings and ProteinMPNN**:
+
+```bash
+sbatch sbatch_run/run_kermut/run_kermut_msa_proteinmpnn_small_assays.sbatch
+sbatch --array=0-56%4 sbatch_run/run_kermut/run_kermut_msa_proteinmpnn_small_assays.sbatch singles --parallel --experiment-suffix comparison_v1
+```
+
+The preset `configs/kermut_msa_proteinmpnn.json` uses MSA Transformer global
+embeddings and masked-marginal scores from `configs/extraction/msa_transformer.json`,
+with ProteinMPNN inverse-folding features and mean scores. Prepare both models'
+caches under `data/features/pretrained/singles/<assay>` before submitting.
+ProteinMPNN inputs, reference coordinates, training settings, and Slurm resources
+match the ESM2 launcher. Results use `kermut_msa_proteinmpnn_<selection>_<job-id>`.
+The usual `--config`, `KERMUT_CONFIG`, `KERMUT_RUN_PREFIX`, `--parallel`, and
+`--experiment-suffix` overrides are supported. BRCA2 retains the MSA score while
+disabling the ProteinMPNN score and structure distance factor, as in the other
+Kermut presets.
+
 Use the five-assay CPU array launcher from the repository root on the cluster:
 
 ```bash
