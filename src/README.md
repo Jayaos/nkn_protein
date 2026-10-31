@@ -442,6 +442,28 @@ from `data/structures/protssn_proteingym/manifests`; shared structure identity
 checks remain enabled. BRCA2 disables structure distance while retaining both
 mean score sources. Results use `nkn_msa_esmif_<selection>_<job-id>`.
 
+For ProSST-2048 embeddings with ESM-IF1 inverse-folding features and both models'
+mean scores on the same 57-assay array:
+
+```bash
+sbatch sbatch_run/run_nkn/run_nkn_prosst_esmif_small_assays.sbatch
+sbatch --array=0-56%4 sbatch_run/run_nkn/run_nkn_prosst_esmif_small_assays.sbatch singles --parallel --experiment-suffix comparison_v1
+```
+
+This selects `configs/prosst_esm_if1_nkn_four_branches_noise_initial_0p5.json`.
+ProSST layer-12 centered-site and pooled global embeddings feed the sequence
+branches; ESM-IF1 WT-prefix probabilities use the normalized inverse-folding
+policy. The GP mean uses ProSST masked-marginal and ESM-IF1 native
+sequence-log-likelihood scores. Cache names match
+`configs/extraction/prosst_2048_singles.json` and `configs/extraction/esm_if1_142m.json`
+under `data/features/pretrained/singles/<assay>`, without structure-collection
+prefixes. Both models and CA coordinates use the matching
+`data/structures/protssn_proteingym/manifests`; shared structure checks remain
+enabled. The four branches, widths, initial noise variance of 0.5, training and
+evaluation settings, and resources match the ESM2 reference. BRCA2 disables
+structure distance while retaining both mean scores. Results use
+`nkn_prosst_esmif_<selection>_<job-id>`; all shared-runner overrides remain supported.
+
 You can edit the default preset directly or copy it to keep separate experiments.
 `--config PATH` can appear before or after the optional setting; omitting the
 setting still runs `singles`. Alternatively, set `NKN_CONFIG=PATH` when submitting.

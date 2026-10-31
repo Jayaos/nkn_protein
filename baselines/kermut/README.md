@@ -271,6 +271,26 @@ factor while retaining both mean scores. Results use
 `kermut_msa_esmif_<selection>_<job-id>`; the standard config, result-prefix,
 parallelism, and experiment-suffix overrides remain available.
 
+For **ProSST-2048 embeddings and ESM-IF1 inverse-folding features**, with both
+models' mean scores:
+
+```bash
+sbatch sbatch_run/run_kermut/run_kermut_prosst_esmif_small_assays.sbatch
+sbatch --array=0-56%4 sbatch_run/run_kermut/run_kermut_prosst_esmif_small_assays.sbatch singles --parallel --experiment-suffix comparison_v1
+```
+
+The preset `configs/kermut_prosst_esmif.json` selects ProSST layer-12 pooled global
+embeddings and masked-marginal scores from `configs/extraction/prosst_2048_singles.json`,
+plus ESM-IF1 normalized WT-prefix probabilities and native sequence-log-likelihood
+scores from `configs/extraction/esm_if1_142m.json`. Cache names match the prepared
+example under `data/features/pretrained/singles/<assay>` and omit the structure
+collection prefix. Structure-distance coordinates use the matching
+`data/structures/protssn_proteingym/manifests`. The 57-assay mapping, training and
+evaluation settings, and Slurm resources match the ESM2/ProteinMPNN reference.
+BRCA2 retains both mean scores with structure distance disabled. Results use
+`kermut_prosst_esmif_<selection>_<job-id>`; the usual config, result-prefix,
+parallelism, and experiment-suffix overrides are supported.
+
 Use the five-assay CPU array launcher from the repository root on the cluster:
 
 ```bash
