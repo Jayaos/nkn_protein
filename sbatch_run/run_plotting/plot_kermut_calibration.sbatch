@@ -27,8 +27,8 @@ Usage: sbatch sbatch_run/run_plotting/plot_kermut_calibration.sbatch [OPTIONS]
 
 Plot interval, pairwise, and ENCE diagnostics from saved Kermut model runs only.
 Discovery selects kermut_* run folders; --run-dir must also name a kermut_* run.
-ENCE plots show RMV versus RMSE with ENCE/cv annotations when per-fold
-error_bin_stats are saved; older runs without those bins skip the ENCE plot.
+ENCE plots show RMV versus RMSE with ENCE/cv annotations. Missing per-fold
+error_bin_stats are reconstructed from saved predictions.csv when available.
   --results-dir PATH   Results root (default: PLOT_RESULTS_DIR or results).
                       Repeat for multiple Kermut results directories.
   --assay ID           Restrict discovery to an assay; repeat for several.

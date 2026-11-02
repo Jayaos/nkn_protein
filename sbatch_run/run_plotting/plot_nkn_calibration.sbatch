@@ -27,8 +27,8 @@ Usage: sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch [OPTIONS]
 
 Plot interval, pairwise, and ENCE diagnostics from saved NKN model runs only.
 Discovery selects nkn_* run folders; --run-dir must also name an nkn_* run.
-ENCE plots show RMV versus RMSE with ENCE/cv annotations when per-fold
-error_bin_stats are saved; older runs without those bins skip the ENCE plot.
+ENCE plots show RMV versus RMSE with ENCE/cv annotations. Missing per-fold
+error_bin_stats are reconstructed from saved predictions.csv when available.
   --results-dir PATH   Results root (default: PLOT_RESULTS_DIR or results).
                       Repeat for multiple NKN results directories.
   --assay ID           Restrict discovery to an assay; repeat for several.

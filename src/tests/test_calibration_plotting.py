@@ -1,8 +1,10 @@
 """Calibration plots preserve fold metrics, missing data, and result layout."""
 
 from copy import deepcopy
+import csv
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import statistics
@@ -16,6 +18,7 @@ from plotting.calibration import discover_runs, load_run, plot_run, summarize_se
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 HAS_MATPLOTLIB = importlib.util.find_spec("matplotlib") is not None
+HAS_TORCH = importlib.util.find_spec("torch") is not None
 
 
 def fold_metrics(index):
@@ -50,6 +53,18 @@ def with_error_calibration(fold):
                        "rmse_standardized": index + .5 + offset}
                       for index, count in enumerate((fold["n_variants"] - 1, 1))])
     return result
+
+
+def legacy_fold(index):
+    return {**fold_metrics(index), "n_variants": 4, "n_pairs": 0, "pair_ece": None, "bin_stats": []}
+
+
+def legacy_predictions(index):
+    targets = [0, 0, 6, 8] if index == 0 else [1, 2, 3, 4]
+    return [{"variant_id": f"f{index}_v{i}", "fold": index, "n_mutations": 1,
+             "target": target, "mean": 0, "observation_variance": (i + 1) ** 2,
+             "observation_variance_standardized": (i + 1) ** 2 / 4, "latent_variance": .01}
+            for i, target in enumerate(targets)]
 
 
 class CalibrationSummaryTests(unittest.TestCase):
@@ -203,6 +218,14 @@ class CalibrationResultTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value), encoding="utf-8")
 
+    @staticmethod
+    def write_predictions(path, rows):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+
     def make_run(self, assay="assay_a", run_name="nkn_test", settings=("singles_random",)):
         run = self.results / assay / run_name
         self.write(run / "config.json", {"evaluation": {"n_folds": 2}})
@@ -263,6 +286,76 @@ class CalibrationResultTests(unittest.TestCase):
         self.assertEqual(loaded["summary"]["n_folds"], 2)
         self.assertAlmostEqual(loaded["summary"]["interval_ece"]["mean"], 0.25)
         self.assertEqual(len(loaded["source_files"]), 1)
+
+    @unittest.skipUnless(HAS_TORCH, "PyTorch is required to recover legacy ENCE")
+    def test_legacy_ence_uses_separate_folds_observation_variance_and_training_scale(self):
+        run = self.make_run()
+        self.write(run / "config.json", {"evaluation": {"n_folds": 2, "error_n_bins": 2}})
+        path = run / "cv/singles_random"
+        self.write(path / "metrics.json", {"n_folds": 2, "fold_metrics": [legacy_fold(i) for i in (0, 1)]})
+        # A pooled CSV must be split by fold, regardless of row order.
+        self.write_predictions(path / "predictions.csv", list(reversed(legacy_predictions(0) + legacy_predictions(1))))
+        originals = {p: p.read_bytes() for p in path.iterdir()}
+        setting = self.setting(load_run(run), "singles_random")
+        self.assertEqual([fold["ence"] for fold in setting["folds"]], [1, 0])
+        self.assertAlmostEqual(setting["summary"]["ence"]["mean"], .5)
+        first = setting["folds"][0]
+        self.assertAlmostEqual(first["uncertainty_cv"], statistics.stdev([1, 2, 3, 4]) / 2.5)
+        self.assertAlmostEqual(first["error_bin_stats"][0]["rmv"], math.sqrt(2.5))
+        self.assertAlmostEqual(first["error_bin_stats"][0]["rmv_standardized"], math.sqrt(2.5) / 2)
+        self.assertEqual(first["error_bin_stats"][1]["rmse_standardized"], math.sqrt(50) / 2)
+        self.assertTrue(all(record["status"] == "recovered" for record in setting["error_calibration_recovery"]))
+        self.assertIn(str(path / "predictions.csv"), setting["source_files"])
+        self.assertEqual(originals, {p: p.read_bytes() for p in originals})
+
+    @unittest.skipUnless(HAS_TORCH, "PyTorch is required to recover legacy ENCE")
+    def test_legacy_ence_filters_mixed_domains_and_supports_single_fit(self):
+        run = self.make_run(settings=("mixed_random_singles", "single_to_double"))
+        names = ("mixed_random_singles", "mixed_random_doubles")
+        children = {name: {"fold_metrics": [legacy_fold(0)]} for name in names}
+        path = run / "cv/mixed_random_singles"
+        self.write(path / "metrics.json", {"setting_metrics": children})
+        doubles = [{**row, "fold": 0, "n_mutations": 2} for row in legacy_predictions(1)]
+        self.write_predictions(path / "fold_0/predictions.csv", legacy_predictions(0) + doubles)
+        fit = run / "fit/single_to_double"
+        self.write(fit / "metrics.json", legacy_fold(0))
+        self.write_predictions(fit / "predictions.csv", [{**row, "fold": ""} for row in doubles])
+        loaded = load_run(run)
+        self.assertAlmostEqual(self.setting(loaded, names[0])["summary"]["ence"]["mean"], 1)
+        self.assertAlmostEqual(self.setting(loaded, names[1])["summary"]["ence"]["mean"], 0)
+        self.assertAlmostEqual(self.setting(loaded, "single_to_double")["summary"]["ence"]["mean"], 0)
+
+    @unittest.skipUnless(HAS_TORCH, "PyTorch is required to recover legacy ENCE")
+    def test_invalid_legacy_predictions_leave_other_metrics_available_with_reason(self):
+        run = self.make_run()
+        path = run / "cv/singles_random"
+        self.write(path / "metrics.json", {"fold_metrics": [legacy_fold(0)]})
+        for invalid in ("count", "duplicates", "variance", "scale", "columns", "fold"):
+            rows = legacy_predictions(0)
+            if invalid == "count": rows.pop()
+            elif invalid == "duplicates": rows[1]["variant_id"] = rows[0]["variant_id"]
+            elif invalid == "variance": rows[0]["observation_variance"] = -1
+            elif invalid == "scale": rows[0]["observation_variance_standardized"] *= 2
+            elif invalid == "columns":
+                for row in rows: row.pop("target")
+            else: rows[0]["fold"] = 1
+            self.write_predictions(path / "fold_0/predictions.csv", rows)
+            with self.subTest(invalid=invalid):
+                setting = self.setting(load_run(run), "singles_random")
+                self.assertEqual(setting["summary"]["n_error_curve_folds"], 0)
+                self.assertIsNotNone(setting["summary"]["interval_ece"]["mean"])
+                self.assertTrue(setting["error_calibration_recovery"][0]["reason"])
+
+    @unittest.skipUnless(HAS_TORCH, "PyTorch is required to recover legacy ENCE")
+    def test_saved_error_bins_take_precedence_over_prediction_recovery(self):
+        run = self.make_run()
+        expected = with_error_calibration(fold_metrics(0))
+        path = run / "cv/singles_random"
+        self.write(path / "metrics.json", {"fold_metrics": [expected]})
+        self.write_predictions(path / "predictions.csv", [{"unusable": "data"}])
+        setting = self.setting(load_run(run), "singles_random")
+        self.assertEqual(setting["folds"], [expected])
+        self.assertEqual(setting["error_calibration_recovery"], [])
 
     def test_fold_files_supply_ids_and_partial_failed_settings_stay_explicit(self):
         run = self.make_run(settings=("singles_random", "singles_modulo", "singles_contiguous"))
@@ -376,11 +469,13 @@ class CalibrationResultTests(unittest.TestCase):
             self.assertEqual(setting["summary"]["n_folds"], 1)
             self.assertAlmostEqual(setting["summary"]["interval_ece"]["mean"], expected["interval_ece"])
 
-    @unittest.skipUnless(HAS_MATPLOTLIB, "matplotlib is required for plot rendering")
+    @unittest.skipUnless(HAS_MATPLOTLIB and HAS_TORCH, "Matplotlib and PyTorch are required for legacy plot rendering")
     def test_error_plot_saves_png_pdf_and_preserves_source_metrics(self):
         run = self.make_run(run_name="kermut_calibration", settings=("singles_random", "singles_contiguous"))
-        folds = [with_error_calibration(fold_metrics(index)) for index in (0, 1)]
+        folds = [legacy_fold(index) for index in (0, 1)]
         self.write(run / "cv/singles_random/metrics.json", {"n_folds": 2, "fold_metrics": folds})
+        for index in (0, 1):
+            self.write_predictions(run / f"cv/singles_random/fold_{index}/predictions.csv", legacy_predictions(index))
         result = plot_run(run, formats=("png", "pdf"), dpi=60)
         expected_files = {"interval_ece.png", "interval_ece.pdf", "pair_ece.png", "pair_ece.pdf", "ence.png", "ence.pdf",
                           "calibration_summary.json"}

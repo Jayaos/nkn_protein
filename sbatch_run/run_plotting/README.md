@@ -40,9 +40,20 @@ plots/<results-directory-name>/<assay>/
     calibration_summary.json
 ```
 
-The ENCE figure is generated when at least one evaluated fold has saved
-`error_bin_stats`. Older runs without these bins still produce interval and
-pairwise figures; a skip reason is logged and recorded in the summary JSON.
+The ENCE figure uses saved `error_bin_stats` when available. For older runs,
+the plotter reconstructs missing bins from `fold_*/predictions.csv`, falling
+back to the setting's pooled `predictions.csv` split by fold ID. Recovery uses
+targets, predicted means, and **observation variance**, including observation
+noise. It never pools folds when computing ENCE and filters singles/doubles
+for mixed settings. It uses the saved `error_n_bins` configuration, or five bins
+for older configurations. Standardized plot coordinates use the training scale
+recovered from raw and standardized observation variances.
+
+Recovery requires PyTorch, already included in `nkn_protein`. Source metrics
+and predictions are not modified. `calibration_summary.json` records the
+recovered metrics, source files, and per-fold recovery status. Missing or invalid
+prediction data produce an explicit reason in that summary and the job log;
+if no fold has usable ENCE data, only the interval and pairwise figures are saved.
 Training itself saves numeric metrics only; this plotting job creates images.
 
 The group name is the final folder name of `--results-dir`. For example,

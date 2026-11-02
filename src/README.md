@@ -1130,9 +1130,11 @@ are not used for conditioning, model selection, or automatic recalibration.
 
 Training saves ENCE and uncertainty CV as numeric outputs. The separate plotting
 job also creates `ence.png`/`ence.pdf` from saved per-fold `error_bin_stats`,
-showing RMV versus RMSE and ENCE/cv annotations. Older runs without these bins
-skip ENCE plotting with a logged reason; their interval and pairwise plots
-remain available.
+showing RMV versus RMSE and ENCE/cv annotations. For older runs, the plotter
+reconstructs missing bins from saved predictions separately for each fold,
+using targets, means, and observation variances. Recovery is recorded in the
+plotting summary without changing source results. Runs lacking both saved
+bins and usable predictions skip ENCE with a logged reason.
 Saved interval, pairwise, and error calibration metrics can be plotted with
 `sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch`, which defaults to
 `plots/<results-directory-name>/<assay>/`, using the final folder name of

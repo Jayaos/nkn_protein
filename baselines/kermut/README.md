@@ -450,8 +450,10 @@ fold counts. `error_bin_stats` retains RMV/RMSE bin statistics in original and
 training-standardized units. The reporting CSVs include the new scalar metrics.
 The separate [`plot_kermut_calibration.sbatch`](../../sbatch_run/run_plotting/plot_kermut_calibration.sbatch) plotting job also saves
 `ence.png`/`ence.pdf` with RMV/RMSE curves and ENCE/cv annotations when per-fold
-`error_bin_stats` are available. Training does not generate images. Older runs
-without the bins skip ENCE plotting with an explicit reason.
+`error_bin_stats` are available. For older runs, missing bins are reconstructed
+from saved per-fold targets, predicted means, and observation variances in
+`predictions.csv`; source results remain unchanged. Training does not generate
+images. Runs without bins or usable predictions skip ENCE with an explicit reason.
 
 The uncertainty CV follows Appendix J.2's equation. The released Kermut code
 places the mean inside the square root, producing different values; see the

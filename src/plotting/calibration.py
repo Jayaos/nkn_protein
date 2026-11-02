@@ -1,13 +1,14 @@
 """Plot interval, pairwise, and error calibration from saved NKN/Kermut metrics.
 
 Run ``python -m plotting.calibration --help`` with src on PYTHONPATH.
-This module reads saved metrics and fold assignments; it never loads checkpoints
-or recomputes pairs.
+This module reads saved metrics, predictions, and fold assignments; it never
+loads checkpoints or recomputes pairs.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 from pathlib import Path
@@ -222,6 +223,93 @@ def _expected_fold_ids(path: Path, run_dir: Path, aggregate: dict) -> list[int]:
     return _saved_fold_ids(path, {"n_folds": 5, **aggregate}, nominal, manifest, path.name)
 
 
+def _recover_error_calibration(path: Path, run_dir: Path, folds: list[dict],
+                               setting: str, source_files: list[str]) -> tuple[list[dict], list[dict]]:
+    """Recover missing ENCE bins from held-out predictions, one fold at a time."""
+    folds = [dict(fold) for fold in folds]
+    recovery, cache = [], {}
+    configured_bins = None
+    for index, fold in enumerate(folds):
+        if fold.get("error_bin_stats") or not fold.get("n_variants"):
+            continue
+        fold_id = _count(fold.get("fold", index), "fold ID")
+        single_fit = path.parent.name == "fit"
+        prediction_path = path / "predictions.csv" if single_fit else path / f"fold_{fold_id}" / "predictions.csv"
+        pooled = False
+        if not prediction_path.is_file() and not single_fit:
+            prediction_path, pooled = path / "predictions.csv", True
+        record = {"fold": fold_id, "status": "unavailable", "source": str(prediction_path)}
+        recovery.append(record)
+        if not prediction_path.is_file():
+            record["reason"] = "No saved error_bin_stats or predictions.csv for this fold"
+            continue
+        try:
+            if prediction_path not in cache:
+                with prediction_path.open(newline="", encoding="utf-8-sig") as handle:
+                    reader = csv.DictReader(handle)
+                    cache[prediction_path] = (set(reader.fieldnames or []), list(reader))
+                source_files.append(str(prediction_path))
+            columns, rows = cache[prediction_path]
+            required = {"variant_id", "target", "mean", "observation_variance"}
+            if pooled:
+                required.add("fold")
+            depth = {"mixed_random_singles": 1, "mixed_random_doubles": 2}.get(setting)
+            if depth is not None:
+                required.add("n_mutations")
+            if not required.issubset(columns):
+                raise ValueError(f"Prediction CSV lacks required columns: {', '.join(sorted(required - columns))}")
+            if not single_fit and "fold" in columns:
+                if pooled:
+                    rows = [row for row in rows if int(row["fold"]) == fold_id]
+                elif any(int(row["fold"]) != fold_id for row in rows):
+                    raise ValueError("Prediction fold IDs disagree with the fold directory")
+            if depth is not None:
+                rows = [row for row in rows if int(row["n_mutations"]) == depth]
+            if len(rows) != fold["n_variants"]:
+                raise ValueError(f"Prediction count {len(rows)} does not match n_variants={fold['n_variants']}")
+            if any(not row["variant_id"] for row in rows) or len({row["variant_id"] for row in rows}) != len(rows):
+                raise ValueError("Prediction variant IDs must be nonempty and unique within the fold")
+            if "assay_id" in columns and any(row["assay_id"] != run_dir.parent.name for row in rows):
+                raise ValueError("Prediction assay IDs disagree with the run directory")
+            if configured_bins is None:
+                configured_bins = 5
+                for config_path in (path / "resolved_config.json", run_dir / "config.json"):
+                    if config_path.is_file():
+                        configured_bins = _read(config_path).get("evaluation", {}).get("error_n_bins", 5)
+                        source_files.append(str(config_path))
+                        break
+            # Reuse the training evaluator's quantile convention and sample CV.
+            # Import lazily so plots with saved bins do not require PyTorch.
+            import torch
+            from evaluation import error_calibration
+
+            def vector(column):
+                return torch.tensor([float(row[column]) for row in rows], dtype=torch.float64)
+
+            variance = vector("observation_variance")
+            metrics = error_calibration(vector("target"), vector("mean"), variance,
+                                        fold.get("error_n_bins", configured_bins))
+            if "observation_variance_standardized" in columns:
+                standardized = vector("observation_variance_standardized")
+                if not bool((torch.isfinite(standardized) & (standardized > 0)).all()):
+                    raise ValueError("Standardized observation variances must be finite and positive")
+                scales = (variance / standardized).sqrt()
+                if not bool(torch.isfinite(scales).all()) or not torch.allclose(scales, scales[:1].expand_as(scales), rtol=1e-5, atol=0):
+                    raise ValueError("Prediction target scale must be constant within each fold")
+                scale = float(scales.mean().item())
+                for row in metrics["error_bin_stats"]:
+                    row["rmv_standardized"] = row["rmv"] / scale
+                    row["rmse_standardized"] = row["rmse"] / scale
+            for metric in ("ence", "uncertainty_cv"):
+                if fold.get(metric) is not None:
+                    metrics[metric] = fold[metric]
+            fold.update(metrics)
+            record.update(status="recovered", error_n_bins=metrics["error_n_bins"])
+        except (OSError, ValueError, TypeError, KeyError, ImportError) as error:
+            record["reason"] = str(error)
+    return folds, recovery
+
+
 def _load_setting(path: Path, run_dir: Path, aggregate: dict | None = None,
                   name: str | None = None) -> dict:
     source_files = []
@@ -253,6 +341,7 @@ def _load_setting(path: Path, run_dir: Path, aggregate: dict | None = None,
         observed = {_count(fold.get("fold", index), "fold ID") for index, fold in enumerate(folds)}
         if not observed.issubset(expected_ids):
             raise ValueError(f"Fold metrics contain IDs absent from the saved assignments: {path}")
+    folds, recovery = _recover_error_calibration(path, run_dir, folds, name or path.name, source_files)
     summary = summarize_setting(folds)
     failure_path = path / "failure.json"
     failed = failure_path.is_file()
@@ -274,7 +363,8 @@ def _load_setting(path: Path, run_dir: Path, aggregate: dict | None = None,
     if len(folds) > expected:
         raise ValueError(f"More folds than expected in {path}")
     return {"name": name or path.name, "status": status, "reason": reason,
-            "expected_folds": expected, "folds": folds, "summary": summary, "source_files": source_files}
+            "expected_folds": expected, "folds": folds, "summary": summary,
+            "source_files": source_files, "error_calibration_recovery": recovery}
 
 
 def load_run(run_dir: Path) -> dict:
@@ -513,7 +603,8 @@ def plot_run(run_dir: Path, output_dir: Path | None = None,
     if any(setting["summary"]["n_error_curve_folds"] for setting in run["settings"]):
         kinds.append("ence")
     else:
-        run["skipped_plots"]["ence"] = "No saved error_bin_stats; ENCE plots require per-fold RMV/RMSE bins."
+        run["skipped_plots"]["ence"] = ("No saved error_bin_stats and no usable prediction data to reconstruct them; "
+                                        "see error_calibration_recovery in calibration_summary.json.")
     run["files"] = [file for kind in kinds
                     for file in _render(run, kind, destination, tuple(dict.fromkeys(formats)), dpi)]
     report = destination / f"{run['file_prefix']}calibration_summary.json"
@@ -568,6 +659,13 @@ def main(argv=None) -> int:
             for kind, reason in result["skipped_plots"].items():
                 print(f"{result['assay']} / {result['model']}: skipped {kind}: {reason}", file=sys.stderr)
             for setting in result["settings"]:
+                recovered = sum(record["status"] == "recovered" for record in setting["error_calibration_recovery"])
+                if recovered:
+                    print(f"{result['assay']} / {setting['name']}: reconstructed ENCE bins for {recovered} folds from saved predictions")
+                for record in setting["error_calibration_recovery"]:
+                    if record["status"] != "recovered":
+                        print(f"{result['assay']} / {setting['name']} / fold {record['fold']}: "
+                              f"ENCE unavailable: {record['reason']}", file=sys.stderr)
                 if setting["status"] != "complete":
                     print(f"{result['assay']} / {setting['name']}: {setting['status']}: {setting['reason']}", file=sys.stderr)
                 if setting["summary"]["n_variants"]:
