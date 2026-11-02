@@ -190,13 +190,17 @@ def summarize_setting(folds: list[dict]) -> dict:
             "bin_stats": averaged_bins}
 
 
-def discover_runs(results_dir: Path, assays: list[str] | None = None) -> list[Path]:
+def discover_runs(results_dir: Path, assays: list[str] | None = None,
+                  model_family: str | None = None) -> list[Path]:
     """Find NKN/Kermut runs, never individual fold/validation directories."""
+    if model_family not in (None, "nkn", "kermut"):
+        raise ValueError("model_family must be nkn or kermut")
+    prefixes = (f"{model_family}_",) if model_family else ("nkn_", "kermut_")
     root = Path(results_dir).resolve()
     if not root.is_dir():
         raise ValueError(f"Results directory does not exist: {root}")
     runs = sorted(path for path in root.glob("*/*") if path.is_dir()
-                  and path.name.startswith(("nkn_", "kermut_"))
+                  and path.name.startswith(prefixes)
                   and ((path / "cv").is_dir() or (path / "fit").is_dir()))
     if assays:
         runs = [path for path in runs if path.parent.name in assays]
@@ -520,8 +524,11 @@ def plot_run(run_dir: Path, output_dir: Path | None = None,
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--results-dir", type=Path, default=Path("results"), help="Root containing assay/model-run directories")
+    parser.add_argument("--results-dir", type=Path, action="append",
+                        help="Root containing assay/model-run directories; repeat for multiple roots (default: results)")
     parser.add_argument("--assay", action="append", help="Only this assay (repeatable)")
+    parser.add_argument("--model-family", choices=("nkn", "kermut"),
+                        help="Only plot runs of this model family (default: both)")
     parser.add_argument("--run-dir", type=Path, action="append", help="Explicit model-run directory (repeatable); bypasses discovery")
     parser.add_argument("--output-dir", type=Path, help="Custom output root; saves under ROOT/results-directory-name/assay (default: each run/plots)")
     parser.add_argument("--formats", nargs="+", choices=("png", "pdf", "svg"), default=["png", "pdf"])
@@ -529,11 +536,32 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.run_dir and args.assay:
         parser.error("Use --run-dir or --assay, not both")
+    model_label = {None: "NKN/Kermut", "nkn": "NKN", "kermut": "Kermut"}[args.model_family]
     try:
-        runs = ([path.resolve() for path in args.run_dir] if args.run_dir
-                else discover_runs(args.results_dir, args.assay))
+        if args.run_dir:
+            runs = [path.resolve() for path in args.run_dir]
+            if args.model_family:
+                for path in runs:
+                    if not path.name.startswith(f"{args.model_family}_"):
+                        raise ValueError(f"{model_label} plotting requires a {args.model_family}_* run directory: {path}")
+        else:
+            roots = dict.fromkeys(path.resolve() for path in (args.results_dir or [Path("results")]))
+            runs = []
+            for root in roots:
+                discovered = discover_runs(root, args.assay, args.model_family)
+                if not discovered:
+                    raise ValueError(f"No matching {model_label} runs found in {root}")
+                runs.extend(discovered)
         if not runs:
-            raise ValueError("No matching NKN/Kermut runs found")
+            raise ValueError(f"No matching {model_label} runs found")
+        if args.output_dir:
+            groups = {}
+            for path in runs:
+                group = path.parent.parent
+                previous = groups.setdefault(group.name.casefold(), group)
+                if previous != group:
+                    raise ValueError(f"Results directories {previous} and {group} share a folder name; "
+                                     "use distinct group names or separate --output-dir roots to avoid overwriting plots")
         plotted = 0
         for path in dict.fromkeys(runs):
             result = plot_run(path, args.output_dir, args.formats, args.dpi)

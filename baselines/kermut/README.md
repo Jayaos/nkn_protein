@@ -448,7 +448,7 @@ observation-predictive variances, including observation noise. CV summaries
 average folds equally and include `std_ence`, `std_uncertainty_cv`, and valid
 fold counts. `error_bin_stats` retains RMV/RMSE bin statistics in original and
 training-standardized units. The reporting CSVs include the new scalar metrics.
-The separate `plot_nkn_calibration.sbatch` plotting job also saves
+The separate [`plot_kermut_calibration.sbatch`](../../sbatch_run/run_plotting/plot_kermut_calibration.sbatch) plotting job also saves
 `ence.png`/`ence.pdf` with RMV/RMSE curves and ENCE/cv annotations when per-fold
 `error_bin_stats` are available. Training does not generate images. Older runs
 without the bins skip ENCE plotting with an explicit reason.

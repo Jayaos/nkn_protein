@@ -223,6 +223,17 @@ class CalibrationResultTests(unittest.TestCase):
     def setting(run_data, name):
         return next(setting for setting in run_data["settings"] if setting["name"] == name)
 
+    def invoke_cli(self, *arguments):
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = os.pathsep.join(
+            path for path in (str(REPOSITORY / "src"), environment.get("PYTHONPATH")) if path)
+        environment["MPLBACKEND"] = "Agg"
+        environment["MPLCONFIGDIR"] = str(self.root / "matplotlib_cache")
+        return subprocess.run(
+            [sys.executable, "-m", "plotting.calibration", *map(str, arguments)],
+            cwd=self.root, env=environment, capture_output=True, text=True, timeout=60,
+        )
+
     def test_discovery_filters_assays_and_ignores_nonrun_directories(self):
         first = self.make_run()
         second = self.make_run("assay_b", "nkn_second")
@@ -234,6 +245,9 @@ class CalibrationResultTests(unittest.TestCase):
         baseline = self.make_run("assay_b", "kermut_first")
         self.write_complete_setting(baseline)
         self.assertEqual(set(discover_runs(self.results, assays=["assay_b"])), {second, baseline})
+        self.assertEqual(set(discover_runs(self.results, model_family="nkn")), {first, second})
+        self.assertEqual(discover_runs(self.results, model_family="kermut"), [baseline])
+        self.assertEqual(discover_runs(self.results, assays=["assay_a"], model_family="kermut"), [])
 
     def test_embedded_aggregate_folds_are_authoritative_without_double_counting(self):
         run = self.make_run()
@@ -402,16 +416,8 @@ class CalibrationResultTests(unittest.TestCase):
         other = self.make_run("assay_b", "nkn_second")
         self.write_complete_setting(other)
         output = self.root / "exported"
-        environment = os.environ.copy()
-        environment["PYTHONPATH"] = os.pathsep.join(
-            path for path in (str(REPOSITORY / "src"), environment.get("PYTHONPATH")) if path)
-        environment["MPLBACKEND"] = "Agg"
-        environment["MPLCONFIGDIR"] = str(self.root / "matplotlib_cache")
-        completed = subprocess.run(
-            [sys.executable, "-m", "plotting.calibration", "--results-dir", str(self.results),
-             "--assay", "assay_a", "--output-dir", str(output), "--formats", "png", "pdf", "--dpi", "60"],
-            cwd=self.root, env=environment, capture_output=True, text=True, timeout=60,
-        )
+        completed = self.invoke_cli("--results-dir", self.results, "--assay", "assay_a",
+                                    "--output-dir", output, "--formats", "png", "pdf", "--dpi", "60")
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         destination = output / "kermut_experiment" / "assay_a"
         for plot in ("interval_ece", "pair_ece", "ence"):
@@ -423,6 +429,69 @@ class CalibrationResultTests(unittest.TestCase):
         self.assertFalse((run / "plots").exists())
 
     @unittest.skipUnless(HAS_MATPLOTLIB, "matplotlib is required for plot rendering")
+    def test_cli_plots_both_results_groups_once_with_shared_assay_filter(self):
+        runs = []
+        for group, model in (("hierarchical_nkn", "nkn_first"), ("kermut_experiment", "kermut_second")):
+            self.results = self.root / "results" / group
+            run = self.make_run(run_name=model)
+            folds = [with_error_calibration(fold) for fold in self.write_complete_setting(run)]
+            self.write(run / "cv/singles_random/metrics.json", {"n_folds": 2, "fold_metrics": folds})
+            self.write_complete_setting(self.make_run("assay_b", model))
+            runs.append(run)
+        output = self.root / "exported"
+        completed = self.invoke_cli(
+            "--results-dir", runs[0].parent.parent, f"--results-dir={runs[1].parent.parent}",
+            "--results-dir", runs[0].parent.parent, "--assay", "assay_a",
+            "--output-dir", output, "--formats", "png", "--dpi", "60")
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(completed.stdout.count("Saved calibration plots:"), 2)
+        for run in runs:
+            destination = output / run.parent.parent.name / "assay_a"
+            for plot in ("interval_ece", "pair_ece", "ence"):
+                self.assertEqual((destination / f"{plot}.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            summary = json.loads((destination / "calibration_summary.json").read_text())
+            self.assertEqual(Path(summary["run_dir"]), run)
+            self.assertEqual(summary["model"], run.name)
+            self.assertFalse((destination.parent / "assay_b").exists())
+
+    def test_cli_checks_every_input_root_before_writing_plots(self):
+        run = self.make_run()
+        self.write_complete_setting(run)
+        empty = self.root / "empty_results"
+        empty.mkdir()
+        output = self.root / "exported"
+        completed = self.invoke_cli("--results-dir", self.results, "--results-dir", empty,
+                                    "--output-dir", output)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn(f"No matching NKN/Kermut runs found in {empty}", completed.stderr)
+        self.assertFalse(output.exists())
+
+    def test_cli_rejects_wrong_model_roots_and_explicit_run_dirs(self):
+        for family, other in (("nkn", "kermut"), ("kermut", "nkn")):
+            self.results = self.root / f"{other}_experiment"
+            run = self.make_run(run_name=f"{other}_first")
+            self.write_complete_setting(run)
+            output = self.root / "exported"
+            for option, path in (("--results-dir", self.results), ("--run-dir", run)):
+                with self.subTest(family=family, option=option):
+                    completed = self.invoke_cli(option, path, "--model-family", family, "--output-dir", output)
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertIn("No matching" if option == "--results-dir" else f"requires a {family}_* run", completed.stderr)
+                    self.assertFalse(output.exists())
+
+    def test_cli_rejects_groups_that_would_share_output_folder(self):
+        roots = [self.root / location / "same_name" for location in ("first", "second")]
+        for root in roots:
+            self.results = root
+            self.write_complete_setting(self.make_run())
+        output = self.root / "exported"
+        completed = self.invoke_cli("--results-dir", roots[0], "--results-dir", roots[1],
+                                    "--output-dir", output)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("share a folder name", completed.stderr)
+        self.assertFalse(output.exists())
+
+    @unittest.skipUnless(HAS_MATPLOTLIB, "matplotlib is required for plot rendering")
     def test_multiple_runs_in_one_assay_keep_separate_files_and_summaries(self):
         self.results /= "comparison"
         runs = [self.make_run(run_name=name) for name in ("nkn_first", "kermut_second")]
@@ -430,10 +499,19 @@ class CalibrationResultTests(unittest.TestCase):
             folds = [with_error_calibration(fold) for fold in self.write_complete_setting(run)]
             self.write(run / "cv/singles_random/metrics.json", {"n_folds": 2, "fold_metrics": folds})
         output = self.root / "exported"
-        first = plot_run(runs[0], output, formats=("png",), dpi=60)
-        original = {path: Path(path).read_bytes() for path in first["files"]}
-        second = plot_run(runs[1], output, formats=("png",), dpi=60)
+        completed = self.invoke_cli("--results-dir", self.results, "--model-family", "nkn",
+                                    "--output-dir", output, "--formats", "png", "--dpi", "60")
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(completed.stdout.count("Saved calibration plots:"), 1)
         destination = output / "comparison" / "assay_a"
+        first = json.loads((destination / "nkn_first__calibration_summary.json").read_text())
+        self.assertEqual(len(list(destination.iterdir())), 4)
+        original = {path: Path(path).read_bytes() for path in first["files"]}
+        completed = self.invoke_cli("--run-dir", runs[1], "--model-family", "kermut",
+                                    "--output-dir", output, "--formats", "png", "--dpi", "60")
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(completed.stdout.count("Saved calibration plots:"), 1)
+        second = json.loads((destination / "kermut_second__calibration_summary.json").read_text())
         for run, result in zip(runs, (first, second)):
             self.assertEqual(Path(result["output_dir"]), destination)
             expected = {f"{run.name}__{name}" for name in

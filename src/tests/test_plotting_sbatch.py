@@ -13,7 +13,6 @@ import unittest
 
 
 REPOSITORY = Path(__file__).resolve().parents[2]
-SCRIPT = REPOSITORY / "sbatch_run/run_plotting/plot_nkn_calibration.sbatch"
 
 
 def available_bash():
@@ -31,6 +30,8 @@ BASH = available_bash()
 
 @unittest.skipUnless(BASH, "Bash is required for plotting launcher tests")
 class PlottingSbatchTests(unittest.TestCase):
+    family = "nkn"
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -41,8 +42,9 @@ class PlottingSbatchTests(unittest.TestCase):
             (self.root / directory).mkdir(parents=True)
         (self.root / "src/plotting/calibration.py").touch()
         (self.root / "src/experiments/cli.py").touch()
-        self.script = self.root / SCRIPT.relative_to(REPOSITORY)
-        shutil.copyfile(SCRIPT, self.script)
+        script = REPOSITORY / f"sbatch_run/run_plotting/plot_{self.family}_calibration.sbatch"
+        self.script = self.root / script.relative_to(REPOSITORY)
+        shutil.copyfile(script, self.script)
         self.bootstrap = self.workspace / "bootstrap.sh"
         self.bootstrap.write_text(textwrap.dedent("""\
             export PATH="/usr/bin:/bin:$PATH"
@@ -97,7 +99,8 @@ class PlottingSbatchTests(unittest.TestCase):
     def test_defaults_use_saved_results_and_headless_job_cache(self):
         result, record = self.invoke()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(record["args"], ["--results-dir", "results", "--output-dir", "plots"])
+        self.assertEqual(record["args"], ["--results-dir", "results", "--output-dir", "plots",
+                                         "--model-family", self.family])
         self.assertEqual(Path(record["cwd"]), self.root)
         env = record["environment"]
         self.assertEqual(env["MPLBACKEND"], "Agg")
@@ -105,25 +108,44 @@ class PlottingSbatchTests(unittest.TestCase):
         for key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
                     "PYTHONNOUSERSITE"):
             self.assertEqual(env[key], "1")
-        self.assertIn("nkn-plot.", env["MPLCONFIGDIR"])
-        self.assertIn("nkn-plot.", env["XDG_CACHE_HOME"])
+        self.assertIn(f"{self.family}-plot.", env["MPLCONFIGDIR"])
+        self.assertIn(f"{self.family}-plot.", env["XDG_CACHE_HOME"])
         self.assertEqual(list((self.root / "job temp").iterdir()), [])
 
     def test_explicit_paths_override_environment_and_preserve_other_arguments(self):
-        arguments = ["--results-dir", "CLI results", "--output-dir=CLI plots",
+        arguments = ["--results-dir", "first results", "--results-dir=second results", "--output-dir=CLI plots",
                      "--assay", "assay A", "--run-dir", "a run with spaces",
                      "--formats", "png", "pdf", "--dpi", "240"]
         result, record = self.invoke(*arguments, environment={
             "PLOT_RESULTS_DIR": "environment results", "PLOT_OUTPUT_DIR": "environment plots",
         })
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(record["args"], ["--results-dir", "environment results",
-                                         "--output-dir", "environment plots", *arguments])
+        self.assertEqual(record["args"], ["--output-dir", "environment plots", *arguments,
+                                         "--model-family", self.family])
         parser = argparse.ArgumentParser()
-        parser.add_argument("--results-dir")
+        parser.add_argument("--results-dir", action="append")
         parser.add_argument("--output-dir")
         selected, _ = parser.parse_known_args(record["args"])
-        self.assertEqual((selected.results_dir, selected.output_dir), ("CLI results", "CLI plots"))
+        self.assertEqual((selected.results_dir, selected.output_dir), (["first results", "second results"], "CLI plots"))
+
+    def test_environment_input_is_used_only_without_explicit_results_dirs(self):
+        result, record = self.invoke("--formats", "png", environment={"PLOT_RESULTS_DIR": "environment results"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(record["args"], ["--results-dir", "environment results", "--output-dir", "plots", "--formats", "png",
+                                         "--model-family", self.family])
+        result, record = self.invoke("--results-dir=explicit results", environment={"PLOT_RESULTS_DIR": "environment results"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(record["args"], ["--output-dir", "plots", "--results-dir=explicit results",
+                                         "--model-family", self.family])
+
+    def test_launcher_model_cannot_be_overridden(self):
+        other = "kermut" if self.family == "nkn" else "nkn"
+        for arguments in (("--model-family", other), (f"--model-family={other}",)):
+            with self.subTest(arguments=arguments):
+                result, record = self.invoke(*arguments, environment={"TEST_NO_CONDA": "1"})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"plot_{other}_calibration.sbatch", result.stderr)
+                self.assertIsNone(record)
 
     def test_manual_execution_finds_repository_from_script_location(self):
         result, record = self.invoke(outside=True, submit=False)
@@ -140,6 +162,7 @@ class PlottingSbatchTests(unittest.TestCase):
         self.assertIn("ENCE", result.stdout)
         self.assertIn("RMV versus RMSE", result.stdout)
         self.assertIn("ROOT/results-directory-name/assay/", result.stdout)
+        self.assertIn(f"Discovery selects {self.family}_* run folders", result.stdout)
         self.assertIsNone(record)
 
     def test_python_failure_is_propagated_and_cache_is_cleaned(self):
@@ -147,6 +170,10 @@ class PlottingSbatchTests(unittest.TestCase):
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertIsNotNone(record)
         self.assertEqual(list((self.root / "job temp").iterdir()), [])
+
+
+class KermutPlottingSbatchTests(PlottingSbatchTests):
+    family = "kermut"
 
 
 if __name__ == "__main__":

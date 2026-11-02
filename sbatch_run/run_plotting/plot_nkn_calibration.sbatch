@@ -9,21 +9,28 @@
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%j.out
 
-# Plot saved NKN/Kermut calibration metrics with the existing nkn_protein environment.
+# Plot saved NKN calibration metrics with the existing nkn_protein environment.
 # Submit from the repository or a subdirectory, or run this file with bash.
 # Relative input/output paths use the repository root. No model fitting occurs.
 set -eo pipefail
 
+has_results_dir=false
 for argument in "$@"; do
   case "$argument" in
+    --results-dir|--results-dir=*) has_results_dir=true ;;
+    --model-family|--model-family=*)
+      echo "error: This launcher plots NKN only; use plot_kermut_calibration.sbatch for Kermut." >&2
+      exit 1 ;;
     -h|--help)
       cat <<'HELP'
 Usage: sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch [OPTIONS]
 
-Plot interval, pairwise, and ENCE diagnostics from saved NKN/Kermut model runs.
+Plot interval, pairwise, and ENCE diagnostics from saved NKN model runs only.
+Discovery selects nkn_* run folders; --run-dir must also name an nkn_* run.
 ENCE plots show RMV versus RMSE with ENCE/cv annotations when per-fold
 error_bin_stats are saved; older runs without those bins skip the ENCE plot.
   --results-dir PATH   Results root (default: PLOT_RESULTS_DIR or results).
+                      Repeat for multiple NKN results directories.
   --assay ID           Restrict discovery to an assay; repeat for several.
   --run-dir PATH       Select a model-run directory; repeat for several.
   --output-dir PATH    Output root (default: PLOT_OUTPUT_DIR or plots).
@@ -36,6 +43,10 @@ repository root. The results directory's final folder name groups the plots;
 --run-dir uses its enclosing results group. Multiple runs for one assay use
 run-prefixed filenames to keep their plots separate.
 This job reads existing results and does not run training.
+
+Example:
+  sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch \
+    --results-dir results/hierarchical_nkn
 HELP
       exit 0 ;;
   esac
@@ -61,9 +72,13 @@ else
 fi
 cd -- "$project_root"
 
-# Argparse uses the last supplied value, so explicit CLI options take precedence.
-plot_defaults=(--results-dir "${PLOT_RESULTS_DIR:-results}"
-               --output-dir "${PLOT_OUTPUT_DIR:-plots}")
+# Explicit input roots replace the environment default, then all are processed.
+plot_defaults=()
+if [[ "$has_results_dir" == false ]]; then
+  plot_defaults+=(--results-dir "${PLOT_RESULTS_DIR:-results}")
+fi
+# Argparse uses the last output root, so an explicit CLI value takes precedence.
+plot_defaults+=(--output-dir "${PLOT_OUTPUT_DIR:-plots}")
 
 export PYTHONNOUSERSITE=1
 if ! command -v conda >/dev/null 2>&1; then
@@ -88,4 +103,4 @@ export XDG_CACHE_HOME="$plot_cache_dir/cache"
 mkdir -- "$MPLCONFIGDIR" "$XDG_CACHE_HOME"
 
 printf 'Job: %s\nRepository: %s\n' "${SLURM_JOB_ID:-manual}" "$project_root"
-python -u -m plotting.calibration "${plot_defaults[@]}" "$@"
+python -u -m plotting.calibration "${plot_defaults[@]}" "$@" --model-family nkn

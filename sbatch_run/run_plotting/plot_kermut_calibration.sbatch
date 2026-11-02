@@ -1,0 +1,106 @@
+#!/bin/bash
+#SBATCH --job-name=kermut_calibration_plots
+#SBATCH --account=gts-yxie77-paid
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=2G
+#SBATCH --time=00:10:00
+#SBATCH --qos=inferno
+#SBATCH --output=%x-%j.out
+
+# Plot saved Kermut calibration metrics with the existing nkn_protein environment.
+# Submit from the repository or a subdirectory, or run this file with bash.
+# Relative input/output paths use the repository root. No model fitting occurs.
+set -eo pipefail
+
+has_results_dir=false
+for argument in "$@"; do
+  case "$argument" in
+    --results-dir|--results-dir=*) has_results_dir=true ;;
+    --model-family|--model-family=*)
+      echo "error: This launcher plots Kermut only; use plot_nkn_calibration.sbatch for NKN." >&2
+      exit 1 ;;
+    -h|--help)
+      cat <<'HELP'
+Usage: sbatch sbatch_run/run_plotting/plot_kermut_calibration.sbatch [OPTIONS]
+
+Plot interval, pairwise, and ENCE diagnostics from saved Kermut model runs only.
+Discovery selects kermut_* run folders; --run-dir must also name a kermut_* run.
+ENCE plots show RMV versus RMSE with ENCE/cv annotations when per-fold
+error_bin_stats are saved; older runs without those bins skip the ENCE plot.
+  --results-dir PATH   Results root (default: PLOT_RESULTS_DIR or results).
+                      Repeat for multiple Kermut results directories.
+  --assay ID           Restrict discovery to an assay; repeat for several.
+  --run-dir PATH       Select a model-run directory; repeat for several.
+  --output-dir PATH    Output root (default: PLOT_OUTPUT_DIR or plots).
+                      Saves under ROOT/results-directory-name/assay/.
+  --formats png pdf    One or more output formats.
+  --dpi INTEGER       Raster resolution (default: 200).
+
+Command-line paths override environment defaults. Relative paths use the
+repository root. The results directory's final folder name groups the plots;
+--run-dir uses its enclosing results group. Multiple runs for one assay use
+run-prefixed filenames to keep their plots separate.
+This job reads existing results and does not run training.
+
+Example:
+  sbatch sbatch_run/run_plotting/plot_kermut_calibration.sbatch \
+    --results-dir results/kermut_experiment
+HELP
+      exit 0 ;;
+  esac
+done
+
+find_project_root() {
+  local candidate
+  candidate="$(cd -- "$1" 2>/dev/null && pwd -P)" || return 1
+  while [[ ! -f "$candidate/src/plotting/calibration.py" || ! -f "$candidate/src/experiments/cli.py" ]]; do
+    [[ "$candidate" != "/" ]] || return 1
+    candidate="$(dirname -- "$candidate")"
+  done
+  printf '%s\n' "$candidate"
+}
+
+if project_root="$(find_project_root "${SLURM_SUBMIT_DIR:-$PWD}")"; then
+  :
+elif project_root="$(find_project_root "$(dirname -- "${BASH_SOURCE[0]}")")"; then
+  :
+else
+  echo "error: Submit from the nkn_protein repository or run its plotting script with bash." >&2
+  exit 1
+fi
+cd -- "$project_root"
+
+# Explicit input roots replace the environment default, then all are processed.
+plot_defaults=()
+if [[ "$has_results_dir" == false ]]; then
+  plot_defaults+=(--results-dir "${PLOT_RESULTS_DIR:-results}")
+fi
+# Argparse uses the last output root, so an explicit CLI value takes precedence.
+plot_defaults+=(--output-dir "${PLOT_OUTPUT_DIR:-plots}")
+
+export PYTHONNOUSERSITE=1
+if ! command -v conda >/dev/null 2>&1; then
+  module load anaconda3
+fi
+conda_base="$(conda info --base)"
+source "$conda_base/etc/profile.d/conda.sh"
+conda activate nkn_protein
+set -u
+
+export PYTHONPATH="$project_root/src${PYTHONPATH:+:$PYTHONPATH}"
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export CUDA_VISIBLE_DEVICES=""
+export MPLBACKEND=Agg
+plot_cache_dir="$(mktemp -d "${SLURM_TMPDIR:-${TMPDIR:-/tmp}}/kermut-plot.XXXXXXXX")"
+trap 'rm -rf -- "$plot_cache_dir"' EXIT
+export MPLCONFIGDIR="$plot_cache_dir/matplotlib"
+export XDG_CACHE_HOME="$plot_cache_dir/cache"
+mkdir -- "$MPLCONFIGDIR" "$XDG_CACHE_HOME"
+
+printf 'Job: %s\nRepository: %s\n' "${SLURM_JOB_ID:-manual}" "$project_root"
+python -u -m plotting.calibration "${plot_defaults[@]}" "$@" --model-family kermut

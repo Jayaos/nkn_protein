@@ -3,13 +3,19 @@
 Submit from the repository root or a subdirectory:
 
 ```bash
-sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch
+sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch \
+  --results-dir results/hierarchical_nkn
+sbatch sbatch_run/run_plotting/plot_kermut_calibration.sbatch \
+  --results-dir results/kermut_experiment
 ```
 
-The job discovers every `results/<protein>/nkn_*` or `kermut_*` run containing `cv/` or
-`fit/` results. It reads saved calibration metrics without loading checkpoints
-or running training. It requests one CPU, 2 GB RAM, and 10 minutes, using the
-same account and QoS as the NKN jobs.
+The NKN launcher discovers only `<results-dir>/<assay>/nkn_*` runs; the Kermut
+launcher discovers only `<results-dir>/<assay>/kermut_*` runs. Both require `cv/`
+or `fit/` results. A directory containing both model types is filtered to the
+launcher's model. An explicit `--run-dir` for the wrong model fails with an error.
+Each job reads saved calibration metrics without loading checkpoints or running
+training. Each requests one CPU, 2 GB RAM, and 10 minutes, using the same account
+and QoS as the NKN jobs.
 
 The existing `nkn_protein` Conda environment needs Matplotlib. It is included in
 `env.yaml`; for an existing environment, install it once before submitting:
@@ -55,7 +61,7 @@ For `--run-dir`, the group name comes from the run's grandparent directory:
 Set a custom output root while preserving the results-group and assay folders:
 
 ```bash
-sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch \
+sbatch sbatch_run/run_plotting/plot_kermut_calibration.sbatch \
   --results-dir results/kermut_experiment --output-dir /path/to/figures
 # Saves to /path/to/figures/kermut_experiment/<assay>/
 ```
@@ -82,21 +88,37 @@ sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch \
 # A results collection organized as collection/assay/model-run:
 sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch \
   --results-dir results/hierarchical_nkn
+
+# A Kermut collection uses the dedicated Kermut launcher:
+sbatch sbatch_run/run_plotting/plot_kermut_calibration.sbatch \
+  --results-dir results/kermut_experiment
 ```
+
+Repeat `--results-dir` for multiple input roots of the launcher's model. Each
+collection gets its own figures under `plots/<results-directory-name>/<assay>/`.
+The separate jobs above write to `plots/hierarchical_nkn/` and
+`plots/kermut_experiment/`, respectively. Duplicate inputs are
+processed once. `--assay` filters every input root; each selected root must contain
+matching runs of the selected model. Roots must have distinct final folder names when sharing an output
+root, so their plots cannot overwrite each other.
 
 `--run-dir` bypasses discovery and cannot be combined with `--assay`.
 `PLOT_RESULTS_DIR` and `PLOT_OUTPUT_DIR` can supply defaults; command-line
-arguments take precedence. Run `bash
-sbatch_run/run_plotting/plot_nkn_calibration.sbatch --help` for launcher help.
+arguments take precedence. Explicit `--results-dir` arguments replace the
+`PLOT_RESULTS_DIR` default. Run `bash
+sbatch_run/run_plotting/plot_nkn_calibration.sbatch --help` or the corresponding
+Kermut script for launcher help.
 
 For a local run with the same output layout:
 
 ```bash
-PYTHONPATH=src python -m plotting.calibration --results-dir results --output-dir plots
+PYTHONPATH=src python -m plotting.calibration --model-family nkn --results-dir results/hierarchical_nkn --output-dir plots
+PYTHONPATH=src python -m plotting.calibration --model-family kermut --results-dir results/kermut_experiment --output-dir plots
 ```
 
 Without `--output-dir`, the Python command saves inside each model run's `plots/`
-directory.
+directory. The shared Python command supports both model families when
+`--model-family` is omitted; the batch launchers always select their own model.
 
 ## Reading the figures
 
