@@ -28,6 +28,20 @@ def _positive_integer(value: int, name: str) -> None:
         raise ValueError(f"{name} must be a positive integer")
 
 
+def mse(targets: Tensor, means: Tensor) -> float | None:
+    """Mean squared prediction error in the supplied units, or None if empty."""
+    predicted = _vector(means, "means")
+    observed = _vector(targets, "targets").to(device=predicted.device)
+    if observed.shape != predicted.shape:
+        raise ValueError("targets and means must have the same length")
+    if observed.numel() == 0:
+        return None
+    result = float((observed - predicted).square().mean().item())
+    if not math.isfinite(result):
+        raise ValueError("mean squared error must be finite")
+    return result
+
+
 def _confidence_bin_indices(confidences: Tensor, n_bins: int) -> Tensor:
     # right=True puts confidence equal to an interior edge in the bin on its
     # right. Excluding the outer edges also includes confidence exactly one.
@@ -39,6 +53,54 @@ def _confidence_bin_indices(confidences: Tensor, n_bins: int) -> Tensor:
     return torch.bucketize(confidences, interior_edges, right=True)
 
 
+def error_calibration(
+    targets: Tensor, means: Tensor, observation_variance: Tensor, n_bins: int = 5,
+) -> dict[str, Any]:
+    """Kermut Appendix J.2 ENCE and sample CV of predictive standard deviations.
+
+    Variance quantiles use linear interpolation, right-closed intervals, and
+    dropped duplicate edges, matching pandas.qcut(..., duplicates='drop').
+    Constant variances form one bin; empty bins never contribute to ENCE.
+    RMV/RMSE use the supplied target scale. Scalars are invariant to a common
+    change of target units. A singleton has defined ENCE but undefined CV.
+    """
+    _positive_integer(n_bins, "error_n_bins")
+    predicted = _vector(means, "means")
+    observed = _vector(targets, "targets").to(device=predicted.device)
+    variance = _vector(observation_variance, "observation_variance").to(device=predicted.device).contiguous()
+    if observed.shape != predicted.shape or variance.shape != predicted.shape:
+        raise ValueError("targets, means, and observation_variance must have the same length")
+    if not bool((variance > 0).all()):
+        raise ValueError("observation_variance must be positive")
+    result = {"ence": None, "uncertainty_cv": None, "error_n_bins": n_bins,
+              "n_error_bins": 0, "error_bin_stats": []}
+    if predicted.numel() == 0:
+        return result
+    squared_errors = (observed - predicted).square()
+    if not bool(torch.isfinite(squared_errors).all()):
+        raise ValueError("squared prediction errors must be finite")
+    edges = torch.quantile(variance, torch.linspace(0, 1, n_bins + 1, device=variance.device,
+                                                  dtype=torch.float64)).unique_consecutive()
+    assignments = torch.bucketize(variance, edges[1:-1], right=False)
+    bins = []
+    for index in assignments.unique(sorted=True).tolist():
+        selected = assignments == index
+        rmv = float(variance[selected].mean().sqrt().item())
+        rmse = float(squared_errors[selected].mean().sqrt().item())
+        relative_error = abs(rmv - rmse) / rmv
+        if not math.isfinite(relative_error):
+            raise ValueError("normalized calibration error must be finite")
+        bins.append({"bin": index, "count": int(selected.sum().item()),
+                     "rmv": rmv, "rmse": rmse, "relative_error": relative_error})
+    sigma = variance.sqrt()
+    cv = float((sigma.std(unbiased=True) / sigma.mean()).item()) if sigma.numel() > 1 else None
+    if cv is not None and not math.isfinite(cv):
+        raise ValueError("uncertainty coefficient of variation must be finite")
+    result.update(ence=sum(row["relative_error"] for row in bins) / len(bins),
+                  uncertainty_cv=cv, n_error_bins=len(bins), error_bin_stats=bins)
+    return result
+
+
 def evaluate_fold(
     targets: Tensor,
     mean: Tensor,
@@ -46,6 +108,7 @@ def evaluate_fold(
     coverage_levels: Sequence[float],
     n_bins: int,
     pair_block_size: int = 512,
+    error_n_bins: int = 5,
 ) -> dict[str, Any]:
     """Evaluate one held-out fold and return JSON-serializable statistics.
 
@@ -57,6 +120,7 @@ def evaluate_fold(
     """
     _positive_integer(n_bins, "n_bins")
     _positive_integer(pair_block_size, "pair_block_size")
+    _positive_integer(error_n_bins, "error_n_bins")
     means = _vector(mean, "mean")
     observed = _vector(targets, "targets").to(device=means.device)
     n = means.numel()
@@ -166,6 +230,8 @@ def evaluate_fold(
             error_sum += abs(correct_values[index] - confidence_values[index])
 
     return {
+        **error_calibration(observed, means, diagonal, error_n_bins),
+        "mse": mse(observed, means),
         "interval_ece": interval_ece,
         "pair_ece": error_sum / n_pairs if n_pairs else None,
         "n_variants": n,
@@ -180,6 +246,8 @@ def aggregate_folds(folds: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
     Missing/undefined Spearman and undefined PairECE values are omitted from
     their respective summaries, with contributing-fold counts reported.
+    ENCE and uncertainty CV also average defined folds equally, with sample
+    standard deviations (ddof=1) and separate valid-fold counts.
     """
     if not folds:
         raise ValueError("at least one evaluated fold is required")
@@ -195,7 +263,20 @@ def aggregate_folds(folds: Sequence[dict[str, Any]]) -> dict[str, Any]:
     )
     fold_n_variants = [int(fold["n_variants"]) for fold in folds]
     fold_n_pairs = [int(fold["n_pairs"]) for fold in folds]
+    error_metrics = {}
+    for name in ("ence", "uncertainty_cv"):
+        values = [float(fold[name]) for fold in folds if fold.get(name) is not None]
+        if any(not math.isfinite(value) or value < 0 for value in values):
+            raise ValueError(f"{name} values must be finite and nonnegative or None")
+        average = sum(values) / len(values) if values else None
+        error_metrics.update({
+            name: average,
+            f"std_{name}": (math.sqrt(sum((value - average) ** 2 for value in values) / (len(values) - 1))
+                            if len(values) > 1 else None),
+            f"n_valid_{name}_folds": len(values),
+        })
     return {
+        **error_metrics,
         "avg_spearman": avg_spearman,
         "std_spearman": std_spearman,
         "n_valid_spearman_folds": len(spearman_values),

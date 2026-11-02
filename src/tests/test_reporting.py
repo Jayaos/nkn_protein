@@ -57,6 +57,31 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(rows[0]["pair_ece"], "")
         self.assertEqual(aggregate_results(self.root), tables)
 
+    def test_mse_csv_fields_preserve_saved_values_and_leave_legacy_runs_blank(self):
+        for model, job in (("nkn", 1), ("nkn", 2), ("kermut", 3)):
+            run = self.run_dir(model, job)
+            metrics = self.metrics()
+            if job != 1:
+                metrics.update(mse_oof=12.0, mse_oof_standardized=2.0, ence=.2, uncertainty_cv=.3,
+                               std_ence=.1, std_uncertainty_cv=.2)
+                for fold, raw, standardized in zip(metrics["fold_metrics"], (4.0, 16.0), (4.0, 1.0)):
+                    fold.update(mse=raw, mse_standardized=standardized, ence=.2, uncertainty_cv=.3)
+            self.write(run / "cv/singles_random/metrics.json", metrics)
+        output = self.root / "aggregate"
+        aggregate_results(self.root, output, all_runs=True)
+        for filename, expected in (
+            ("summary.csv", {"mse_oof": "12.0", "mse_oof_standardized": "2.0", "ence": "0.2",
+                             "uncertainty_cv": "0.3", "std_ence": "0.1", "std_uncertainty_cv": "0.2"}),
+            ("folds.csv", {"mse": "4.0", "mse_standardized": "4.0", "ence": "0.2", "uncertainty_cv": "0.3"}),
+        ):
+            with (output / filename).open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            for row in rows:
+                if filename == "folds.csv" and row["fold"] != "0":
+                    continue
+                for key, value in expected.items():
+                    self.assertEqual(row[key], "" if row["run_id"] == "nkn_singles_1" else value)
+
     def test_all_runs_preserves_configurations_and_reruns_in_csvs(self):
         runs = [self.run_dir(model, job) for model, job in (
             ("nkn_esm2_proteinmpnn", 14521254),

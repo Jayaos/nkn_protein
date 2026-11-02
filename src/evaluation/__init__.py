@@ -1,5 +1,5 @@
-"""Fold-level predictive calibration and rank-correlation metrics."""
+"""Predictive error, calibration, and rank-correlation metrics."""
 
-from .metrics import aggregate_folds, evaluate_fold, spearman
+from .metrics import aggregate_folds, error_calibration, evaluate_fold, mse, spearman
 
-__all__ = ["aggregate_folds", "evaluate_fold", "spearman"]
+__all__ = ["aggregate_folds", "error_calibration", "evaluate_fold", "mse", "spearman"]

@@ -25,7 +25,7 @@ from torch import Tensor
 from config import ExperimentConfig, STRUCTURE_DISTANCE_DISABLED_ASSAYS
 from data_loading import FeatureBatch
 from data_loading.splits import _validate_folds
-from evaluation import aggregate_folds, evaluate_fold, spearman
+from evaluation import aggregate_folds, evaluate_fold, mse, spearman
 from gp.linalg import NumericalError
 from gp.training import FittedGP, fit_gp
 
@@ -251,11 +251,21 @@ def _variance_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _mse_from_rows(rows: list[dict[str, Any]], *, standardized: bool = False) -> float | None:
+    """Pool held-out errors using the saved training-fold normalization."""
+    suffix = "_standardized" if standardized else ""
+    return mse(
+        torch.tensor([row[f"target{suffix}"] for row in rows], dtype=torch.float64),
+        torch.tensor([row[f"mean{suffix}"] for row in rows], dtype=torch.float64),
+    )
+
+
 def _evaluate(
     batch: FeatureBatch,
     prediction: Any,
     config: ExperimentConfig,
     indices: Tensor | None = None,
+    *, target_scale: float,
 ) -> dict[str, Any]:
     settings = config.evaluation
     targets = batch.targets
@@ -268,7 +278,9 @@ def _evaluate(
         covariance = covariance.index_select(0, indices).index_select(1, indices)
     if mean.numel() == 0:
         return {
-            "interval_ece": None, "pair_ece": None, "spearman": None,
+            "interval_ece": None, "pair_ece": None, "spearman": None, "mse": None,
+            "ence": None, "uncertainty_cv": None, "error_n_bins": settings.error_n_bins,
+            "n_error_bins": 0, "error_bin_stats": [],
             "n_variants": 0, "n_pairs": 0, "coverage": [], "bin_stats": [],
         }
     metrics = evaluate_fold(
@@ -278,8 +290,12 @@ def _evaluate(
         settings.coverage_levels,
         settings.n_bins,
         settings.pair_block_size,
+        error_n_bins=settings.error_n_bins,
     )
     metrics["spearman"] = spearman(targets, mean)
+    for row in metrics["error_bin_stats"]:
+        row["rmv_standardized"] = row["rmv"] / target_scale
+        row["rmse_standardized"] = row["rmse"] / target_scale
     return metrics
 
 
@@ -290,11 +306,13 @@ def _evaluate_settings(
     rows: list[dict[str, Any]],
     setting: str | None,
     fold: int,
+    *, target_scale: float,
 ) -> dict[str, Any]:
     """Evaluate both mixed domains from the same fold posterior."""
     if setting not in _MIXED_DEPTHS:
-        metrics = _evaluate(batch, prediction, config)
-        metrics.update({"fold": fold, "variance_summary": _variance_summary(rows)})
+        metrics = _evaluate(batch, prediction, config, target_scale=target_scale)
+        metrics.update({"fold": fold, "variance_summary": _variance_summary(rows),
+                        "mse_standardized": _mse_from_rows(rows, standardized=True)})
         if setting is not None:
             metrics["setting"] = setting
         return metrics
@@ -302,10 +320,11 @@ def _evaluate_settings(
     setting_metrics = {}
     for name, depth in _MIXED_DEPTHS.items():
         indices = torch.nonzero(counts == depth, as_tuple=False).flatten()
-        metrics = _evaluate(batch, prediction, config, indices)
+        metrics = _evaluate(batch, prediction, config, indices, target_scale=target_scale)
         selected_rows = [row for row in rows if row["n_mutations"] == depth]
         metrics.update({
             "setting": name, "fold": fold,
+            "mse_standardized": _mse_from_rows(selected_rows, standardized=True),
             "variance_summary": _variance_summary(selected_rows),
         })
         setting_metrics[name] = metrics
@@ -317,7 +336,7 @@ def _evaluate_settings(
 def _aggregate_evaluations(
     fold_metrics: list[dict[str, Any]], rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Keep empty depth folds explicit while averaging only defined errors."""
+    """Average defined fold calibration errors and pool held-out point errors."""
     evaluated = [fold for fold in fold_metrics if fold["n_variants"] > 0]
     if evaluated:
         result = aggregate_folds(evaluated)
@@ -327,6 +346,8 @@ def _aggregate_evaluations(
             "n_valid_spearman_folds": 0, "interval_ece": None,
             "pair_ece": None, "n_valid_pair_folds": 0,
             "n_variants": 0, "n_pairs": 0,
+            "ence": None, "std_ence": None, "n_valid_ence_folds": 0,
+            "uncertainty_cv": None, "std_uncertainty_cv": None, "n_valid_uncertainty_cv_folds": 0,
         }
     result.update({
         "n_folds": len(fold_metrics),
@@ -335,6 +356,8 @@ def _aggregate_evaluations(
         "fold_n_pairs": [fold["n_pairs"] for fold in fold_metrics],
         "fold_metrics": fold_metrics,
         "variance_summary": _variance_summary(rows),
+        "mse_oof": _mse_from_rows(rows),
+        "mse_oof_standardized": _mse_from_rows(rows, standardized=True),
         "spearman_oof": spearman(
             torch.tensor([row["target"] for row in rows], dtype=torch.float64),
             torch.tensor([row["mean"] for row in rows], dtype=torch.float64),
@@ -407,7 +430,8 @@ def _run_fold(
         rows = _prediction_rows(test, prediction, fitted, fold)
         _write_csv(fold_output / "predictions.csv", rows)
         phase = "evaluation"
-        metrics = _evaluate_settings(test, prediction, config, rows, setting, fold)
+        metrics = _evaluate_settings(test, prediction, config, rows, setting, fold,
+                                     target_scale=float(fitted.transform.target_scale.item()))
         _write_json(fold_output / "metrics.json", metrics)
         if callback is not None:
             callback({"event": "fold_evaluation_complete"})
@@ -798,12 +822,13 @@ def run_extrapolation(
     prediction = fitted.predict(test)
     rows = _prediction_rows(test, prediction, fitted)
     _write_csv(output / "predictions.csv", rows)
-    metrics = _evaluate(test, prediction, config)
+    metrics = _evaluate(test, prediction, config, target_scale=float(fitted.transform.target_scale.item()))
     metrics.update(
         {
             "evaluation_protocol": "single_to_double",
             "setting": "single_to_double",
             "aggregation": "single_fixed_split",
+            "mse_standardized": _mse_from_rows(rows, standardized=True),
             "sample_ratio": sample_ratio,
             "training_single_fraction": sample_ratio,
             "split_seed": split_seed,

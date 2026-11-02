@@ -9,7 +9,7 @@
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%j.out
 
-# Plot saved NKN calibration metrics with the existing nkn_protein environment.
+# Plot saved NKN/Kermut calibration metrics with the existing nkn_protein environment.
 # Submit from the repository or a subdirectory, or run this file with bash.
 # Relative input/output paths use the repository root. No model fitting occurs.
 set -eo pipefail
@@ -20,7 +20,9 @@ for argument in "$@"; do
       cat <<'HELP'
 Usage: sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch [OPTIONS]
 
-Plot calibration diagnostics from saved NKN model runs.
+Plot interval, pairwise, and ENCE diagnostics from saved NKN/Kermut model runs.
+ENCE plots show RMV versus RMSE with ENCE/cv annotations when per-fold
+error_bin_stats are saved; older runs without those bins skip the ENCE plot.
   --results-dir PATH   Results root (default: PLOT_RESULTS_DIR or results).
   --assay ID           Restrict discovery to an assay; repeat for several.
   --run-dir PATH       Select a model-run directory; repeat for several.

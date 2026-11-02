@@ -6,7 +6,7 @@ import unittest
 
 import torch
 
-from evaluation import aggregate_folds, evaluate_fold, spearman
+from evaluation import aggregate_folds, evaluate_fold, mse, spearman
 from evaluation.metrics import _confidence_bin_indices
 
 
@@ -15,10 +15,20 @@ def vector(values):
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_mse_uses_squared_errors_and_supports_singletons_and_empty_inputs(self):
+        self.assertEqual(mse(vector([1, 3]), vector([2, 1])), 2.5)
+        self.assertEqual(mse(vector([3]), vector([1])), 4.0)
+        self.assertEqual(mse(vector([1, 1]), vector([1, 1])), 0.0)
+        self.assertIsNone(mse(vector([]), vector([])))
+        for targets, means in (([1], [1, 2]), ([math.nan], [0]), ([0], [math.inf])):
+            with self.subTest(targets=targets, means=means), self.assertRaises(ValueError):
+                mse(vector(targets), vector(means))
+
     def test_two_variant_reference_and_observation_covariance(self):
         targets = vector([0, 1])
         covariance = torch.eye(2, dtype=torch.float64) * 0.5
         result = evaluate_fold(targets, targets, covariance, [0.5, 0.9], 4)
+        self.assertEqual(result["mse"], 0.0)
         confidence = 0.5 * (1 + math.erf(1 / math.sqrt(2)))
         self.assertEqual(result["n_pairs"], 1)
         self.assertAlmostEqual(result["pair_ece"], 1 - confidence)
@@ -36,6 +46,8 @@ class EvaluationTests(unittest.TestCase):
         self.assertAlmostEqual(correlated["pair_ece"], 1 - expected_confidence)
         self.assertLess(correlated["pair_ece"], result["pair_ece"])
         self.assertEqual(correlated["interval_ece"], result["interval_ece"])
+        self.assertEqual(correlated["ence"], result["ence"])
+        self.assertEqual(correlated["uncertainty_cv"], result["uncertainty_cv"])
 
     def test_bins_include_interior_edge_on_right_and_one_in_final_bin(self):
         confidences = vector([0.5, 0.624, 0.625, 0.75, 0.875, 1.0])
@@ -71,6 +83,7 @@ class EvaluationTests(unittest.TestCase):
         second = evaluate_fold(
             vector([9, 8, 7]), vector([0, 1, 2]), torch.eye(3, dtype=torch.float64) * 0.5, [0.5], 1
         )
+        self.assertAlmostEqual(second["mse"], (81 + 49 + 25) / 3)
         aggregate = aggregate_folds([first, second])
         self.assertEqual(aggregate["interval_ece"], 0.5)
         # Pooled coverage is 2/5 and gives ECE=0.1, not the fold mean 0.5.

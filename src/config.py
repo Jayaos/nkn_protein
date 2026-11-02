@@ -200,6 +200,7 @@ class EvaluationConfig:
     n_bins: int = 10
     n_folds: int = 5
     pair_block_size: int = 512
+    error_n_bins: int = 5
 
     def __post_init__(self):
         self.coverage_levels = tuple(self.coverage_levels)
@@ -207,7 +208,7 @@ class EvaluationConfig:
             raise ValueError("Coverage levels must lie strictly between zero and one")
         if len(set(self.coverage_levels)) != len(self.coverage_levels):
             raise ValueError("Coverage levels must be distinct")
-        for name in ("n_bins", "n_folds", "pair_block_size"):
+        for name in ("n_bins", "n_folds", "pair_block_size", "error_n_bins"):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")
         if self.n_folds < 2:

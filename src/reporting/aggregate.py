@@ -10,6 +10,9 @@ from typing import Any
 IDENTITY = ("assay_id", "model", "run_id", "stage", "setting")
 METRICS = (
     "avg_spearman", "std_spearman", "spearman_oof", "spearman_oof_standardized",
+    "mse_oof", "mse_oof_standardized", "mse", "mse_standardized",
+    "ence", "std_ence", "uncertainty_cv", "std_uncertainty_cv",
+    "n_valid_ence_folds", "n_valid_uncertainty_cv_folds",
     "spearman", "interval_ece", "pair_ece", "n_variants", "n_pairs", "n_folds",
     "n_valid_spearman_folds", "n_valid_pair_folds", "n_valid_interval_folds",
 )
@@ -273,6 +276,7 @@ def aggregate_results(
         output = Path(output_dir)
         output.mkdir(parents=True, exist_ok=True)
         _write_csv(output / "summary.csv", summary, (*IDENTITY, "status", *METRICS))
-        _write_csv(output / "folds.csv", folds, (*IDENTITY, "fold", "spearman", "interval_ece", "pair_ece"))
+        _write_csv(output / "folds.csv", folds, (*IDENTITY, "fold", "spearman", "mse", "mse_standardized",
+                                                "interval_ece", "pair_ece", "ence", "uncertainty_cv"))
         _write_csv(output / "issues.csv", issues, ("path", "error"))
     return tables

@@ -40,7 +40,62 @@ def fold_metrics(index):
     }
 
 
+def with_error_calibration(fold):
+    result = deepcopy(fold)
+    offset = fold["fold"]
+    result.update(ence=.1 + .2 * offset, uncertainty_cv=.2 + .2 * offset, error_n_bins=2,
+                  n_error_bins=2, error_bin_stats=[
+                      {"bin": index, "count": count, "rmv": 10 * (index + 1 + offset),
+                       "rmse": 10 * (index + .5 + offset), "rmv_standardized": index + 1 + offset,
+                       "rmse_standardized": index + .5 + offset}
+                      for index, count in enumerate((fold["n_variants"] - 1, 1))])
+    return result
+
+
 class CalibrationSummaryTests(unittest.TestCase):
+    def test_error_curves_use_standardized_units_and_equal_fold_statistics(self):
+        folds = [with_error_calibration(fold_metrics(index)) for index in (0, 1)]
+        summary = summarize_setting(folds)
+        self.assertAlmostEqual(summary["ence"]["mean"], .2)
+        self.assertAlmostEqual(summary["uncertainty_cv"]["mean"], .3)
+        self.assertAlmostEqual(summary["ence"]["std"], statistics.stdev([.1, .3]))
+        self.assertEqual(summary["error_calibration_units"], "training_standardized")
+        self.assertEqual(summary["error_bin_stats"][0]["rmv"], 1.5)
+        self.assertEqual(summary["error_bin_stats"][0]["rmse"], 1)
+        self.assertAlmostEqual(summary["error_bin_stats"][0]["rmv_std"], statistics.stdev([1, 2]))
+        self.assertEqual(summary["n_error_curve_folds"], 2)
+        self.assertTrue(summary["error_curve_comparable"])
+        # Use saved fold ENCEs, not an ENCE recomputed from the mean curve.
+        self.assertNotAlmostEqual(summary["ence"]["mean"], ((1.5 - 1) / 1.5 + (2.5 - 2) / 2.5) / 2)
+
+    def test_collapsed_quantiles_and_legacy_folds_do_not_invent_mean_curves(self):
+        fold = with_error_calibration(fold_metrics(0))
+        fold["error_n_bins"] = 5
+        summary = summarize_setting([fold, fold_metrics(1)])
+        self.assertFalse(summary["error_curve_comparable"])
+        self.assertEqual(summary["error_bin_stats"], [])
+        self.assertEqual(summary["n_error_curve_folds"], 1)
+        self.assertEqual(summary["ence"], {"mean": .1, "std": None, "n_folds": 1})
+        legacy = summarize_setting([fold_metrics(0)])
+        self.assertIsNone(legacy["ence"]["mean"])
+        self.assertEqual(legacy["n_error_curve_folds"], 0)
+
+    def test_error_curve_units_counts_and_bin_indices_are_validated(self):
+        for invalid in ("units", "count", "bin", "variance"):
+            first, second = [with_error_calibration(fold_metrics(index)) for index in (0, 1)]
+            if invalid == "units":
+                for row in second["error_bin_stats"]:
+                    row.pop("rmv_standardized")
+                    row.pop("rmse_standardized")
+            elif invalid == "count":
+                first["error_bin_stats"][0]["count"] = 0
+            elif invalid == "bin":
+                first["error_bin_stats"][0]["bin"] = 2
+            else:
+                first["error_bin_stats"][0]["rmv_standardized"] = 0
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                summarize_setting([first, second])
+
     def test_fold_errors_and_reliability_curves_are_averaged_equally(self):
         folds = [fold_metrics(0), fold_metrics(1)]
         summary = summarize_setting(folds)
@@ -176,6 +231,9 @@ class CalibrationResultTests(unittest.TestCase):
         (self.results / "assay_a" / "unrelated").mkdir()
         self.assertEqual(set(discover_runs(self.results)), {first, second})
         self.assertEqual(discover_runs(self.results, assays=["assay_b"]), [second])
+        baseline = self.make_run("assay_b", "kermut_first")
+        self.write_complete_setting(baseline)
+        self.assertEqual(set(discover_runs(self.results, assays=["assay_b"])), {second, baseline})
 
     def test_embedded_aggregate_folds_are_authoritative_without_double_counting(self):
         run = self.make_run()
@@ -305,6 +363,23 @@ class CalibrationResultTests(unittest.TestCase):
             self.assertAlmostEqual(setting["summary"]["interval_ece"]["mean"], expected["interval_ece"])
 
     @unittest.skipUnless(HAS_MATPLOTLIB, "matplotlib is required for plot rendering")
+    def test_error_plot_saves_png_pdf_and_preserves_source_metrics(self):
+        run = self.make_run(run_name="kermut_calibration", settings=("singles_random", "singles_contiguous"))
+        folds = [with_error_calibration(fold_metrics(index)) for index in (0, 1)]
+        self.write(run / "cv/singles_random/metrics.json", {"n_folds": 2, "fold_metrics": folds})
+        result = plot_run(run, formats=("png", "pdf"), dpi=60)
+        expected_files = {"interval_ece.png", "interval_ece.pdf", "pair_ece.png", "pair_ece.pdf", "ence.png", "ence.pdf",
+                          "calibration_summary.json"}
+        self.assertEqual({path.name for path in (run / "plots").iterdir()}, expected_files)
+        self.assertEqual({Path(path).name for path in result["files"]}, expected_files)
+        self.assertEqual((run / "plots/ence.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual((run / "plots/ence.pdf").read_bytes()[:4], b"%PDF")
+        self.assertEqual(result["skipped_plots"], {})
+        self.assertEqual(self.setting(result, "singles_random")["summary"]["ence"]["n_folds"], 2)
+        saved = json.loads((run / "cv/singles_random/metrics.json").read_text())
+        self.assertEqual(saved["fold_metrics"], folds)
+
+    @unittest.skipUnless(HAS_MATPLOTLIB, "matplotlib is required for plot rendering")
     def test_plot_run_defaults_to_run_plots_and_writes_json_summary(self):
         run = self.make_run(settings=("singles_random", "singles_contiguous"))
         self.write_complete_setting(run)
@@ -315,11 +390,14 @@ class CalibrationResultTests(unittest.TestCase):
         saved = json.loads((run / "plots/calibration_summary.json").read_text(encoding="utf-8"))
         self.assertEqual(self.setting(saved, "singles_contiguous")["status"], "unavailable")
         self.assertEqual(self.setting(saved, "singles_random")["summary"]["n_folds"], 2)
+        self.assertIn("No saved error_bin_stats", saved["skipped_plots"]["ence"])
+        self.assertFalse((run / "plots/ence.png").exists())
 
     @unittest.skipUnless(HAS_MATPLOTLIB, "matplotlib is required for plot rendering")
     def test_cli_png_pdf_output_root_preserves_assay_run_hierarchy(self):
         run = self.make_run(settings=("singles_random", "singles_contiguous"))
-        self.write_complete_setting(run)
+        folds = [with_error_calibration(fold) for fold in self.write_complete_setting(run)]
+        self.write(run / "cv/singles_random/metrics.json", {"n_folds": 2, "fold_metrics": folds})
         other = self.make_run("assay_b", "nkn_second")
         self.write_complete_setting(other)
         output = self.root / "exported"
@@ -335,7 +413,7 @@ class CalibrationResultTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         destination = output / run.parent.name / run.name
-        for plot in ("interval_ece", "pair_ece"):
+        for plot in ("interval_ece", "pair_ece", "ence"):
             self.assertEqual((destination / f"{plot}.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             self.assertEqual((destination / f"{plot}.pdf").read_bytes()[:4], b"%PDF")
         self.assertTrue((destination / "calibration_summary.json").is_file())

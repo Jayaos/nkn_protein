@@ -56,6 +56,21 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(status, 0, errors)
                 metrics = json.loads((output / "metrics.json").read_text())
                 rows = read_csv(output / "predictions.csv")
+                domains = metrics.get("setting_metrics", {setting: metrics})
+                for domain, domain_metrics in domains.items():
+                    self.assertGreaterEqual(domain_metrics["ence"], 0)
+                    self.assertGreaterEqual(domain_metrics["uncertainty_cv"], 0)
+                    selected = rows
+                    if domain.startswith("mixed_"):
+                        depth = "1" if domain.endswith("singles") else "2"
+                        selected = [row for row in rows if row["n_mutations"] == depth]
+                    prefix = "mse" if command == "fit" else "mse_oof"
+                    for suffix in ("", "_standardized"):
+                        expected_mse = sum(
+                            (float(row[f"target{suffix}"]) - float(row[f"mean{suffix}"])) ** 2
+                            for row in selected
+                        ) / len(selected)
+                        self.assertAlmostEqual(domain_metrics[f"{prefix}{suffix}"], expected_mse)
                 if setting == "single_to_double":
                     summary = json.loads((output / "run_summary.json").read_text())
                     self.assertEqual(summary["n_train"], 8)
@@ -79,6 +94,10 @@ class PipelineTests(unittest.TestCase):
                     self.assertEqual([int(row["fold"]) for row in rows], self.assignments[:expected_count])
                     for fold in range(5):
                         fitted = FittedKermut.load(output / f"fold_{fold}/checkpoint.pt")
+                        fold_metrics = json.loads((output / f"fold_{fold}/metrics.json").read_text())
+                        for bin_stats in fold_metrics["error_bin_stats"]:
+                            self.assertAlmostEqual(bin_stats["rmv_standardized"],
+                                                   bin_stats["rmv"] / fitted.transform.target_scale.item())
                         expected_ids = {self.batch.variant_ids[i] for i in range(expected_count) if self.assignments[i] != fold}
                         self.assertEqual(set(fitted.train.variant_ids), expected_ids)
                         summary = json.loads((output / f"fold_{fold}/fit_summary.json").read_text())

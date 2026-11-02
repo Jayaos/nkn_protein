@@ -13,8 +13,9 @@ import torch
 
 from config import BranchConfig, EvaluationConfig, ExperimentConfig, ModelConfig, TrainingConfig
 from data_loading import FeatureBatch
-from evaluation import evaluate_fold, spearman
+from evaluation import error_calibration, evaluate_fold, spearman
 from experiments import run_cv, run_extrapolation, run_predict
+from experiments.runner import _aggregate_evaluations
 from gp.linalg import NumericalError
 from gp.training import FittedGP, fit_gp
 
@@ -70,6 +71,31 @@ class PipelineTests(unittest.TestCase):
         self.batch = synthetic_batch()
         self.config = small_config()
         self.folds = torch.tensor([0, 1, 2, 0, 1, 2, 0, 1])
+
+    def test_pooled_mse_weights_variants_and_uses_each_folds_training_scale(self):
+        # Fold 0 has one test variant and scale 1; fold 1 has two and scale 4.
+        rows = [
+            {"target": target, "mean": mean, "target_standardized": target / scale,
+             "mean_standardized": mean / scale, "n_mutations": 1,
+             "latent_variance_standardized": 1, "observation_variance_standardized": 2}
+            for target, mean, scale in [(2, 0, 1), (8, 4, 4), (12, 8, 4)]
+        ]
+        folds = [
+            {"n_variants": size, "n_pairs": 0, "interval_ece": 0.1, "pair_ece": None,
+             "mse": raw, "mse_standardized": standardized}
+            for size, raw, standardized in [(1, 4, 4), (2, 16, 1)]
+        ]
+        result = _aggregate_evaluations(folds, rows)
+        self.assertEqual(result["mse_oof"], 12.0)
+        self.assertEqual(result["mse_oof_standardized"], 2.0)
+        self.assertNotEqual(result["mse_oof"], (4 + 16) / 2)
+        self.assertNotEqual(result["mse_oof_standardized"], (4 + 1) / 2)
+        empty = _aggregate_evaluations([], [])
+        self.assertIsNone(empty["mse_oof"])
+        self.assertIsNone(empty["mse_oof_standardized"])
+        self.assertIsNone(empty["ence"])
+        self.assertIsNone(empty["uncertainty_cv"])
+        json.dumps(empty, allow_nan=False)
 
     def test_cpu_cv_does_not_collect_or_touch_cuda_cache(self):
         events = []
@@ -139,10 +165,18 @@ class PipelineTests(unittest.TestCase):
             result["interval_ece"], sum(row["interval_ece"] for row in result["fold_metrics"]) / 3
         )
         self.assertAlmostEqual(result["pair_ece"], sum(row["pair_ece"] for row in result["fold_metrics"]) / 3)
+        for name in ("ence", "uncertainty_cv"):
+            self.assertAlmostEqual(result[name], sum(row[name] for row in result["fold_metrics"]) / 3)
+            self.assertEqual(result[f"n_valid_{name}_folds"], 3)
         rows = read_predictions(output / "predictions.csv")
         self.assertEqual([row["variant_id"] for row in rows], list(self.batch.variant_ids))
         self.assertEqual([int(row["fold"]) for row in rows], self.folds.tolist())
         means = torch.tensor([float(row["mean"]) for row in rows], dtype=torch.float64)
+        self.assertAlmostEqual(result["mse_oof"], (self.batch.targets - means).square().mean().item())
+        expected_standardized_mse = sum(
+            (float(row["target_standardized"]) - float(row["mean_standardized"])) ** 2 for row in rows
+        ) / len(rows)
+        self.assertAlmostEqual(result["mse_oof_standardized"], expected_standardized_mse)
         self.assertAlmostEqual(result["spearman_oof"], spearman(self.batch.targets, means))
         fold_spearmans = torch.tensor([row["spearman"] for row in result["fold_metrics"]], dtype=torch.float64)
         self.assertAlmostEqual(result["avg_spearman"], fold_spearmans.mean().item())
@@ -165,6 +199,22 @@ class PipelineTests(unittest.TestCase):
             expected_variances = torch.tensor([float(row["observation_variance"]) for row in fold_rows], dtype=torch.float64)
             torch.testing.assert_close(prediction.mean, expected_means, rtol=1e-12, atol=1e-12)
             torch.testing.assert_close(prediction.observation_covariance.diagonal(), expected_variances, rtol=1e-12, atol=1e-12)
+            expected_mse = (test.targets - prediction.mean).square().mean().item()
+            fold_metrics = json.loads((fold_output / "metrics.json").read_text())
+            self.assertAlmostEqual(fold_metrics["mse"], expected_mse)
+            self.assertAlmostEqual(
+                fold_metrics["mse_standardized"], expected_mse / fitted.transform.target_scale.square().item()
+            )
+            standardized = error_calibration(
+                fitted.transform.standardize_targets(test.targets), prediction.mean_standardized,
+                prediction.observation_covariance_standardized.diagonal(), self.config.evaluation.error_n_bins,
+            )
+            for name in ("ence", "uncertainty_cv"):
+                self.assertAlmostEqual(fold_metrics[name], standardized[name])
+            self.assertEqual(sum(row["count"] for row in fold_metrics["error_bin_stats"]), test.num_variants)
+            for actual, expected in zip(fold_metrics["error_bin_stats"], standardized["error_bin_stats"]):
+                self.assertAlmostEqual(actual["rmv_standardized"], expected["rmv"])
+                self.assertAlmostEqual(actual["rmse_standardized"], expected["rmse"])
 
     def test_cv_runs_only_observed_folds_and_preserves_assignments(self):
         config = replace(self.config, evaluation=replace(self.config.evaluation, n_folds=5))
@@ -292,9 +342,16 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["sample_ratio"], 0.8)
         self.assertEqual(result["metrics"]["aggregation"], "single_fixed_split")
         self.assertNotIn("n_folds", result["metrics"])
+        self.assertIsNotNone(result["metrics"]["ence"])
+        self.assertIsNotNone(result["metrics"]["uncertainty_cv"])
         fitted = FittedGP.load(output / "checkpoint.pt")
         self.assertTrue(bool((torch.bincount(fitted.train.owners, minlength=4) == 1).all()))
         predictions = read_predictions(output / "predictions.csv")
+        for suffix in ("", "_standardized"):
+            expected_mse = sum(
+                (float(row[f"target{suffix}"]) - float(row[f"mean{suffix}"])) ** 2 for row in predictions
+            ) / len(predictions)
+            self.assertAlmostEqual(result["metrics"][f"mse{suffix}"], expected_mse)
         self.assertEqual({row["variant_id"] for row in predictions}, {"variant_4", "variant_7"})
         self.assertTrue(all(row["n_mutations"] == "2" for row in predictions))
         self.assertNotIn("variant_0", fitted.train.variant_ids)
@@ -386,6 +443,11 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(observed["n_variants"], len(indices))
                 if not len(indices):
                     self.assertIsNone(observed["interval_ece"])
+                    self.assertIsNone(observed["mse"])
+                    self.assertIsNone(observed["mse_standardized"])
+                    self.assertIsNone(observed["ence"])
+                    self.assertIsNone(observed["uncertainty_cv"])
+                    self.assertEqual(observed["error_bin_stats"], [])
                     continue
                 expected = evaluate_fold(
                     test.targets[indices], prediction.mean[indices],
@@ -395,6 +457,15 @@ class PipelineTests(unittest.TestCase):
                 )
                 self.assertEqual(observed["n_pairs"], expected["n_pairs"])
                 self.assertAlmostEqual(observed["interval_ece"], expected["interval_ece"])
+                self.assertAlmostEqual(observed["mse"], expected["mse"])
+                self.assertAlmostEqual(observed["ence"], expected["ence"])
+                if len(indices) == 1:
+                    self.assertIsNone(observed["uncertainty_cv"])
+                else:
+                    self.assertAlmostEqual(observed["uncertainty_cv"], expected["uncertainty_cv"])
+                self.assertAlmostEqual(
+                    observed["mse_standardized"], expected["mse"] / fitted.transform.target_scale.square().item()
+                )
                 if expected["pair_ece"] is None:
                     self.assertIsNone(observed["pair_ece"])
                 else:
@@ -408,6 +479,9 @@ class PipelineTests(unittest.TestCase):
             target = torch.tensor([float(row["target_standardized"]) for row in selected], dtype=torch.float64)
             mean = torch.tensor([float(row["mean_standardized"]) for row in selected], dtype=torch.float64)
             self.assertAlmostEqual(result["setting_metrics"][setting]["spearman_oof_standardized"], spearman(target, mean))
+            self.assertAlmostEqual(
+                result["setting_metrics"][setting]["mse_oof_standardized"], (target - mean).square().mean().item()
+            )
         self.assertEqual(json.loads((output / "metrics.json").read_text()), result)
 
 

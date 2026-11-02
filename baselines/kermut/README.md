@@ -429,10 +429,34 @@ itself; new predictions require compatible cached inputs.
 
 Evaluation reuses the NKN pipeline: per-fold Spearman, equal-fold average and
 population standard deviation of defined Spearman values, pooled out-of-fold
-Spearman, interval ECE, PairECE, and standardized variance summaries. Calibration
+Spearman, MSE, interval ECE, PairECE, and standardized variance summaries. MSE
+is saved per fold as `mse` and `mse_standardized`, and pooled across all held-out
+variants as `mse_oof` and `mse_oof_standardized`. The standardized version uses
+each fold's training target mean and sample standard deviation (`ddof=1`),
+following the paper's normalization and pooling. MSE weights variants equally;
+mixed runs report each mutation depth separately. Calibration
 uses the full observation covariance within each held-out fold; covariances
 are never pooled across folds. Extrapolation reports one held-out evaluation
-without a cross-fold average or standard deviation.
+without a cross-fold average or standard deviation, including `mse` and
+`mse_standardized`. The MSE fields also appear in the shared reporting CSVs.
+
+Error calibration reports `ence` and `uncertainty_cv` in every held-out fold
+and fixed extrapolation evaluation. ENCE uses five variance-quantile bins by
+default (`evaluation.error_n_bins`); uncertainty CV uses sample standard
+deviation of predictive standard deviations divided by their mean. Both use
+observation-predictive variances, including observation noise. CV summaries
+average folds equally and include `std_ence`, `std_uncertainty_cv`, and valid
+fold counts. `error_bin_stats` retains RMV/RMSE bin statistics in original and
+training-standardized units. The reporting CSVs include the new scalar metrics.
+The separate `plot_nkn_calibration.sbatch` plotting job also saves
+`ence.png`/`ence.pdf` with RMV/RMSE curves and ENCE/cv annotations when per-fold
+`error_bin_stats` are available. Training does not generate images. Older runs
+without the bins skip ENCE plotting with an explicit reason.
+
+The uncertainty CV follows Appendix J.2's equation. The released Kermut code
+places the mean inside the square root, producing different values; see the
+[shared evaluation notes](../../src/README.md#outputs-and-evaluation) for
+formulas, binning edge cases, and historical-result compatibility.
 
 ```powershell
 python -m unittest discover -s baselines/kermut/tests -v

@@ -82,7 +82,7 @@ Notebooks are optional smoke tests; the CLI is the default extraction workflow.
 | `src/data_loading/` | Assay catalog, cache/score alignment, PyTorch dataset, packed mutations, folds |
 | `src/kernels/` | Primitive kernels, NKN layers, mutation sums, final kernel |
 | `src/gp/` | Fold transforms, dense Cholesky, exact GP, restarts, checkpoints |
-| `src/evaluation/` | Spearman, interval ECE, PairECE, fold aggregation |
+| `src/evaluation/` | MSE, Spearman, interval ECE, PairECE, ENCE, uncertainty CV, fold aggregation |
 | `src/experiments/` | Fit/CV/prediction execution, CLI, result artifacts |
 | `src/tests/` | Numerical, data-contract, leakage, and integration tests |
 | `configs/smoke.json` | Short fixture-validation run |
@@ -1037,12 +1037,21 @@ restart diagnostics, and CSV predictions in original and standardized units.
 CLI runs also record input-cache provenance. CV outputs include per-fold
 artifacts and an ID-ordered out-of-fold prediction table.
 
+* `mse_oof` is the mean squared error across all held-out predictions in original
+  target units. `mse_oof_standardized` uses each fold's training-standardized
+  targets and means, following Kermut's normalized, pooled MSE calculation.
+  Both weight each variant equally, so unequal folds contribute in proportion
+  to their test sizes. Predictive variance does not enter MSE.
+  Individual folds and fixed single-to-double evaluations report `mse` and
+  `mse_standardized` instead. Empty evaluation groups report JSON `null`;
+  singleton and constant-target groups still have defined MSE.
 * `spearman_oof` uses combined original-unit out-of-fold means.
 * `spearman_oof_standardized` pools targets and means standardized separately
   using each fold's training target mean and standard deviation, following
   Kermut's pooled Spearman aggregation pattern. The existing NKN transformations
-  use population standard deviation (`ddof=0`), while Kermut's reference uses
-  sample standard deviation; this is not identical numerical reproduction.
+  use population standard deviation (`ddof=0`), while our Kermut baseline and
+  Kermut's reference use sample standard deviation (`ddof=1`). This distinction
+  also applies to standardized MSE; NKN is not identical numerical reproduction.
   Prediction CSVs retain both original and standardized targets and predictions.
 * `avg_spearman` and `std_spearman` summarize the individual fold correlations,
   with equal fold weights and population standard deviation (`ddof=0`). Undefined
@@ -1051,6 +1060,32 @@ artifacts and an ID-ordered out-of-fold prediction table.
   deviation is zero. These fields appear in each CV `metrics.json` and CLI summary.
 * Interval ECE is computed in each nonempty held-out fold and then equally
   averaged. For mixed runs it is computed separately within each mutation depth.
+* `ence` implements expected normalized calibration error from
+  [Kermut Appendix J.2](https://arxiv.org/pdf/2407.00002#page=27).
+  Within each fold, observation-predictive variances (including observation
+  noise) define quantile bins. Each bin records `rmv = sqrt(mean(variance))` and
+  `rmse = sqrt(mean((target - mean)^2))`; ENCE equally averages
+  `abs(rmv - rmse) / rmv` over nonempty bins. `evaluation.error_n_bins` defaults
+  to **5**, independently of the PairECE bin count. Quantiles use linear
+  interpolation, right-closed intervals, and dropped duplicate edges as in
+  the reference code's `pandas.qcut`. Constant variances form one bin; empty
+  groups have null ENCE. `error_n_bins` and `n_error_bins` record requested and
+  populated bin counts, which can differ with ties or small groups.
+* `uncertainty_cv` is the paper's coefficient of variation of predictive
+  standard deviations: `std(sqrt(variance), ddof=1) / mean(sqrt(variance))`.
+  It is zero for constant uncertainty and null for fewer than two variants.
+  Larger values indicate more variation in uncertainty, not necessarily better
+  predictions. ENCE and uncertainty CV are invariant to a common change of
+  target units within a fold. Both are computed separately for each mixed
+  mutation-depth group and for the fixed extrapolation test set.
+* Aggregate `ence` and `uncertainty_cv` equally average defined fold values.
+  `std_ence` and `std_uncertainty_cv` are **sample** standard deviations across
+  folds (`ddof=1`), null with fewer than two contributing folds.
+  `n_valid_ence_folds` and `n_valid_uncertainty_cv_folds` record those counts.
+  These metrics are never recomputed from pooled predictions or an average
+  calibration curve. Per-fold `error_bin_stats` stores bin counts, RMV, RMSE,
+  relative error, and `rmv_standardized`/`rmse_standardized` using the training
+  fold's target scale for analysis.
 * PairECE uses the observation covariance for pairs within the same held-out
   fold, excludes exact observed and predicted ties, and then averages eligible
   fold-level values equally. Bins have equal width on `[0.5,1]`, are left-closed
@@ -1062,8 +1097,9 @@ artifacts and an ID-ordered out-of-fold prediction table.
 
 Mixed CV `setting_metrics` contains a complete summary for each of
 `mixed_random_singles` and `mixed_random_doubles`, including subgroup per-fold
-Spearman, pooled Spearman, interval ECE, PairECE, and variance summaries. PairECE
-uses the covariance restricted to the subgroup; it never compares variants
+Spearman, pooled Spearman, raw and standardized MSE, interval ECE, PairECE, and
+variance summaries. PairECE uses the covariance restricted to the subgroup;
+it never compares variants
 across folds or mutation depths. A fold can contain no variants of one depth:
 that subgroup's fold metrics are undefined and excluded from the corresponding
 averages. Contributing counts are recorded separately for each metric; a
@@ -1071,13 +1107,37 @@ constant-target subgroup can still contribute calibration metrics even when
 Spearman is undefined. Single-fold `fit` and fixed extrapolation report their
 held-out metrics directly, without inventing a five-fold mean or deviation.
 
+MSE fields are included in `metrics.json`, CV CLI summaries, and reporting CSVs:
+`summary.csv` includes pooled CV or fixed-split MSE, and `folds.csv` includes
+per-fold MSE. Older saved runs without MSE remain readable and have blank MSE
+CSV fields; aggregating reports does not recompute metrics from predictions.
+
+ENCE and uncertainty CV also appear in `metrics.json`, CV CLI summaries,
+`summary.csv`, and `folds.csv`. Older results have blank CSV values for these
+metrics. No retraining is mathematically necessary to compute them from saved
+means, targets, and observation variances, but existing artifacts are not
+automatically backfilled.
+
+**Paper/code distinction:** the released Kermut `reproduce` branch computes
+`sqrt(sample_variance(sigma) / mean(sigma))`, placing the denominator inside the
+square root ([reference implementation](https://github.com/petergroth/kermut/blob/reproduce/src/process_results/utils.py)).
+Our `uncertainty_cv` follows the dimensionless equation in Appendix J.2 instead;
+it does not reproduce the released code's CV numbers exactly. ENCE follows the
+reference binning, with the explicit constant-variance fallback described above.
+
 Labels supplied to prediction are only exported alongside predictions; they
 are not used for conditioning, model selection, or automatic recalibration.
 
-Saved interval and pairwise calibration metrics can be plotted with
-`sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch`. By default, PNG/PDF
-figures and a JSON plotting summary go to each `results/<protein>/<model-run>/plots/`
-directory. See [plotting instructions](../sbatch_run/run_plotting/README.md) for
+Training saves ENCE and uncertainty CV as numeric outputs. The separate plotting
+job also creates `ence.png`/`ence.pdf` from saved per-fold `error_bin_stats`,
+showing RMV versus RMSE and ENCE/cv annotations. Older runs without these bins
+skip ENCE plotting with a logged reason; their interval and pairwise plots
+remain available.
+Saved interval, pairwise, and error calibration metrics can be plotted with
+`sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch`, which defaults to
+`plots/<protein>/<model-run>/`. The Python plotting command defaults to each
+`results/<protein>/<model-run>/plots/` directory. See
+[plotting instructions](../sbatch_run/run_plotting/README.md) for
 custom output locations, assay selection, dependencies, and aggregation details.
 
 ## Validation

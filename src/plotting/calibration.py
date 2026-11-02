@@ -1,4 +1,4 @@
-"""Plot interval and pairwise calibration from saved NKN fold metrics.
+"""Plot interval, pairwise, and error calibration from saved NKN/Kermut metrics.
 
 Run ``python -m plotting.calibration --help`` with src on PYTHONPATH.
 This module reads saved metrics and fold assignments; it never loads checkpoints
@@ -55,6 +55,60 @@ def _stats(values: list[float]) -> dict:
     return {"mean": statistics.mean(values) if values else None,
             "std": statistics.stdev(values) if len(values) > 1 else None,
             "n_folds": len(values)}
+
+
+def _error_coordinates(row: dict) -> tuple[float, float]:
+    standardized = "rmv_standardized" in row
+    if standardized != ("rmse_standardized" in row):
+        raise ValueError("Both standardized error coordinates are required")
+    suffix = "_standardized" if standardized else ""
+    rmv = _number(row[f"rmv{suffix}"], "RMV", upper=math.inf)
+    rmse = _number(row[f"rmse{suffix}"], "RMSE", upper=math.inf)
+    if rmv <= 0:
+        raise ValueError("RMV must be positive")
+    return rmv, rmse
+
+
+def _summarize_error_calibration(folds: list[dict]) -> dict:
+    metrics = {name: _stats([_number(fold[name], name, upper=math.inf)
+                            for fold in folds if fold.get(name) is not None])
+               for name in ("ence", "uncertainty_cv")}
+    curves, units = [], set()
+    for fold in folds:
+        bins = fold.get("error_bin_stats", [])
+        if not bins:
+            continue
+        bins = sorted(bins, key=lambda row: _count(row["bin"], "error bin"))
+        requested = _count(fold.get("error_n_bins", len(bins)), "error_n_bins")
+        if not requested or any(row["bin"] >= requested for row in bins):
+            raise ValueError("Error bins must lie within the configured bin range")
+        if len({row["bin"] for row in bins}) != len(bins):
+            raise ValueError("Duplicate error calibration bins")
+        if sum(_count(row["count"], "error bin count") for row in bins) != fold["n_variants"]:
+            raise ValueError("Error bin counts do not match n_variants")
+        for row in bins:
+            if not row["count"]:
+                raise ValueError("Saved error calibration bins must be nonempty")
+            _error_coordinates(row)
+            units.add("training_standardized" if "rmv_standardized" in row else "target")
+        curves.append((requested, bins))
+    if len(units) > 1:
+        raise ValueError("Error calibration curve units differ across folds")
+    # Collapsed edges or empty quantile intervals change bin meanings. Keep
+    # individual curves, but average only matching full quantile grids.
+    comparable = bool(curves) and all(
+        requested == curves[0][0] and [row["bin"] for row in bins] == list(range(requested))
+        for requested, bins in curves
+    )
+    averaged = []
+    if comparable:
+        for index in range(curves[0][0]):
+            points = [_error_coordinates(bins[index]) for _, bins in curves]
+            rmv, rmse = _stats([x for x, _ in points]), _stats([y for _, y in points])
+            averaged.append({"bin": index, "rmv": rmv["mean"], "rmse": rmse["mean"],
+                             "rmv_std": rmv["std"], "rmse_std": rmse["std"], "n_folds": len(points)})
+    return {**metrics, "error_bin_stats": averaged, "n_error_curve_folds": len(curves),
+            "error_calibration_units": next(iter(units), None), "error_curve_comparable": comparable}
 
 
 def summarize_setting(folds: list[dict]) -> dict:
@@ -128,6 +182,7 @@ def summarize_setting(folds: list[dict]) -> dict:
             "accuracy_std": acc["std"], "n_folds": conf["n_folds"],
         })
     return {"n_folds": len(folds), "n_variants": variants, "n_pairs": pairs,
+            **_summarize_error_calibration(folds),
             "interval_ece": _stats(interval_values), "pair_ece": _stats(pair_values),
             "coverage": [{"nominal": q, "empirical": _stats(values)["mean"],
                           "std": _stats(values)["std"], "n_folds": len(values)}
@@ -136,11 +191,12 @@ def summarize_setting(folds: list[dict]) -> dict:
 
 
 def discover_runs(results_dir: Path, assays: list[str] | None = None) -> list[Path]:
-    """Find NKN run directories, never individual fold/validation directories."""
+    """Find NKN/Kermut runs, never individual fold/validation directories."""
     root = Path(results_dir).resolve()
     if not root.is_dir():
         raise ValueError(f"Results directory does not exist: {root}")
-    runs = sorted(path for path in root.glob("*/nkn_*") if path.is_dir()
+    runs = sorted(path for path in root.glob("*/*") if path.is_dir()
+                  and path.name.startswith(("nkn_", "kermut_"))
                   and ((path / "cv").is_dir() or (path / "fit").is_dir()))
     if assays:
         runs = [path for path in runs if path.parent.name in assays]
@@ -263,13 +319,51 @@ def load_run(run_dir: Path) -> dict:
     return {"assay": run_dir.parent.name, "model": run_dir.name, "run_dir": str(run_dir), "settings": settings}
 
 
-def _metric_label(name: str, stats: dict) -> str:
+def _metric_label(name: str, stats: dict, sd_multiplier: float = 1) -> str:
     if stats["mean"] is None:
         return f"{name}: undefined"
     label = f"{name}: {stats['mean']:.4f}"
     if stats["std"] is not None:
-        label += f" ± {stats['std']:.4f}"
+        label += f" ± {sd_multiplier * stats['std']:.4f}"
     return label
+
+
+def _draw_error_calibration(ax, setting: dict, color: str) -> None:
+    summary = setting["summary"]
+    curves = [fold["error_bin_stats"] for fold in setting["folds"] if fold.get("error_bin_stats")]
+    if not curves:
+        ax.text(.5, .5, "Error calibration data unavailable", ha="center", transform=ax.transAxes)
+        ax.set_axis_off()
+        return
+    maximum = 0.0
+    for bins in curves:
+        points = [_error_coordinates(row) for row in sorted(bins, key=lambda row: row["bin"])]
+        x, y = zip(*points)
+        maximum = max(maximum, *x, *y)
+        ax.plot(x, y, color="#87939B", alpha=.5, lw=.8, marker=".")
+    bins = summary["error_bin_stats"]
+    if bins:
+        ax.errorbar([row["rmv"] for row in bins], [row["rmse"] for row in bins],
+                    xerr=[row["rmv_std"] or 0 for row in bins], yerr=[row["rmse_std"] or 0 for row in bins],
+                    color=color, marker="o", ms=4, capsize=2.5, lw=1.6)
+    notes = []
+    if not bins:
+        notes.append("Collapsed/incomplete quantiles: individual folds")
+    if len(curves) < summary["n_folds"]:
+        notes.append(f"Error curves: {len(curves)}/{summary['n_folds']} folds")
+    if notes:
+        ax.text(.03, .97, "\n".join(notes), transform=ax.transAxes, va="top", fontsize=8)
+    maximum = max(maximum, *ax.get_xlim(), *ax.get_ylim()) * 1.05
+    ax.plot([0, maximum], [0, maximum], "--", color="#333333", lw=1)
+    ax.set_xlim(0, maximum)
+    ax.set_ylim(0, maximum)
+    units = "training-standardized" if summary["error_calibration_units"] == "training_standardized" else "target units"
+    ax.set_xlabel(f"RMV ({units})")
+    ax.set_ylabel(f"RMSE ({units})")
+    ax.grid(alpha=.16)
+    annotation = _metric_label("ENCE", summary["ence"], 2) + "\n" + _metric_label("cv", summary["uncertainty_cv"], 2)
+    ax.text(.97, .035, annotation, transform=ax.transAxes, ha="right", va="bottom", fontsize=9,
+            bbox={"facecolor": "white", "alpha": .87, "edgecolor": "none", "pad": 3})
 
 
 def _render(run: dict, kind: str, destination: Path, formats, dpi: int) -> list[str]:
@@ -284,15 +378,16 @@ def _render(run: dict, kind: str, destination: Path, formats, dpi: int) -> list[
 
     settings = run["settings"]
     pair = kind == "pair_ece"
+    error = kind == "ence"
     columns = min(3, len(settings))
     rows = math.ceil(len(settings) / columns)
-    color = "#C65D24" if pair else "#2466A0"
+    color = "#36836B" if error else "#C65D24" if pair else "#2466A0"
     with plt.rc_context({"font.size": 10, "axes.titlesize": 11, "axes.spines.top": False,
                          "axes.spines.right": False, "pdf.fonttype": 42, "ps.fonttype": 42}):
         fig, axes = plt.subplots(rows * (2 if pair else 1), columns, squeeze=False,
             figsize=(4.2 * max(2, columns), (5.8 if pair else 4.6) * rows),
             gridspec_kw={"height_ratios": [3, 1] * rows} if pair else None)
-        title = "Pairwise calibration" if pair else "Prediction interval calibration"
+        title = "Error calibration" if error else "Pairwise calibration" if pair else "Prediction interval calibration"
         fig.suptitle(f"{run['assay']}\n{title} · {run['model']}", fontsize=12, y=.98)
         for index, setting in enumerate(settings):
             row, col = divmod(index, columns)
@@ -308,6 +403,9 @@ def _render(run: dict, kind: str, destination: Path, formats, dpi: int) -> list[
                 ax.set_axis_off()
                 if hist is not None:
                     hist.set_axis_off()
+                continue
+            if error:
+                _draw_error_calibration(ax, setting, color)
                 continue
             ax.set_xlim(.49 if pair else 0, 1.01 if pair else 1)
             ax.set_ylim(0, 1)
@@ -361,6 +459,8 @@ def _render(run: dict, kind: str, destination: Path, formats, dpi: int) -> list[
                    loc="lower center", bbox_to_anchor=(.5, .037), ncol=3, frameon=False)
         note = ("Bin means give equal weight to nonempty folds; bars sum within-fold pair counts. "
                 "ECE averages fold ECEs." if pair else "Coverage and ECE average folds equally. Error bars show fold SD, not confidence intervals.")
+        if error:
+            note = "Equal-fold means; curve error bars: 1 sample SD. ENCE/cv annotations: mean ± 2 sample SD (not confidence intervals)."
         fig.text(.5, .012, note, ha="center", fontsize=8, color="#555555")
         fig.tight_layout(rect=(0, .09, 1, 1))
         files = []
@@ -391,9 +491,17 @@ def plot_run(run_dir: Path, output_dir: Path | None = None,
         "coverage": "Equal weight per nonempty fold at each common coverage level.",
         "pair_curve": "Equal weight per fold with pairs in the bin; undefined bins stay empty.",
         "pair_counts": "Sum of within-fold pairs; no pairs across folds.",
+        "error_metrics": "Equal-fold ENCE and uncertainty CV; annotations use ±2 sample fold SD.",
+        "error_curve": "Prefer training-standardized RMV/RMSE; average only matching full quantile grids.",
         "error_bars": "Sample standard deviation across contributing folds (ddof=1); not a confidence interval.",
     }
-    run["files"] = [file for kind in ("interval_ece", "pair_ece")
+    kinds = ["interval_ece", "pair_ece"]
+    run["skipped_plots"] = {}
+    if any(setting["summary"]["n_error_curve_folds"] for setting in run["settings"]):
+        kinds.append("ence")
+    else:
+        run["skipped_plots"]["ence"] = "No saved error_bin_stats; ENCE plots require per-fold RMV/RMSE bins."
+    run["files"] = [file for kind in kinds
                     for file in _render(run, kind, destination, tuple(dict.fromkeys(formats)), dpi)]
     report = destination / "calibration_summary.json"
     run["files"].append(str(report))
@@ -416,10 +524,12 @@ def main(argv=None) -> int:
         runs = ([path.resolve() for path in args.run_dir] if args.run_dir
                 else discover_runs(args.results_dir, args.assay))
         if not runs:
-            raise ValueError("No matching NKN runs found")
+            raise ValueError("No matching NKN/Kermut runs found")
         plotted = 0
         for path in dict.fromkeys(runs):
             result = plot_run(path, args.output_dir, args.formats, args.dpi)
+            for kind, reason in result["skipped_plots"].items():
+                print(f"{result['assay']} / {result['model']}: skipped {kind}: {reason}", file=sys.stderr)
             for setting in result["settings"]:
                 if setting["status"] != "complete":
                     print(f"{result['assay']} / {setting['name']}: {setting['status']}: {setting['reason']}", file=sys.stderr)

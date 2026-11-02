@@ -1,4 +1,4 @@
-# NKN calibration plots
+# NKN and Kermut calibration plots
 
 Submit from the repository root or a subdirectory:
 
@@ -6,7 +6,7 @@ Submit from the repository root or a subdirectory:
 sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch
 ```
 
-The job discovers every `results/<protein>/nkn_*` run containing `cv/` or
+The job discovers every `results/<protein>/nkn_*` or `kermut_*` run containing `cv/` or
 `fit/` results. It reads saved calibration metrics without loading checkpoints
 or running training. It requests one CPU, 2 GB RAM, and 10 minutes, using the
 same account and QoS as the NKN jobs.
@@ -29,8 +29,15 @@ plots/<protein>/<model-run>/
     interval_ece.pdf
     pair_ece.png
     pair_ece.pdf
+    ence.png
+    ence.pdf
     calibration_summary.json
 ```
+
+The ENCE figure is generated when at least one evaluated fold has saved
+`error_bin_stats`. Older runs without these bins still produce interval and
+pairwise figures; a skip reason is logged and recorded in the summary JSON.
+Training itself saves numeric metrics only; this plotting job creates images.
 
 Set a custom output root while preserving separate protein and model folders:
 
@@ -57,6 +64,10 @@ sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch \
 # Different input root and export settings:
 sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch \
   --results-dir /path/to/results --formats png pdf svg --dpi 300
+
+# A results collection organized as collection/assay/model-run:
+sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch \
+  --results-dir results/hierarchical_nkn
 ```
 
 `--run-dir` bypasses discovery and cannot be combined with `--assay`.
@@ -84,6 +95,14 @@ PYTHONPATH=src python -m plotting.calibration --results-dir results
   fold, the saved PairECE already weights bin errors by pair counts. Fold SD
   describes variation across folds; it is not a confidence interval. With just
   one contributing fold, SD is undefined and omitted.
+- **ENCE:** RMV versus RMSE with the ideal diagonal, individual fold curves,
+  and mean curves with one sample SD on both axes. Coordinates use saved
+  training-standardized units when available. ENCE and cv annotations show
+  the mean **±2 sample SD** across folds, following the paper's presentation;
+  they are not confidence intervals. Metrics average defined folds equally.
+  Mean curves require matching full quantile grids; collapsed or incomplete
+  bins retain individual curves. Missing ENCE data are labelled explicitly.
+  cv uses the saved `uncertainty_cv` field (the Appendix J.2 equation).
 
 Aggregate `metrics.json` embedded fold metrics take precedence over separate
 fold files, avoiding duplicate counting. If aggregate metrics are absent,
