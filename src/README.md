@@ -1135,7 +1135,9 @@ skip ENCE plotting with a logged reason; their interval and pairwise plots
 remain available.
 Saved interval, pairwise, and error calibration metrics can be plotted with
 `sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch`, which defaults to
-`plots/<protein>/<model-run>/`. The Python plotting command defaults to each
+`plots/<results-directory-name>/<assay>/`, using the final folder name of
+`--results-dir`. Multiple runs for an assay use run-prefixed filenames.
+The Python plotting command defaults to each
 `results/<protein>/<model-run>/plots/` directory. See
 [plotting instructions](../sbatch_run/run_plotting/README.md) for
 custom output locations, assay selection, dependencies, and aggregation details.

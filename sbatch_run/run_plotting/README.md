@@ -24,7 +24,7 @@ python -m pip install "matplotlib>=3.8,<3.11"
 By default the batch job writes under the repository's top-level `plots/`:
 
 ```text
-plots/<protein>/<model-run>/
+plots/<results-directory-name>/<assay>/
     interval_ece.png
     interval_ece.pdf
     pair_ece.png
@@ -39,11 +39,25 @@ The ENCE figure is generated when at least one evaluated fold has saved
 pairwise figures; a skip reason is logged and recorded in the summary JSON.
 Training itself saves numeric metrics only; this plotting job creates images.
 
-Set a custom output root while preserving separate protein and model folders:
+The group name is the final folder name of `--results-dir`. For example,
+`--results-dir results/kermut_experiment` saves to
+`plots/kermut_experiment/<assay>/`; `--results-dir results/hierarchical_nkn`
+saves to `plots/hierarchical_nkn/<assay>/`. The default input `results` saves
+under `plots/results/<assay>/`.
+
+If an assay directory contains multiple model runs, filenames include the run
+name, such as `kermut_singles_123__ence.png` and
+`kermut_singles_123__calibration_summary.json`, to avoid overwriting other runs.
+This also applies when selecting only one of those runs with `--run-dir`.
+For `--run-dir`, the group name comes from the run's grandparent directory:
+`<group>/<assay>/<model-run>`.
+
+Set a custom output root while preserving the results-group and assay folders:
 
 ```bash
-sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch --output-dir /path/to/figures
-# Saves to /path/to/figures/<protein>/<model-run>/
+sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch \
+  --results-dir results/kermut_experiment --output-dir /path/to/figures
+# Saves to /path/to/figures/kermut_experiment/<assay>/
 ```
 
 Relative paths are resolved from the repository root. Rerunning replaces plot
@@ -75,11 +89,14 @@ sbatch sbatch_run/run_plotting/plot_nkn_calibration.sbatch \
 arguments take precedence. Run `bash
 sbatch_run/run_plotting/plot_nkn_calibration.sbatch --help` for launcher help.
 
-For a local run with the same options:
+For a local run with the same output layout:
 
 ```bash
-PYTHONPATH=src python -m plotting.calibration --results-dir results
+PYTHONPATH=src python -m plotting.calibration --results-dir results --output-dir plots
 ```
+
+Without `--output-dir`, the Python command saves inside each model run's `plots/`
+directory.
 
 ## Reading the figures
 

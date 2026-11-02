@@ -139,6 +139,7 @@ class PlottingSbatchTests(unittest.TestCase):
         self.assertIn("--run-dir", result.stdout)
         self.assertIn("ENCE", result.stdout)
         self.assertIn("RMV versus RMSE", result.stdout)
+        self.assertIn("ROOT/results-directory-name/assay/", result.stdout)
         self.assertIsNone(record)
 
     def test_python_failure_is_propagated_and_cache_is_cleaned(self):

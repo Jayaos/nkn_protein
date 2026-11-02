@@ -394,8 +394,9 @@ class CalibrationResultTests(unittest.TestCase):
         self.assertFalse((run / "plots/ence.png").exists())
 
     @unittest.skipUnless(HAS_MATPLOTLIB, "matplotlib is required for plot rendering")
-    def test_cli_png_pdf_output_root_preserves_assay_run_hierarchy(self):
-        run = self.make_run(settings=("singles_random", "singles_contiguous"))
+    def test_cli_png_pdf_output_root_groups_by_results_directory_and_assay(self):
+        self.results /= "kermut_experiment"
+        run = self.make_run(run_name="kermut_calibration", settings=("singles_random", "singles_contiguous"))
         folds = [with_error_calibration(fold) for fold in self.write_complete_setting(run)]
         self.write(run / "cv/singles_random/metrics.json", {"n_folds": 2, "fold_metrics": folds})
         other = self.make_run("assay_b", "nkn_second")
@@ -412,13 +413,37 @@ class CalibrationResultTests(unittest.TestCase):
             cwd=self.root, env=environment, capture_output=True, text=True, timeout=60,
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-        destination = output / run.parent.name / run.name
+        destination = output / "kermut_experiment" / "assay_a"
         for plot in ("interval_ece", "pair_ece", "ence"):
             self.assertEqual((destination / f"{plot}.png").read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             self.assertEqual((destination / f"{plot}.pdf").read_bytes()[:4], b"%PDF")
         self.assertTrue((destination / "calibration_summary.json").is_file())
-        self.assertFalse((output / "assay_b").exists())
+        self.assertFalse((output / "kermut_experiment" / "assay_b").exists())
+        self.assertFalse((destination / run.name).exists())
         self.assertFalse((run / "plots").exists())
+
+    @unittest.skipUnless(HAS_MATPLOTLIB, "matplotlib is required for plot rendering")
+    def test_multiple_runs_in_one_assay_keep_separate_files_and_summaries(self):
+        self.results /= "comparison"
+        runs = [self.make_run(run_name=name) for name in ("nkn_first", "kermut_second")]
+        for run in runs:
+            folds = [with_error_calibration(fold) for fold in self.write_complete_setting(run)]
+            self.write(run / "cv/singles_random/metrics.json", {"n_folds": 2, "fold_metrics": folds})
+        output = self.root / "exported"
+        first = plot_run(runs[0], output, formats=("png",), dpi=60)
+        original = {path: Path(path).read_bytes() for path in first["files"]}
+        second = plot_run(runs[1], output, formats=("png",), dpi=60)
+        destination = output / "comparison" / "assay_a"
+        for run, result in zip(runs, (first, second)):
+            self.assertEqual(Path(result["output_dir"]), destination)
+            expected = {f"{run.name}__{name}" for name in
+                        ("interval_ece.png", "pair_ece.png", "ence.png", "calibration_summary.json")}
+            self.assertEqual({Path(path).name for path in result["files"]}, expected)
+            summary = json.loads((destination / f"{run.name}__calibration_summary.json").read_text())
+            self.assertEqual(Path(summary["run_dir"]), run)
+            self.assertEqual({path.name for path in run.iterdir()}, {"config.json", "execution_plan.json", "cv"})
+        self.assertEqual(len(list(destination.iterdir())), 8)
+        self.assertEqual(original, {path: Path(path).read_bytes() for path in first["files"]})
 
 
 if __name__ == "__main__":

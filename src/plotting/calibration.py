@@ -466,7 +466,7 @@ def _render(run: dict, kind: str, destination: Path, formats, dpi: int) -> list[
         files = []
         try:
             for extension in formats:
-                path = destination / f"{kind}.{extension}"
+                path = destination / f"{run['file_prefix']}{kind}.{extension}"
                 fig.savefig(path, dpi=dpi, facecolor="white")
                 files.append(str(path))
         finally:
@@ -476,14 +476,23 @@ def _render(run: dict, kind: str, destination: Path, formats, dpi: int) -> list[
 
 def plot_run(run_dir: Path, output_dir: Path | None = None,
              formats=("png", "pdf"), dpi: int = 200) -> dict:
-    """Save under run/plots or custom-root/assay/model-run; return provenance."""
+    """Save under run/plots or custom-root/results-group/assay; return provenance."""
     if not formats or any(ext not in ("png", "pdf", "svg") for ext in formats):
         raise ValueError("Select at least one output format: png, pdf, svg")
     if isinstance(dpi, bool) or not isinstance(dpi, int) or dpi < 1:
         raise ValueError("dpi must be a positive integer")
     run = load_run(run_dir)
-    destination = (Path(output_dir).resolve() / run["assay"] / run["model"]
-                   if output_dir is not None else Path(run["run_dir"]) / "plots")
+    source = Path(run["run_dir"])
+    destination = source / "plots"
+    run["file_prefix"] = ""
+    if output_dir is not None:
+        destination = Path(output_dir).resolve() / source.parent.parent.name / run["assay"]
+        # Inspect all sibling runs, including ones excluded by --run-dir, so
+        # plotting them separately uses the same filenames as plotting together.
+        if any(path != source and path.is_dir()
+               and ((path / "cv").is_dir() or (path / "fit").is_dir())
+               for path in source.parent.iterdir()):
+            run["file_prefix"] = f"{run['model']}__"
     destination.mkdir(parents=True, exist_ok=True)
     run["output_dir"] = str(destination)
     run["aggregation"] = {
@@ -503,7 +512,7 @@ def plot_run(run_dir: Path, output_dir: Path | None = None,
         run["skipped_plots"]["ence"] = "No saved error_bin_stats; ENCE plots require per-fold RMV/RMSE bins."
     run["files"] = [file for kind in kinds
                     for file in _render(run, kind, destination, tuple(dict.fromkeys(formats)), dpi)]
-    report = destination / "calibration_summary.json"
+    report = destination / f"{run['file_prefix']}calibration_summary.json"
     run["files"].append(str(report))
     report.write_text(json.dumps(run, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     return run
@@ -514,7 +523,7 @@ def main(argv=None) -> int:
     parser.add_argument("--results-dir", type=Path, default=Path("results"), help="Root containing assay/model-run directories")
     parser.add_argument("--assay", action="append", help="Only this assay (repeatable)")
     parser.add_argument("--run-dir", type=Path, action="append", help="Explicit model-run directory (repeatable); bypasses discovery")
-    parser.add_argument("--output-dir", type=Path, help="Custom output root; saves under ROOT/assay/model-run (default: each run/plots)")
+    parser.add_argument("--output-dir", type=Path, help="Custom output root; saves under ROOT/results-directory-name/assay (default: each run/plots)")
     parser.add_argument("--formats", nargs="+", choices=("png", "pdf", "svg"), default=["png", "pdf"])
     parser.add_argument("--dpi", type=int, default=200)
     args = parser.parse_args(argv)

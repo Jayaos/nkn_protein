@@ -27,11 +27,14 @@ error_bin_stats are saved; older runs without those bins skip the ENCE plot.
   --assay ID           Restrict discovery to an assay; repeat for several.
   --run-dir PATH       Select a model-run directory; repeat for several.
   --output-dir PATH    Output root (default: PLOT_OUTPUT_DIR or plots).
+                      Saves under ROOT/results-directory-name/assay/.
   --formats png pdf    One or more output formats.
   --dpi INTEGER       Raster resolution (default: 200).
 
 Command-line paths override environment defaults. Relative paths use the
-repository root. A custom output root keeps separate assay/run directories.
+repository root. The results directory's final folder name groups the plots;
+--run-dir uses its enclosing results group. Multiple runs for one assay use
+run-prefixed filenames to keep their plots separate.
 This job reads existing results and does not run training.
 HELP
       exit 0 ;;
