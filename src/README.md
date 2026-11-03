@@ -515,29 +515,55 @@ Runs missing required setting metrics are still skipped and listed in
 `issues.csv`; inspect the summary `status` for fold-coverage or identity issues.
 The Python API supports the same option with `aggregate_results(..., all_runs=True)`.
 
-To print mean and standard deviation of Spearman across assays for the random,
-modulo, and contiguous singles settings plus their average, grouped by run prefix:
+To print mean and standard deviation of Spearman, MSE, ECE, ENCE, and uncertainty
+CV across assays for the random, modulo, and contiguous singles settings plus
+their average, grouped by run prefix:
 
 ```bash
 python src/reporting/summarize.py results/comparison_v1/aggregate/summary.csv
 ```
 
-This reads `avg_spearman` from complete CV rows, weights assays equally, and
-prints population standard deviation (`ddof=0`) across those values. It does
-not average the saved within-assay `std_spearman` column. Each setting shows
-the usable assay count and skipped row count; missing/non-finite/non-numeric
-scores and incomplete/invalid rows are skipped. No usable scores prints `N/A`;
-one usable assay has standard deviation zero. Numeric job IDs and optional
+The default tables use these saved columns:
+
+| Metric | Column in `summary.csv` |
+| --- | --- |
+| Spearman | `avg_spearman` |
+| MSE (training-standardized, pooled out-of-fold predictions) | `mse_oof_standardized` |
+| ECE (interval coverage) | `interval_ece` |
+| ENCE | `ence` |
+| Uncertainty CV | `uncertainty_cv` |
+
+Standardized MSE puts assays on comparable target scales. There is no fallback
+to raw MSE when it is missing. ECE, ENCE, and uncertainty CV use the saved means
+across folds. To select tables, use `--metrics` with their column names; original
+target-unit MSE (`mse_oof`) and pairwise ECE (`pair_ece`) are also available:
+
+```bash
+python src/reporting/summarize.py results/comparison_v1/aggregate/summary.csv --metrics avg_spearman
+python src/reporting/summarize.py results/comparison_v1/aggregate/summary.csv --metrics mse_oof_standardized interval_ece ence uncertainty_cv
+```
+
+This reads complete CV rows, weights assays equally, and prints population
+standard deviation (`ddof=0`) across each metric's values. It does not average
+the saved within-assay SD columns. Each metric and setting shows its own usable
+assay count and skipped row count; missing/non-finite/non-numeric values and
+incomplete/invalid rows are skipped independently. No usable values or a missing
+metric column prints `N/A`; one usable assay has standard deviation zero.
+Older results without saved metrics remain `N/A`: reporting does not recompute
+them from predictions or import the plotting script's recovered metrics.
+Numeric job IDs and optional
 array task suffixes are removed for grouping: for example,
 `nkn_esm2_proteinmpnn_singles_14521140` and
 `nkn_esm2_proteinmpnn_singles_14521255` share the group
 `nkn_esm2_proteinmpnn_singles`. Different prefixes remain separate. For repeated
-assays within a group and split, the highest numeric job ID with a valid score
-wins; superseded scores count as skipped so each assay contributes once.
+assays within a group and split, the highest numeric job ID with a valid value
+wins independently for each metric; different metrics can select different jobs
+when some values are missing. Superseded values count as skipped so each assay
+contributes once per metric.
 Names without numeric job IDs, including manual run names, are kept intact.
 The script only prints and creates no report files.
 
-Each run group also has an `average` row: compute `(random + modulo + contiguous) / 3`
+Each metric and run group also has an `average` row: compute `(random + modulo + contiguous) / 3`
 within each assay, then report the mean and population standard deviation of
 those assay averages. Only assays with valid values for all three settings
 contribute; `Skipped` in this row counts assays missing at least one valid setting.

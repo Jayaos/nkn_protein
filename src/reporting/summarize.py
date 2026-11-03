@@ -1,13 +1,15 @@
-"""Print Spearman statistics across assays from an aggregated summary.csv.
+"""Print prediction and calibration statistics across assays from summary.csv.
 
 Usage: python src/reporting/summarize.py results/EXPERIMENT/aggregate/summary.csv
 
-Each complete CV row contributes its avg_spearman with equal weight. Standard
-deviation is across assays (population SD, ddof=0), not the saved within-assay
-fold std_spearman. Runs sharing a prefix are grouped after removing numeric
-job/task suffixes. For repeated assays, use the latest valid job per split.
+Defaults: Spearman, training-standardized out-of-fold MSE, interval ECE, ENCE,
+and uncertainty CV. Each complete CV row contributes its saved metric with
+equal assay weight. Standard deviation is across assays (population SD,
+ddof=0), not the saved within-assay fold SD. Runs sharing a prefix are grouped
+after removing numeric job/task suffixes. For each metric independently, use
+the latest valid job per assay and split; missing metric columns yield N/A.
 The average row combines all three splits within each assay, then summarizes
-those per-assay averages. Only assays with three valid split scores contribute.
+those per-assay averages. Only assays with three valid values contribute.
 """
 
 import argparse
@@ -21,6 +23,18 @@ from statistics import fmean, pstdev
 
 SETTINGS = ("random", "modulo", "contiguous")
 SETTING_NAMES = {f"singles_{name}": name for name in SETTINGS}
+DEFAULT_METRICS = (
+    "avg_spearman", "mse_oof_standardized", "interval_ece", "ence", "uncertainty_cv",
+)
+METRIC_LABELS = {
+    "avg_spearman": "Spearman",
+    "mse_oof_standardized": "MSE (training-standardized)",
+    "interval_ece": "ECE (interval)",
+    "ence": "ENCE",
+    "uncertainty_cv": "Uncertainty CV",
+    "mse_oof": "MSE (original target units)",
+    "pair_ece": "Pair ECE",
+}
 
 
 def _run_group(run_id: str) -> tuple[str, int]:
@@ -30,15 +44,22 @@ def _run_group(run_id: str) -> tuple[str, int]:
     return (run_id[:match.start()], int(match[1])) if match else (run_id, -1)
 
 
-def summarize_csv(path: str | Path) -> list[dict]:
-    """Summarize finite avg_spearman values per run prefix and singles split."""
+def summarize_csv(path: str | Path, metric: str = "avg_spearman") -> list[dict]:
+    """Summarize one saved metric per run prefix and singles split.
+
+    Keep the Spearman default for Python callers. Missing columns and invalid
+    values are skipped independently for each metric, without substituting
+    another metric or mixing raw and standardized MSE.
+    """
+    if metric not in METRIC_LABELS:
+        raise ValueError(f"Unknown metric: {metric}")
     groups: dict[str, dict[str, dict[str, tuple[int, str, float]]]] = {}
     group_assays: dict[str, set[str]] = {}
     skipped: Counter = Counter()
     seen = set()
     with Path(path).open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
-        required = {"assay_id", "run_id", "setting", "avg_spearman"}
+        required = {"assay_id", "run_id", "setting"}
         missing = required - set(reader.fieldnames or [])
         if missing:
             raise ValueError(f"Missing required columns: {', '.join(sorted(missing))}")
@@ -63,7 +84,7 @@ def summarize_csv(path: str | Path) -> list[dict]:
                 skipped[group_id, setting] += 1
                 continue
             try:
-                value = float(row["avg_spearman"])
+                value = float(row.get(metric))
             except (TypeError, ValueError):
                 skipped[group_id, setting] += 1
                 continue
@@ -102,11 +123,8 @@ def summarize_csv(path: str | Path) -> list[dict]:
     return summary
 
 
-def print_summary(rows: list[dict]) -> None:
-    print("Spearman across assays: mean and population std (ddof=0) of avg_spearman.")
-    print("Grouped by run prefix; numeric job/task suffixes are ignored.")
-    print("Skipped: incomplete/invalid rows, missing/non-finite/non-numeric scores, or superseded jobs.")
-    print("Average combines the three settings per assay; its Skipped count is assays missing any valid setting.")
+def print_summary(rows: list[dict], metric: str = "avg_spearman") -> None:
+    print(f"\n{METRIC_LABELS[metric]}: mean and population std (ddof=0) across assays of {metric}.")
     if not rows:
         print("No random, modulo, or contiguous singles CV rows found.")
         return
@@ -124,12 +142,23 @@ def print_summary(rows: list[dict]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("summary_csv", type=Path, help="Path to an aggregated summary.csv")
+    parser.add_argument(
+        "--metrics", nargs="+", choices=tuple(METRIC_LABELS), default=DEFAULT_METRICS,
+        help="Saved CSV columns to summarize (default: %(default)s)",
+    )
     args = parser.parse_args()
     try:
-        rows = summarize_csv(args.summary_csv)
+        summaries = [(metric, summarize_csv(args.summary_csv, metric))
+                     for metric in dict.fromkeys(args.metrics)]
     except (OSError, UnicodeError, csv.Error, ValueError) as error:
         parser.error(str(error))
-    print_summary(rows)
+    print("Grouped by run prefix; numeric job/task suffixes are ignored; assays have equal weight.")
+    print("Each metric uses its latest valid job per assay and split independently.")
+    print("Skipped: incomplete/invalid rows, missing/non-finite/non-numeric values, or superseded jobs.")
+    print("Missing columns yield N/A. Average requires all three settings per assay, separately for each metric.")
+    print("Average Skipped counts assays missing any valid setting.")
+    for metric, rows in summaries:
+        print_summary(rows, metric)
 
 
 if __name__ == "__main__":
