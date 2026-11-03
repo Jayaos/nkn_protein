@@ -74,6 +74,28 @@ class ErrorCalibrationTests(unittest.TestCase):
         self.assertEqual(empty["error_bin_stats"], [])
         json.dumps([constant, singleton, small, empty], allow_nan=False)
 
+    def test_constant_fractional_variance_has_exact_zero_cv_and_calculated_ence(self):
+        for variance in (0.01, 0.3, 3.0):
+            for count in (3, 7):
+                with self.subTest(variance=variance, count=count):
+                    result = error_calibration(
+                        vector([i * math.sqrt(variance) for i in range(count)]),
+                        vector([0] * count), vector([variance] * count),
+                    )
+                    expected = abs(1 - math.sqrt(sum(i * i for i in range(count)) / count))
+                    self.assertAlmostEqual(result["ence"], expected)
+                    self.assertEqual(result["uncertainty_cv"], 0.0)
+                    self.assertEqual(result["n_error_bins"], 1)
+                    self.assertEqual(result["error_n_bins"], 5)
+                    self.assertEqual(result["error_bin_stats"][0]["count"], count)
+                    json.dumps(result, allow_nan=False)
+
+    def test_nearly_constant_variance_retains_bins_and_nonzero_cv(self):
+        result = error_calibration(vector([0, 1, 2]), vector([0, 0, 0]),
+                                   vector([1, 1 + 1e-12, 1 + 2e-12]))
+        self.assertGreater(result["n_error_bins"], 1)
+        self.assertGreater(result["uncertainty_cv"], 0)
+
     def test_invalid_inputs_and_bin_configuration_are_rejected(self):
         for variance in ([0, 1], [-1, 1], [math.inf, 1], [math.nan, 1], [1]):
             with self.subTest(variance=variance), self.assertRaises(ValueError):

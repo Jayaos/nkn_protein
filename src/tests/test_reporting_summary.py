@@ -136,11 +136,12 @@ class ReportingSummaryTests(unittest.TestCase):
             "interval_ece": ((.1, .2, .3), (.3, .4, .5)),
             "ence": ((.4, .6, .8), (.8, 1, 1.2)),
             "uncertainty_cv": ((0, .1, .2), (.2, .3, .4)),
+            "pair_ece": ((.05, .15, .25), (.15, .25, .35)),
         }
         rows = [
             self.row(assay, "nan" if assay == "a" else .5,
                      setting=f"singles_{setting}", n_variants=1 if assay == "a" else 999,
-                     mse_oof=9999, pair_ece=.99, std_ence=99, std_uncertainty_cv=99,
+                     mse_oof=9999, std_ence=99, std_uncertainty_cv=99,
                      **{metric: scores[index][split] for metric, scores in values.items()})
             for index, assay in enumerate(("a", "b"))
             for split, setting in enumerate(("random", "modulo", "contiguous"))
@@ -151,6 +152,7 @@ class ReportingSummaryTests(unittest.TestCase):
             ("interval_ece", .2, .1, .3, .1),
             ("ence", .6, .2, .8, .2),
             ("uncertainty_cv", .1, .1, .2, .1),
+            ("pair_ece", .1, .05, .2, .05),
         ):
             with self.subTest(metric=metric):
                 summary = summarize_csv(self.path, metric)
@@ -238,10 +240,10 @@ class ReportingSummaryTests(unittest.TestCase):
         self.assertEqual(summarize_csv(self.path, "ence")[0]["mean"], .2)
         self.assertIsNone(summarize_csv(self.path)[0]["mean"])
 
-    def test_cli_defaults_to_all_five_metrics_without_writing_files(self):
+    def test_cli_defaults_to_all_six_metrics_without_writing_files(self):
         self.write([self.row("a", .2, avg_spearman=-.8, spearman_oof=.9,
                              mse_oof_standardized=2, interval_ece=.1,
-                             ence=.3, uncertainty_cv=.4)])
+                             ence=.3, uncertainty_cv=.4, pair_ece=.125)])
         original = self.path.read_bytes()
         output = io.StringIO()
         with patch("sys.argv", ["summarize", str(self.path)]), redirect_stdout(output):
@@ -251,9 +253,11 @@ class ReportingSummaryTests(unittest.TestCase):
             self.assertIn(f"across assays of {metric}.", output.getvalue())
         self.assertIn("2.000000", output.getvalue())
         self.assertIn("0.200000", output.getvalue())
+        self.assertIn("PairECE: mean", output.getvalue())
+        self.assertIn("0.125000", output.getvalue())
         self.assertNotIn("-0.800000", output.getvalue())
         self.assertNotIn("avg_spearman", output.getvalue())
-        self.assertEqual(sum(line.startswith("average ") for line in output.getvalue().splitlines()), 5)
+        self.assertEqual(sum(line.startswith("average ") for line in output.getvalue().splitlines()), 6)
         self.assertEqual(self.path.read_bytes(), original)
         self.assertEqual(list(self.path.parent.iterdir()), [self.path])
 

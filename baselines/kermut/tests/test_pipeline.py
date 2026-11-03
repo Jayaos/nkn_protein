@@ -4,9 +4,11 @@ import contextlib
 from dataclasses import replace
 import io
 import json
+import math
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -16,6 +18,7 @@ from baselines.kermut.runner import run_extrapolation
 from baselines.kermut.training import FittedKermut
 from config import EvaluationConfig
 from fixtures import make_cache, read_csv, write_csv
+from reporting import aggregate_results
 
 
 class PipelineTests(unittest.TestCase):
@@ -44,6 +47,52 @@ class PipelineTests(unittest.TestCase):
             except SystemExit as error:
                 status = error.code
         return status, stdout.getvalue(), stderr.getvalue()
+
+    def test_constant_variance_calibration_is_saved_and_exported(self):
+        variance = .01
+        predict = FittedKermut.predict
+
+        def constant_variance(fitted, test):
+            prediction = predict(fitted, test)
+            covariance = torch.eye(test.num_variants, dtype=prediction.mean.dtype,
+                                   device=prediction.mean.device) * variance
+            return replace(prediction, observation_covariance=covariance,
+                           observation_covariance_standardized=covariance / fitted.transform.target_scale.square())
+
+        results = self.root / "results"
+        output = results / self.batch.assay_id / "kermut_constant_1" / "cv" / "singles_random"
+        with patch.object(FittedKermut, "predict", constant_variance):
+            status, _, errors = self.invoke("cv", output, ["--setting", "singles_random", "--folds", self.folds])
+        self.assertEqual(status, 0, errors)
+        aggregate = json.loads((output / "metrics.json").read_text())
+        expected_fold_ences = []
+        for fold in range(5):
+            directory = output / f"fold_{fold}"
+            rows = read_csv(directory / "predictions.csv")
+            self.assertEqual({float(row["observation_variance"]) for row in rows}, {variance})
+            rmse = math.sqrt(sum((float(row["target"]) - float(row["mean"])) ** 2
+                                 for row in rows) / len(rows))
+            expected_ence = abs(math.sqrt(variance) - rmse) / math.sqrt(variance)
+            expected_fold_ences.append(expected_ence)
+            metrics = json.loads((directory / "metrics.json").read_text())
+            self.assertEqual(metrics["error_n_bins"], 5)
+            self.assertEqual(metrics["n_error_bins"], 1)
+            self.assertEqual(metrics["uncertainty_cv"], 0)
+            self.assertTrue(math.isfinite(metrics["ence"]))
+            self.assertAlmostEqual(metrics["ence"], expected_ence)
+            self.assertEqual(len(metrics["error_bin_stats"]), 1)
+            self.assertEqual(metrics["error_bin_stats"][0]["count"], len(rows))
+            self.assertEqual(aggregate["fold_metrics"][fold], metrics)
+        self.assertEqual(aggregate["uncertainty_cv"], 0)
+        self.assertAlmostEqual(aggregate["ence"], sum(expected_fold_ences) / 5)
+        report = results / "aggregate"
+        aggregate_results(results, report)
+        exported = read_csv(report / "folds.csv")
+        self.assertEqual(len(exported), 5)
+        for row in exported:
+            self.assertEqual((row["error_n_bins"], row["n_error_bins"]), ("5", "1"))
+            self.assertEqual(float(row["uncertainty_cv"]), 0)
+            self.assertAlmostEqual(float(row["ence"]), expected_fold_ences[int(row["fold"])])
 
     def test_all_six_settings_use_published_partitions_and_expected_evaluation_domains(self):
         self.config = replace(self.config, evaluation=replace(

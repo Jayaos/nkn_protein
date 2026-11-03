@@ -3,7 +3,7 @@
 Usage: python src/reporting/summarize.py results/EXPERIMENT/aggregate/summary.csv
 
 Defaults: training-standardized out-of-fold Spearman and MSE, interval ECE,
-ENCE, and uncertainty CV. Each complete CV row contributes its saved metric with
+ENCE, uncertainty CV, and PairECE. Each complete CV row contributes its saved metric with
 equal assay weight. Standard deviation is across assays (population SD,
 ddof=0), not the saved within-assay fold SD. Runs sharing a prefix are grouped
 after removing numeric job/task suffixes. For each metric independently, use
@@ -25,6 +25,7 @@ SETTINGS = ("random", "modulo", "contiguous")
 SETTING_NAMES = {f"singles_{name}": name for name in SETTINGS}
 DEFAULT_METRICS = (
     "spearman_oof_standardized", "mse_oof_standardized", "interval_ece", "ence", "uncertainty_cv",
+    "pair_ece",
 )
 METRIC_LABELS = {
     "spearman_oof_standardized": "Spearman (pooled OOF, training-standardized)",
@@ -34,7 +35,7 @@ METRIC_LABELS = {
     "uncertainty_cv": "Uncertainty CV",
     "avg_spearman": "Spearman (fold mean)",
     "mse_oof": "MSE (original target units)",
-    "pair_ece": "Pair ECE",
+    "pair_ece": "PairECE",
 }
 
 

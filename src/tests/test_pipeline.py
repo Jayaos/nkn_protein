@@ -3,6 +3,7 @@
 import csv
 from dataclasses import replace
 import json
+import math
 from pathlib import Path
 import tempfile
 import unittest
@@ -18,6 +19,7 @@ from experiments import run_cv, run_extrapolation, run_predict
 from experiments.runner import _aggregate_evaluations
 from gp.linalg import NumericalError
 from gp.training import FittedGP, fit_gp
+from reporting import aggregate_results
 
 
 def synthetic_batch():
@@ -71,6 +73,53 @@ class PipelineTests(unittest.TestCase):
         self.batch = synthetic_batch()
         self.config = small_config()
         self.folds = torch.tensor([0, 1, 2, 0, 1, 2, 0, 1])
+
+    def test_constant_variance_calibration_is_saved_and_exported(self):
+        variance = .01
+        batch = self.batch.select([0, 1, 2, 3, 5, 6])
+        folds = torch.tensor([0, 1, 0, 1, 0, 1])
+        config = replace(self.config, evaluation=replace(self.config.evaluation, n_folds=2))
+        predict = FittedGP.predict
+
+        def constant_variance(fitted, test):
+            prediction = predict(fitted, test)
+            covariance = torch.eye(test.num_variants, dtype=prediction.mean.dtype,
+                                   device=prediction.mean.device) * variance
+            return replace(prediction, observation_covariance=covariance,
+                           observation_covariance_standardized=covariance / fitted.transform.target_scale.square())
+
+        output = self.root / self.batch.assay_id / "nkn_constant_1" / "cv" / "singles_random"
+        with patch.object(FittedGP, "predict", constant_variance):
+            run_cv(batch, folds, config, output, setting="singles_random")
+        aggregate = json.loads((output / "metrics.json").read_text())
+        expected_fold_ences = []
+        for fold in range(2):
+            directory = output / f"fold_{fold}"
+            rows = read_predictions(directory / "predictions.csv")
+            self.assertEqual({float(row["observation_variance"]) for row in rows}, {variance})
+            rmse = math.sqrt(sum((float(row["target"]) - float(row["mean"])) ** 2
+                                 for row in rows) / len(rows))
+            expected_ence = abs(math.sqrt(variance) - rmse) / math.sqrt(variance)
+            expected_fold_ences.append(expected_ence)
+            metrics = json.loads((directory / "metrics.json").read_text())
+            self.assertEqual(metrics["error_n_bins"], 5)
+            self.assertEqual(metrics["n_error_bins"], 1)
+            self.assertEqual(metrics["uncertainty_cv"], 0)
+            self.assertTrue(math.isfinite(metrics["ence"]))
+            self.assertAlmostEqual(metrics["ence"], expected_ence)
+            self.assertEqual(len(metrics["error_bin_stats"]), 1)
+            self.assertEqual(metrics["error_bin_stats"][0]["count"], len(rows))
+            self.assertEqual(aggregate["fold_metrics"][fold], metrics)
+        self.assertEqual(aggregate["uncertainty_cv"], 0)
+        self.assertAlmostEqual(aggregate["ence"], sum(expected_fold_ences) / 2)
+        report = self.root / "aggregate"
+        aggregate_results(self.root, report)
+        exported = read_predictions(report / "folds.csv")
+        self.assertEqual(len(exported), 2)
+        for row in exported:
+            self.assertEqual((row["error_n_bins"], row["n_error_bins"]), ("5", "1"))
+            self.assertEqual(float(row["uncertainty_cv"]), 0)
+            self.assertAlmostEqual(float(row["ence"]), expected_fold_ences[int(row["fold"])])
 
     def test_pooled_mse_weights_variants_and_uses_each_folds_training_scale(self):
         # Fold 0 has one test variant and scale 1; fold 1 has two and scale 4.

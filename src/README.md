@@ -515,8 +515,8 @@ Runs missing required setting metrics are still skipped and listed in
 `issues.csv`; inspect the summary `status` for fold-coverage or identity issues.
 The Python API supports the same option with `aggregate_results(..., all_runs=True)`.
 
-To print mean and standard deviation of Spearman, MSE, ECE, ENCE, and uncertainty
-CV across assays for the random, modulo, and contiguous singles settings plus
+To print mean and standard deviation of Spearman, MSE, ECE, ENCE, uncertainty
+CV, and PairECE across assays for the random, modulo, and contiguous singles settings plus
 their average, grouped by run prefix:
 
 ```bash
@@ -532,19 +532,21 @@ The default tables use these saved columns:
 | ECE (interval coverage) | `interval_ece` |
 | ENCE | `ence` |
 | Uncertainty CV | `uncertainty_cv` |
+| PairECE (pairwise ranking calibration) | `pair_ece` |
 
 Spearman uses one correlation across the pooled held-out predictions in
 training-standardized units. Mean fold Spearman remains available by selecting
 `avg_spearman` explicitly. Standardized MSE puts assays on comparable target
 scales. Missing standardized metrics do not fall back to fold-mean Spearman or
-original-unit metrics. ECE, ENCE, and uncertainty CV use the saved means across
+original-unit metrics. ECE, ENCE, uncertainty CV, and PairECE use the saved means across
 folds. To select tables, use `--metrics` with their column names; original
-target-unit MSE (`mse_oof`) and pairwise ECE (`pair_ece`) are also available:
+target-unit MSE (`mse_oof`) is also available:
 
 ```bash
 python src/reporting/summarize.py results/comparison_v1/aggregate/summary.csv --metrics avg_spearman
 python src/reporting/summarize.py results/comparison_v1/aggregate/summary.csv --metrics spearman_oof_standardized
 python src/reporting/summarize.py results/comparison_v1/aggregate/summary.csv --metrics mse_oof_standardized interval_ece ence uncertainty_cv
+python src/reporting/summarize.py results/comparison_v1/aggregate/summary.csv --metrics pair_ece
 ```
 
 This reads complete CV rows, weights assays equally, and prints population
@@ -1111,7 +1113,12 @@ artifacts and an ID-ordered out-of-fold prediction table.
   interpolation, right-closed intervals, and dropped duplicate edges as in
   the reference code's `pandas.qcut`. Constant variances form one bin; empty
   groups have null ENCE. `error_n_bins` and `n_error_bins` record requested and
-  populated bin counts, which can differ with ties or small groups.
+  populated bin counts, which can differ with ties or small groups. For
+  constant positive variance across at least two variants, both NKN and Kermut
+  save the calculated one-bin `ence = abs(RMV - RMSE) / RMV`, `n_error_bins: 1`,
+  and exactly `uncertainty_cv: 0.0`. These fields appear in each fold's
+  `metrics.json` and the reporting `folds.csv`; `error_n_bins` still records
+  the requested bin count (default 5).
 * `uncertainty_cv` is the paper's coefficient of variation of predictive
   standard deviations: `std(sqrt(variance), ddof=1) / mean(sqrt(variance))`.
   It is zero for constant uncertainty and null for fewer than two variants.

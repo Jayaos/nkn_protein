@@ -60,7 +60,8 @@ def error_calibration(
 
     Variance quantiles use linear interpolation, right-closed intervals, and
     dropped duplicate edges, matching pandas.qcut(..., duplicates='drop').
-    Constant variances form one bin; empty bins never contribute to ENCE.
+    Constant variances form one bin and have exactly zero CV for two or more
+    variants; empty bins never contribute to ENCE.
     RMV/RMSE use the supplied target scale. Scalars are invariant to a common
     change of target units. A singleton has defined ENCE but undefined CV.
     """
@@ -93,7 +94,15 @@ def error_calibration(
         bins.append({"bin": index, "count": int(selected.sum().item()),
                      "rmv": rmv, "rmse": rmse, "relative_error": relative_error})
     sigma = variance.sqrt()
-    cv = float((sigma.std(unbiased=True) / sigma.mean()).item()) if sigma.numel() > 1 else None
+    if sigma.numel() < 2:
+        cv = None
+    elif edges.numel() == 1:
+        # Equal variances imply zero spread. A reduction over identical,
+        # inexact floating-point standard deviations can otherwise leave a
+        # tiny positive residual. Only exact equality takes this branch.
+        cv = 0.0
+    else:
+        cv = float((sigma.std(unbiased=True) / sigma.mean()).item())
     if cv is not None and not math.isfinite(cv):
         raise ValueError("uncertainty coefficient of variation must be finite")
     result.update(ence=sum(row["relative_error"] for row in bins) / len(bins),
