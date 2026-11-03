@@ -144,15 +144,20 @@ def evaluate_fold(
     if not bool((diagonal > 0).all()):
         raise ValueError("observation_covariance must have positive diagonal values")
 
-    levels = [float(q) for q in coverage_levels]
-    if not levels or any(not math.isfinite(q) or not 0 < q < 1 for q in levels):
-        raise ValueError("coverage_levels must be nonempty and strictly between 0 and 1")
+    levels = list(coverage_levels)
+    if any(isinstance(q, bool) for q in levels):
+        raise ValueError("coverage_levels must contain numbers, not booleans")
+    levels = [float(q) for q in levels]
+    if not levels or any(not math.isfinite(q) or not 0 <= q <= 1 for q in levels):
+        raise ValueError("coverage_levels must be nonempty, finite, and between 0 and 1 inclusive")
     absolute_errors = (observed - means).abs()
     standard_deviations = diagonal.sqrt()
     coverage: list[dict[str, float]] = []
     for q in levels:
         # sqrt(2) erfinv(q) equals Phi^-1((1+q)/2) without the addition
         # rounding to one for representable coverage levels very close to one.
+        # q=0 has zero width (exact matches count); q=1 has infinite width.
+        # Strictly positive variances make both endpoint intervals well-defined.
         z = math.sqrt(2.0) * torch.erfinv(means.new_tensor(q))
         empirical = float(
             (absolute_errors <= z * standard_deviations)

@@ -527,19 +527,23 @@ The default tables use these saved columns:
 
 | Metric | Column in `summary.csv` |
 | --- | --- |
-| Spearman | `avg_spearman` |
+| Spearman (training-standardized, pooled out-of-fold predictions) | `spearman_oof_standardized` |
 | MSE (training-standardized, pooled out-of-fold predictions) | `mse_oof_standardized` |
 | ECE (interval coverage) | `interval_ece` |
 | ENCE | `ence` |
 | Uncertainty CV | `uncertainty_cv` |
 
-Standardized MSE puts assays on comparable target scales. There is no fallback
-to raw MSE when it is missing. ECE, ENCE, and uncertainty CV use the saved means
-across folds. To select tables, use `--metrics` with their column names; original
+Spearman uses one correlation across the pooled held-out predictions in
+training-standardized units. Mean fold Spearman remains available by selecting
+`avg_spearman` explicitly. Standardized MSE puts assays on comparable target
+scales. Missing standardized metrics do not fall back to fold-mean Spearman or
+original-unit metrics. ECE, ENCE, and uncertainty CV use the saved means across
+folds. To select tables, use `--metrics` with their column names; original
 target-unit MSE (`mse_oof`) and pairwise ECE (`pair_ece`) are also available:
 
 ```bash
 python src/reporting/summarize.py results/comparison_v1/aggregate/summary.csv --metrics avg_spearman
+python src/reporting/summarize.py results/comparison_v1/aggregate/summary.csv --metrics spearman_oof_standardized
 python src/reporting/summarize.py results/comparison_v1/aggregate/summary.csv --metrics mse_oof_standardized interval_ece ence uncertainty_cv
 ```
 
@@ -747,7 +751,7 @@ training, enabled-kernel, and evaluation hyperparameters:
 | `training.max_train_variants` | Optional training-set size guard; `null` disables the guard |
 | `model.branches.<branch>.copies` | Number of copies of each primitive kernel in that branch |
 | `model.branches.<branch>.widths`, `model.final_widths` | Branch and final NKN layer widths |
-| `evaluation.coverage_levels` | Nominal interval coverage levels for Interval ECE |
+| `evaluation.coverage_levels` | Nominal interval coverage levels for Interval ECE; default 11 levels from `0.0` through `1.0` in steps of `0.1`, including both endpoints |
 | `evaluation.n_bins`, `evaluation.pair_block_size` | PairECE confidence bins and computation block size |
 | `evaluation.n_folds` | Number of folds; the published-fold batch job requires `5` |
 
@@ -995,7 +999,7 @@ just the branches/settings being changed; omitted settings use defaults. For exa
     },
     "final_widths": [8, 4, 4, 2, 1]
   },
-  "evaluation": {"coverage_levels": [0.5, 0.8, 0.9, 0.95], "n_bins": 10},
+  "evaluation": {"coverage_levels": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0], "n_bins": 10},
   "training": {"max_train_variants": 5000},
   "device": "cpu"
 }
@@ -1074,10 +1078,14 @@ artifacts and an ID-ordered out-of-fold prediction table.
 * `spearman_oof` uses combined original-unit out-of-fold means.
 * `spearman_oof_standardized` pools targets and means standardized separately
   using each fold's training target mean and standard deviation, following
-  Kermut's pooled Spearman aggregation pattern. The existing NKN transformations
-  use population standard deviation (`ddof=0`), while our Kermut baseline and
-  Kermut's reference use sample standard deviation (`ddof=1`). This distinction
-  also applies to standardized MSE; NKN is not identical numerical reproduction.
+  Kermut's pooled Spearman aggregation pattern. Both NKN and our Kermut baseline
+  use population standard deviation (`ddof=0`) for new fits, matching ProteinNPT's
+  supervised ProteinGym preprocessing. This deliberately differs from the
+  original Kermut implementation's sample standard deviation (`ddof=1`), and
+  also applies to standardized MSE. Historical checkpoints retain their saved
+  normalization when loaded. Existing predictions and metrics are not recomputed
+  by this change or by reporting; rerun training to obtain results from the new
+  normalization.
   Prediction CSVs retain both original and standardized targets and predictions.
 * `avg_spearman` and `std_spearman` summarize the individual fold correlations,
   with equal fold weights and population standard deviation (`ddof=0`). Undefined
@@ -1086,6 +1094,13 @@ artifacts and an ID-ordered out-of-fold prediction table.
   deviation is zero. These fields appear in each CV `metrics.json` and CLI summary.
 * Interval ECE is computed in each nonempty held-out fold and then equally
   averaged. For mixed runs it is computed separately within each mutation depth.
+  The default grid has 11 nominal coverage levels: `0.0, 0.1, ..., 0.9, 1.0`,
+  including both endpoints, matching Kermut's confidence-interval grid. ECE
+  averages the absolute coverage errors over all 11 levels. Existing saved
+  coverage curves, ECE values, and their plots retain the grid used during
+  evaluation; rerunning reporting or plotting does not change that grid.
+  Updating older results requires reevaluating their saved predictions at the
+  new levels.
 * `ence` implements expected normalized calibration error from
   [Kermut Appendix J.2](https://arxiv.org/pdf/2407.00002#page=27).
   Within each fold, observation-predictive variances (including observation

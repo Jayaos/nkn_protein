@@ -1,6 +1,7 @@
 """All six ProteinGym settings through the baseline CLI and shared evaluator."""
 
 import contextlib
+from dataclasses import replace
 import io
 import json
 from pathlib import Path
@@ -13,6 +14,7 @@ import torch
 from baselines.kermut.cli import main
 from baselines.kermut.runner import run_extrapolation
 from baselines.kermut.training import FittedKermut
+from config import EvaluationConfig
 from fixtures import make_cache, read_csv, write_csv
 
 
@@ -44,6 +46,9 @@ class PipelineTests(unittest.TestCase):
         return status, stdout.getvalue(), stderr.getvalue()
 
     def test_all_six_settings_use_published_partitions_and_expected_evaluation_domains(self):
+        self.config = replace(self.config, evaluation=replace(
+            self.config.evaluation, coverage_levels=EvaluationConfig().coverage_levels))
+        self.config_path.write_text(json.dumps(self.config.to_dict()), encoding="utf-8")
         settings = ("singles_random", "singles_modulo", "singles_contiguous", "mixed_random_singles", "mixed_random_doubles", "single_to_double")
         for setting in settings:
             with self.subTest(setting=setting):
@@ -72,6 +77,9 @@ class PipelineTests(unittest.TestCase):
                         ) / len(selected)
                         self.assertAlmostEqual(domain_metrics[f"{prefix}{suffix}"], expected_mse)
                 if setting == "single_to_double":
+                    self.assertEqual([row["nominal"] for row in metrics["coverage"]],
+                                     list(self.config.evaluation.coverage_levels))
+                    self.assertEqual(metrics["coverage"][-1]["empirical"], 1)
                     summary = json.loads((output / "run_summary.json").read_text())
                     self.assertEqual(summary["n_train"], 8)
                     self.assertEqual(summary["n_unused_singles"], 2)
@@ -95,6 +103,9 @@ class PipelineTests(unittest.TestCase):
                     for fold in range(5):
                         fitted = FittedKermut.load(output / f"fold_{fold}/checkpoint.pt")
                         fold_metrics = json.loads((output / f"fold_{fold}/metrics.json").read_text())
+                        self.assertEqual([row["nominal"] for row in fold_metrics["coverage"]],
+                                         list(self.config.evaluation.coverage_levels))
+                        self.assertEqual(fold_metrics["coverage"][-1]["empirical"], 1)
                         for bin_stats in fold_metrics["error_bin_stats"]:
                             self.assertAlmostEqual(bin_stats["rmv_standardized"],
                                                    bin_stats["rmv"] / fitted.transform.target_scale.item())
@@ -102,6 +113,8 @@ class PipelineTests(unittest.TestCase):
                         self.assertEqual(set(fitted.train.variant_ids), expected_ids)
                         summary = json.loads((output / f"fold_{fold}/fit_summary.json").read_text())
                         self.assertEqual(summary["model"], "kermut")
+                        self.assertEqual(summary["target_standardization"], "training_population_std")
+                        self.assertEqual(summary["target_standardization_ddof"], 0)
                         self.assertEqual(summary["checkpoint_selection"], "final_iterate")
                         self.assertEqual(summary["optimizer_updates"], 2)
                     if setting.startswith("mixed_"):

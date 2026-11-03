@@ -155,6 +155,7 @@ class PipelineTests(unittest.TestCase):
                                                    "fold_cleanup_complete")])
 
     def test_cv_artifacts_and_reloaded_out_of_fold_predictions(self):
+        self.config.evaluation = replace(self.config.evaluation, coverage_levels=EvaluationConfig().coverage_levels)
         output = self.root / "cv"
         result = run_cv(self.batch, self.folds, self.config, output, split_source="provided")
         self.assertEqual(result["n_folds"], 3)
@@ -201,6 +202,9 @@ class PipelineTests(unittest.TestCase):
             torch.testing.assert_close(prediction.observation_covariance.diagonal(), expected_variances, rtol=1e-12, atol=1e-12)
             expected_mse = (test.targets - prediction.mean).square().mean().item()
             fold_metrics = json.loads((fold_output / "metrics.json").read_text())
+            self.assertEqual([row["nominal"] for row in fold_metrics["coverage"]],
+                             list(self.config.evaluation.coverage_levels))
+            self.assertEqual(fold_metrics["coverage"][-1]["empirical"], 1)
             self.assertAlmostEqual(fold_metrics["mse"], expected_mse)
             self.assertAlmostEqual(
                 fold_metrics["mse_standardized"], expected_mse / fitted.transform.target_scale.square().item()

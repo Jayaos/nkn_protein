@@ -199,6 +199,16 @@ class CalibrationSummaryTests(unittest.TestCase):
         self.assertEqual([row["nominal"] for row in summary["coverage"]], [0.5, 0.9])
         self.assertEqual(summary["interval_ece"], expected["interval_ece"])
 
+    def test_coverage_endpoints_are_preserved_in_plot_summaries(self):
+        fold = fold_metrics(0)
+        fold["coverage"] = [{"nominal": q / 10, "empirical": q / 10} for q in range(11)]
+        fold["interval_ece"] = 0
+        summary = summarize_setting([fold])
+        self.assertEqual([row["nominal"] for row in summary["coverage"]], [q / 10 for q in range(11)])
+        self.assertEqual(summary["coverage"][0]["empirical"], 0)
+        self.assertEqual(summary["coverage"][-1]["empirical"], 1)
+        self.assertEqual(summary["interval_ece"]["mean"], 0)
+
     def test_duplicate_coverage_levels_are_rejected_even_if_unsorted(self):
         first = fold_metrics(0)
         first["coverage"] = [first["coverage"][1], first["coverage"][0], deepcopy(first["coverage"][1])]

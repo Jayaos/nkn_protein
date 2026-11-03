@@ -2,10 +2,12 @@
 
 import json
 import math
+from statistics import NormalDist
 import unittest
 
 import torch
 
+from config import EvaluationConfig
 from evaluation import aggregate_folds, evaluate_fold, mse, spearman
 from evaluation.metrics import _confidence_bin_indices
 
@@ -15,6 +17,42 @@ def vector(values):
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_ece_default_grid_matches_independent_gaussian_intervals(self):
+        levels = EvaluationConfig().coverage_levels
+        self.assertEqual(levels, tuple(index / 10 for index in range(11)))
+        targets = vector([0, .3, .7, 1.1, 1.8, 3])
+        means = torch.zeros_like(targets)
+        variance = vector([1, .25, 1, 2, 4, 1])
+        result = evaluate_fold(targets, means, torch.diag(variance), levels, 4)
+        expected = []
+        for level in levels:
+            width = NormalDist().inv_cdf((1 + level) / 2) if level < 1 else math.inf
+            observed = sum(abs(y) <= width * math.sqrt(v)
+                           for y, v in zip(targets.tolist(), variance.tolist())) / len(targets)
+            expected.append(observed)
+        self.assertEqual([row["nominal"] for row in result["coverage"]], list(levels))
+        self.assertEqual([row["empirical"] for row in result["coverage"]], expected)
+        self.assertEqual(result["coverage"][0]["empirical"], 1 / 6)
+        self.assertEqual(result["coverage"][-1]["empirical"], 1)
+        self.assertAlmostEqual(result["interval_ece"],
+                               sum(abs(observed - level) for observed, level in zip(expected, levels)) / 11)
+        json.dumps(result, allow_nan=False)
+
+    def test_ece_includes_both_endpoints_in_the_average(self):
+        # A one-SD residual is outside intervals through 60% and inside 70%+.
+        result = evaluate_fold(vector([1]), vector([0]), torch.eye(1), EvaluationConfig().coverage_levels, 1)
+        self.assertAlmostEqual(result["interval_ece"], 2.7 / 11)
+        # The zero-width interval contains an observation exactly at the mean.
+        exact = evaluate_fold(vector([0]), vector([0]), torch.eye(1), [0, 1], 1)
+        self.assertEqual([row["empirical"] for row in exact["coverage"]], [1, 1])
+        self.assertEqual(exact["interval_ece"], .5)
+
+    def test_coverage_config_accepts_endpoints_and_rejects_invalid_levels(self):
+        self.assertEqual(EvaluationConfig(coverage_levels=(0, 1)).coverage_levels, (0, 1))
+        for levels in ([], [-.1], [1.1], [math.nan], [math.inf], [False], [True], [0, 0]):
+            with self.subTest(levels=levels), self.assertRaises(ValueError):
+                EvaluationConfig(coverage_levels=levels)
+
     def test_mse_uses_squared_errors_and_supports_singletons_and_empty_inputs(self):
         self.assertEqual(mse(vector([1, 3]), vector([2, 1])), 2.5)
         self.assertEqual(mse(vector([3]), vector([1])), 4.0)
@@ -178,7 +216,7 @@ class EvaluationTests(unittest.TestCase):
         ):
             with self.subTest(covariance=covariance), self.assertRaises(ValueError):
                 evaluate_fold(vector([0, 1]), vector([0, 1]), covariance, [0.5], 2)
-        for levels in ([], [0], [1], [math.nan]):
+        for levels in ([], [-.1], [1.1], [math.nan], [math.inf], [False], [True]):
             with self.subTest(levels=levels), self.assertRaises(ValueError):
                 evaluate_fold(vector([0, 1]), vector([0, 1]), torch.eye(2), levels, 2)
         for bins in (0, -1, True, 1.5):

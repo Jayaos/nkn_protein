@@ -2,8 +2,8 @@
 
 Usage: python src/reporting/summarize.py results/EXPERIMENT/aggregate/summary.csv
 
-Defaults: Spearman, training-standardized out-of-fold MSE, interval ECE, ENCE,
-and uncertainty CV. Each complete CV row contributes its saved metric with
+Defaults: training-standardized out-of-fold Spearman and MSE, interval ECE,
+ENCE, and uncertainty CV. Each complete CV row contributes its saved metric with
 equal assay weight. Standard deviation is across assays (population SD,
 ddof=0), not the saved within-assay fold SD. Runs sharing a prefix are grouped
 after removing numeric job/task suffixes. For each metric independently, use
@@ -24,14 +24,15 @@ from statistics import fmean, pstdev
 SETTINGS = ("random", "modulo", "contiguous")
 SETTING_NAMES = {f"singles_{name}": name for name in SETTINGS}
 DEFAULT_METRICS = (
-    "avg_spearman", "mse_oof_standardized", "interval_ece", "ence", "uncertainty_cv",
+    "spearman_oof_standardized", "mse_oof_standardized", "interval_ece", "ence", "uncertainty_cv",
 )
 METRIC_LABELS = {
-    "avg_spearman": "Spearman",
+    "spearman_oof_standardized": "Spearman (pooled OOF, training-standardized)",
     "mse_oof_standardized": "MSE (training-standardized)",
     "interval_ece": "ECE (interval)",
     "ence": "ENCE",
     "uncertainty_cv": "Uncertainty CV",
+    "avg_spearman": "Spearman (fold mean)",
     "mse_oof": "MSE (original target units)",
     "pair_ece": "Pair ECE",
 }
@@ -44,12 +45,12 @@ def _run_group(run_id: str) -> tuple[str, int]:
     return (run_id[:match.start()], int(match[1])) if match else (run_id, -1)
 
 
-def summarize_csv(path: str | Path, metric: str = "avg_spearman") -> list[dict]:
+def summarize_csv(path: str | Path, metric: str = "spearman_oof_standardized") -> list[dict]:
     """Summarize one saved metric per run prefix and singles split.
 
-    Keep the Spearman default for Python callers. Missing columns and invalid
-    values are skipped independently for each metric, without substituting
-    another metric or mixing raw and standardized MSE.
+    Default to pooled Spearman in training-standardized units. Missing columns
+    and invalid values are skipped independently for each metric, without
+    substituting fold-mean Spearman or metrics in original target units.
     """
     if metric not in METRIC_LABELS:
         raise ValueError(f"Unknown metric: {metric}")
@@ -123,7 +124,7 @@ def summarize_csv(path: str | Path, metric: str = "avg_spearman") -> list[dict]:
     return summary
 
 
-def print_summary(rows: list[dict], metric: str = "avg_spearman") -> None:
+def print_summary(rows: list[dict], metric: str = "spearman_oof_standardized") -> None:
     print(f"\n{METRIC_LABELS[metric]}: mean and population std (ddof=0) across assays of {metric}.")
     if not rows:
         print("No random, modulo, or contiguous singles CV rows found.")

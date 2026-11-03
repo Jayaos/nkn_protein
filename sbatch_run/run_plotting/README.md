@@ -135,7 +135,11 @@ directory. The shared Python command supports both model families when
 
 - **Interval ECE:** nominal interval coverage versus observed coverage, with an
   ideal diagonal, individual fold curves, and equal-fold means with one sample
-  standard deviation across folds.
+  standard deviation across folds. New evaluations default to 11 nominal
+  coverage levels from `0.0` through `1.0` in steps of `0.1`, including both
+  endpoints. Plots use the saved coverage grid and ECE: older results retain
+  their original grid until their predictions are reevaluated. Rerunning the
+  plotting job alone does not migrate those saved metrics.
 - **Pair ECE:** mean ordering confidence versus ordering accuracy in each saved
   confidence bin. Points average the folds with pairs in that bin equally;
   horizontal and vertical error bars show one sample standard deviation. The

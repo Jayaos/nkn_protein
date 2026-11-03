@@ -58,7 +58,8 @@ class ParallelKermutTests(unittest.TestCase):
                         torch.testing.assert_close(value, expected_fit.model.state_dict()[name], rtol=0, atol=0)
                     training = batch.select(self.folds[:10] != fold)
                     torch.testing.assert_close(fitted.transform.target_scale,
-                                               training.targets.to(getattr(torch, dtype)).std(unbiased=True))
+                                               training.targets.to(getattr(torch, dtype)).std(unbiased=False))
+                    self.assertEqual(fitted.transform.ddof, 0)
                     torch.testing.assert_close(fitted.train.scores,
                                                training.scores.to(getattr(torch, dtype)), rtol=0, atol=0)
                     execution = json.loads((directory / "execution.json").read_text())

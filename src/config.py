@@ -196,7 +196,7 @@ class TrainingConfig:
 
 @dataclass
 class EvaluationConfig:
-    coverage_levels: tuple = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95)
+    coverage_levels: tuple = (0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
     n_bins: int = 10
     n_folds: int = 5
     pair_block_size: int = 512
@@ -204,8 +204,11 @@ class EvaluationConfig:
 
     def __post_init__(self):
         self.coverage_levels = tuple(self.coverage_levels)
-        if not self.coverage_levels or any(not 0 < q < 1 for q in self.coverage_levels):
-            raise ValueError("Coverage levels must lie strictly between zero and one")
+        if not self.coverage_levels or any(
+            isinstance(q, bool) or not isinstance(q, (int, float))
+            or not math.isfinite(q) or not 0 <= q <= 1 for q in self.coverage_levels
+        ):
+            raise ValueError("Coverage levels must be finite numbers between zero and one, inclusive")
         if len(set(self.coverage_levels)) != len(self.coverage_levels):
             raise ValueError("Coverage levels must be distinct")
         for name in ("n_bins", "n_folds", "pair_block_size", "error_n_bins"):

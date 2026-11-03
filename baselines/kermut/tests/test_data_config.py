@@ -10,6 +10,7 @@ import torch
 
 from baselines.kermut.config import KermutConfig
 from baselines.kermut.data import load_feature_bundle
+from config import EvaluationConfig
 from data_loading import load_feature_bundle as load_normalized_features
 from fixtures import CONDITIONAL_PROBABILITY_RECIPE, make_cache
 
@@ -20,6 +21,15 @@ class DataConfigTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.features, self.config, self.batch, self.index = make_cache(self.root)
+
+    def test_default_ece_grid_matches_nkn_and_roundtrips_with_endpoints(self):
+        config = KermutConfig()
+        self.assertEqual(config.evaluation.coverage_levels, EvaluationConfig().coverage_levels)
+        restored = KermutConfig.from_dict(config.to_dict())
+        self.assertEqual(restored.evaluation.coverage_levels, tuple(index / 10 for index in range(11)))
+        for levels in ([False, 1], [0, True], [-.1, 1], [0, 1.1]):
+            with self.subTest(levels=levels), self.assertRaises(ValueError):
+                KermutConfig(evaluation={"coverage_levels": levels})
 
     def _conditional_cache(self):
         original = self.features / "inverse_folding/synthetic/v1"

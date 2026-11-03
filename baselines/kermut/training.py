@@ -44,17 +44,18 @@ def _batch_state(batch):
 
 @dataclass
 class TargetTransform:
-    """Training-only sample-standard-deviation scaling; mean scores stay raw."""
+    """Training-only population-SD scaling; retain legacy checkpoint scales."""
 
     target_mean: torch.Tensor
     target_scale: torch.Tensor
+    ddof: int = 0
 
     @classmethod
     def fit(cls, batch):
         targets = batch.targets
         if targets is None or len(targets) < 2 or not torch.isfinite(targets).all():
             raise ValueError("Kermut training needs at least two finite observed targets")
-        scale = targets.std(unbiased=True)
+        scale = targets.std(unbiased=False)
         if not torch.isfinite(scale) or scale <= 0:
             raise ValueError("Cannot standardize constant training targets or a nonfinite target scale")
         return cls(targets.mean().detach(), scale.detach())
@@ -66,7 +67,8 @@ class TargetTransform:
         return batch
 
     def state_dict(self):
-        return {"target_mean": self.target_mean.detach().cpu(), "target_scale": self.target_scale.detach().cpu()}
+        return {"target_mean": self.target_mean.detach().cpu(),
+                "target_scale": self.target_scale.detach().cpu(), "ddof": self.ddof}
 
 
 @dataclass
@@ -129,7 +131,9 @@ class FittedKermut:
                 "final_objective_per_variant": self.final_objective_per_variant,
                 "final_nll_per_variant": self.history[-1]["nll_per_variant"],
                 "noise_variance_standardized": float(self.model.noise.detach()),
-                "target_standardization": "training_sample_std", "mean_score_standardization": "none",
+                "target_standardization": ("training_population_std" if self.transform.ddof == 0
+                                           else "training_sample_std"),
+                "target_standardization_ddof": self.transform.ddof, "mean_score_standardization": "none",
                 "dtype": self.training_config.dtype,
                 "use_structure_distance": self.model_config.use_structure_distance,
                 "mean_intercept_standardized_target": float(self.model.intercept.detach()),
@@ -162,8 +166,14 @@ class FittedKermut:
         model = ExactKermutGP(train, model_config, training_config)
         model.load_state_dict(state["parameters"])
         model.eval()
-        transform = TargetTransform(**{name: value.to(device=device, dtype=dtype)
-                                      for name, value in state["transform"].items()})
+        saved_transform = state["transform"]
+        # Historical checkpoints used sample SD and saved the fitted scale.
+        # Preserve that scale and the corresponding standardized targets.
+        transform = TargetTransform(
+            target_mean=saved_transform["target_mean"].to(device=device, dtype=dtype),
+            target_scale=saved_transform["target_scale"].to(device=device, dtype=dtype),
+            ddof=saved_transform.get("ddof", 1),
+        )
         return cls(model, train, state["standardized_targets"].to(device=device, dtype=dtype), transform,
                    model_config, training_config, state["selected_seed"], state["final_objective_per_variant"],
                    state["history"], state["restart_summaries"])

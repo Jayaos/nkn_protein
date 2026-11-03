@@ -30,7 +30,20 @@ class ReportingSummaryTests(unittest.TestCase):
             setting="singles_random", **changes):
         return {"assay_id": assay, "run_id": run, "stage": "cv", "setting": setting,
                 "status": "complete", "avg_spearman": value, "std_spearman": 0.99,
+                "spearman_oof_standardized": value,
                 "n_variants": 1, **changes}
+
+    def test_default_spearman_uses_standardized_pooled_values(self):
+        self.write([
+            self.row("a", .2, avg_spearman=.9, spearman_oof=.1),
+            self.row("b", .6, avg_spearman=.8, spearman_oof=.2),
+        ])
+        summary = summarize_csv(self.path)
+        self.assertEqual(summary, summarize_csv(self.path, "spearman_oof_standardized"))
+        self.assertEqual(summary[0]["n_assays"], 2)
+        self.assertAlmostEqual(summary[0]["mean"], .4)
+        self.assertAlmostEqual(summary[0]["std"], .2)
+        self.assertAlmostEqual(summarize_csv(self.path, "avg_spearman")[0]["mean"], .85)
 
     def test_equal_assay_weights_and_run_prefixes(self):
         rows = []
@@ -198,15 +211,18 @@ class ReportingSummaryTests(unittest.TestCase):
         ]
         for order in (rows, list(reversed(rows))):
             self.write(order)
-            for metric, mean in (("avg_spearman", .2), ("mse_oof_standardized", 2), ("ence", .4)):
+            for metric, mean in (("spearman_oof_standardized", .2), ("avg_spearman", .2),
+                                 ("mse_oof_standardized", 2), ("ence", .4)):
                 with self.subTest(metric=metric, order=order):
                     summary = summarize_csv(self.path, metric)
                     self.assertEqual(summary[0]["mean"], mean)
                     self.assertEqual((summary[0]["n_assays"], summary[0]["skipped"]), (1, 3))
 
     def test_legacy_columns_do_not_substitute_raw_mse_or_spearman(self):
-        self.write([self.row("a", .5, mse_oof=9)])
-        for metric in DEFAULT_METRICS[1:]:
+        row = self.row("a", .5, mse_oof=9, spearman_oof=.8)
+        del row["spearman_oof_standardized"]
+        self.write([row])
+        for metric in DEFAULT_METRICS:
             with self.subTest(metric=metric):
                 summary = summarize_csv(self.path, metric)
                 self.assertIsNone(summary[0]["mean"])
@@ -223,7 +239,8 @@ class ReportingSummaryTests(unittest.TestCase):
         self.assertIsNone(summarize_csv(self.path)[0]["mean"])
 
     def test_cli_defaults_to_all_five_metrics_without_writing_files(self):
-        self.write([self.row("a", .2, mse_oof_standardized=2, interval_ece=.1,
+        self.write([self.row("a", .2, avg_spearman=-.8, spearman_oof=.9,
+                             mse_oof_standardized=2, interval_ece=.1,
                              ence=.3, uncertainty_cv=.4)])
         original = self.path.read_bytes()
         output = io.StringIO()
@@ -233,6 +250,9 @@ class ReportingSummaryTests(unittest.TestCase):
             self.assertIn(f"{METRIC_LABELS[metric]}: mean", output.getvalue())
             self.assertIn(f"across assays of {metric}.", output.getvalue())
         self.assertIn("2.000000", output.getvalue())
+        self.assertIn("0.200000", output.getvalue())
+        self.assertNotIn("-0.800000", output.getvalue())
+        self.assertNotIn("avg_spearman", output.getvalue())
         self.assertEqual(sum(line.startswith("average ") for line in output.getvalue().splitlines()), 5)
         self.assertEqual(self.path.read_bytes(), original)
         self.assertEqual(list(self.path.parent.iterdir()), [self.path])

@@ -151,7 +151,7 @@ class KermutConfig:
             setattr(self, name, _settings(cls, getattr(self, name), name))
         # Also reject booleans/nonfinite values in shared evaluation settings.
         for level in self.evaluation.coverage_levels:
-            _finite("coverage_levels", level, positive=True)
+            _finite("coverage_levels", level, nonnegative=True)
         if not isinstance(self.feature_selection, Mapping):
             raise ValueError("feature_selection must be a JSON object")
         if set(self.feature_selection) - set(DEFAULT_FEATURE_SELECTION):

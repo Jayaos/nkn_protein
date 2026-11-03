@@ -6,12 +6,14 @@ import math
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import torch
 
 from baselines.kermut.config import KermutTrainingConfig
 from baselines.kermut.model import ExactKermutGP
-from baselines.kermut.training import FittedKermut, fit_gp
+from baselines.kermut.training import FittedKermut, TargetTransform, fit_gp
+from gp.preprocessing import FoldTransform
 from fixtures import CONDITIONAL_PROBABILITY_RECIPE, small_config, synthetic_batch
 
 
@@ -25,7 +27,7 @@ class ExactGPTests(unittest.TestCase):
 
     def test_objective_is_exact_nll_minus_half_cauchy_noise_prior(self):
         model = ExactKermutGP(self.train, self.config.model, self.config.training)
-        y = (self.train.targets - self.train.targets.mean()) / self.train.targets.std(unbiased=True)
+        y = (self.train.targets - self.train.targets.mean()) / self.train.targets.std(unbiased=False)
         actual, jitter = model.objective(self.train, y)
         covariance = model.kernel(self.train) + (model.noise + jitter) * torch.eye(len(y), dtype=torch.float64)
         reference_nll = -torch.distributions.MultivariateNormal(model.mean(self.train), covariance_matrix=covariance).log_prob(y)
@@ -39,7 +41,7 @@ class ExactGPTests(unittest.TestCase):
 
     def test_posterior_matches_independent_gaussian_conditioning(self):
         model = ExactKermutGP(self.train, self.config.model, self.config.training)
-        y = (self.train.targets - self.train.targets.mean()) / self.train.targets.std(unbiased=True)
+        y = (self.train.targets - self.train.targets.mean()) / self.train.targets.std(unbiased=False)
         mean, latent, observed, jitter = model.posterior(self.train, y, self.test)
         k_train = model.kernel(self.train) + (model.noise + jitter) * torch.eye(len(y), dtype=torch.float64)
         cross = model.kernel(self.test, self.train)
@@ -50,7 +52,7 @@ class ExactGPTests(unittest.TestCase):
         torch.testing.assert_close(observed - latent, model.noise * torch.eye(self.test.num_variants, dtype=torch.float64))
         self.assertGreater(observed[0, 1].abs().item(), 0)
 
-    def test_training_uses_sample_sd_raw_scores_and_final_adamw_state(self):
+    def test_training_uses_population_sd_raw_scores_and_final_adamw_state(self):
         defaults = KermutTrainingConfig()
         self.assertEqual(defaults.n_steps, 150)
         self.assertEqual(defaults.learning_rate, 0.1)
@@ -58,9 +60,15 @@ class ExactGPTests(unittest.TestCase):
         self.assertEqual(defaults.noise_prior_scale, 0.1)
         fitted = fit_gp(self.train, self.config.model, self.config.training)
         torch.testing.assert_close(fitted.transform.target_mean, self.train.targets.mean())
-        torch.testing.assert_close(fitted.transform.target_scale, self.train.targets.std(unbiased=True))
+        centered = self.train.targets - self.train.targets.mean()
+        population_scale = centered.square().mean().sqrt()
+        torch.testing.assert_close(fitted.transform.target_scale, population_scale)
+        torch.testing.assert_close(fitted.transform.target_scale, FoldTransform.fit(self.train).target_scale)
         torch.testing.assert_close(fitted.train.scores, self.train.scores, atol=0, rtol=0)
-        torch.testing.assert_close(fitted.standardized_targets, (self.train.targets - self.train.targets.mean()) / self.train.targets.std(unbiased=True))
+        torch.testing.assert_close(fitted.standardized_targets, centered / population_scale)
+        self.assertAlmostEqual(fitted.standardized_targets.square().mean().item(), 1)
+        self.assertEqual(fitted.fit_summary()["target_standardization"], "training_population_std")
+        self.assertEqual(fitted.fit_summary()["target_standardization_ddof"], 0)
 
         # Independently replay the exact update count. This verifies the saved
         # state is the final state, not a best-iteration checkpoint or restart.
@@ -85,6 +93,8 @@ class ExactGPTests(unittest.TestCase):
             checkpoint = Path(directory) / "checkpoint.pt"
             fitted.save(checkpoint)
             restored = FittedKermut.load(checkpoint)
+            self.assertEqual(restored.transform.ddof, 0)
+            self.assertEqual(restored.fit_summary()["target_standardization"], "training_population_std")
             actual = restored.predict(replace(self.test, targets=None))
             torch.testing.assert_close(actual.mean, expected.mean, rtol=0, atol=0)
             torch.testing.assert_close(actual.observation_covariance, expected.observation_covariance, rtol=0, atol=0)
@@ -94,6 +104,31 @@ class ExactGPTests(unittest.TestCase):
                 restored.predict(replace(self.test, feature_signature={"source": "different"}))
         torch.testing.assert_close(expected.mean, fitted.transform.target_mean + fitted.transform.target_scale * expected.mean_standardized)
         torch.testing.assert_close(expected.observation_covariance, fitted.transform.target_scale.square() * expected.observation_covariance_standardized)
+
+    def test_legacy_checkpoint_preserves_sample_sd_predictions_and_metadata(self):
+        legacy_transform = TargetTransform(self.train.targets.mean(), self.train.targets.std(unbiased=True), ddof=1)
+        with patch.object(TargetTransform, "fit", return_value=legacy_transform):
+            fitted = fit_gp(self.train, self.config.model, self.config.training)
+        expected = fitted.predict(self.test)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "legacy.pt"
+            fitted.save(checkpoint)
+            state = torch.load(checkpoint, weights_only=True)
+            del state["transform"]["ddof"]  # Original checkpoint schema.
+            torch.save(state, checkpoint)
+            restored = FittedKermut.load(checkpoint)
+            self.assertEqual(restored.transform.ddof, 1)
+            self.assertEqual(restored.fit_summary()["target_standardization"], "training_sample_std")
+            self.assertEqual(restored.fit_summary()["target_standardization_ddof"], 1)
+            torch.testing.assert_close(restored.transform.target_scale, legacy_transform.target_scale, rtol=0, atol=0)
+            torch.testing.assert_close(restored.standardized_targets, fitted.standardized_targets, rtol=0, atol=0)
+            actual = restored.predict(self.test)
+            torch.testing.assert_close(actual.mean, expected.mean, rtol=0, atol=0)
+            torch.testing.assert_close(actual.observation_covariance, expected.observation_covariance, rtol=0, atol=0)
+            restored.save(checkpoint)
+            reloaded = FittedKermut.load(checkpoint)
+            self.assertEqual(reloaded.transform.ddof, 1)
+            torch.testing.assert_close(reloaded.predict(self.test).mean, expected.mean, rtol=0, atol=0)
 
     def test_frozen_inputs_and_heldout_labels_cannot_change_model(self):
         training = replace(self.train, scores=self.train.scores.clone().requires_grad_(),

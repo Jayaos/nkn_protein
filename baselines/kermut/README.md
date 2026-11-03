@@ -18,7 +18,10 @@ and [paper](https://proceedings.neurips.cc/paper_files/paper/2024/file/34547650b
   amino acids' log probabilities. Coordinates retain their Angstrom units.
 - A learned constant plus a learned coefficient for each raw mean-score source.
   Scores and embeddings are not standardized. Each training split standardizes
-  its targets using its own mean and sample standard deviation.
+  its targets using its own mean and population standard deviation (`ddof=0`).
+  This matches NKN and ProteinNPT's supervised ProteinGym preprocessing; it
+  deliberately differs from the original Kermut implementation's sample
+  standard deviation (`ddof=1`).
 - One initialization, 150 AdamW updates, learning rate 0.1, weight decay 0.01,
   betas 0.9/0.999, epsilon 1e-8, and float32. Optimization minimizes negative
   log marginal likelihood minus the Half-Cauchy log prior on noise variance,
@@ -115,7 +118,9 @@ optimizer, numerical precision and noise prior. `training.max_train_variants`
 can optionally cap dense-GP training size; it is unset by default. Training
 uses quadratic memory and cubic Cholesky work in the number of variants.
 `evaluation` has the same coverage levels, pairwise bins and five-fold setting
-as NKN. The complete accepted schema is in [`config.py`](config.py).
+as NKN. Interval ECE defaults to 11 nominal coverage levels from `0.0` through
+`1.0` in steps of `0.1`, including both endpoints. The complete accepted schema
+is in [`config.py`](config.py).
 
 ## Run on CPU
 
@@ -427,18 +432,31 @@ variances. The common `restart_summaries.json` artifact contains one final run.
 No pretrained models or structure files are needed to load the checkpoint
 itself; new predictions require compatible cached inputs.
 
+New fits use `ddof=0` and record the target-normalization convention in their
+checkpoints and fit summaries. Historical checkpoints retain their saved target
+mean, scale, and standardized training labels when loaded, including the earlier
+`ddof=1` convention. Existing predictions and metrics are not recomputed by this
+change or by rerunning reporting; rerun training to obtain results from the new
+normalization.
+
 Evaluation reuses the NKN pipeline: per-fold Spearman, equal-fold average and
 population standard deviation of defined Spearman values, pooled out-of-fold
 Spearman, MSE, interval ECE, PairECE, and standardized variance summaries. MSE
 is saved per fold as `mse` and `mse_standardized`, and pooled across all held-out
 variants as `mse_oof` and `mse_oof_standardized`. The standardized version uses
-each fold's training target mean and sample standard deviation (`ddof=1`),
-following the paper's normalization and pooling. MSE weights variants equally;
+each fold's training target mean and population standard deviation (`ddof=0`)
+for new fits, with pooled held-out predictions. MSE weights variants equally;
 mixed runs report each mutation depth separately. Calibration
 uses the full observation covariance within each held-out fold; covariances
 are never pooled across folds. Extrapolation reports one held-out evaluation
 without a cross-fold average or standard deviation, including `mse` and
 `mse_standardized`. The MSE fields also appear in the shared reporting CSVs.
+
+Interval ECE averages absolute coverage errors over the 11 default levels
+(`0.0, 0.1, ..., 0.9, 1.0`) within each fold, then averages folds equally.
+Existing saved ECE values and coverage curves retain their original grid, as do
+plots generated from those values. Reporting and plotting do not migrate the
+grid; older predictions must be reevaluated at the new levels to update them.
 
 Error calibration reports `ence` and `uncertainty_cv` in every held-out fold
 and fixed extrapolation evaluation. ENCE uses five variance-quantile bins by
