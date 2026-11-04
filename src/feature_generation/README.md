@@ -690,11 +690,56 @@ It removes `protssn_proteingym--` from `sequence/prosst`, `inverse_folding/esm_i
 and both models' `scores` directories. It updates embedded configuration
 signatures, JSON checksums, and matching assay default paths, preserving tensor
 values, score CSVs, and structure provenance. Each original and staged cache is
-validated before publication; existing destinations are never overwritten.
+validated before publication; ordinary migrations refuse existing destinations.
 Temporary space is needed for one replacement cache at a time. Interrupted
 transactions recover on the next apply run; completed migrations are skipped.
 Failures are logged per assay and produce a nonzero job exit status. No model
 inference, checkpoint downloads, or raw structure files are needed.
+
+If a Kermut/NKN run reports `Feature configuration does not match its directory`,
+the selected leaf's `config.json` disagrees with its directory in `feature_type`,
+`model_family`, or `checkpoint`. The error includes the config path and the
+expected/recorded values. This can affect only some assays when caches have
+different preparation or migration histories.
+
+A directory-only rename from `protssn_proteingym--<recipe>` to `<recipe>` leaves
+the old checkpoint and signatures inside. The migration preflight refuses this
+state by default. Use `--repair-renamed` to repair this exact prefix mismatch
+without GPU or model inference. With cache readers and writers idle, preview
+every assay under `data/features/pretrained/singles/`, then apply after the
+preview succeeds:
+
+```bash
+sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch --repair-renamed --dry-run
+sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch --repair-renamed
+```
+
+Both commands also accept `--output-root /path/to/singles` and repeated
+`--assay ID` filters. Repair validates the complete original cache through a
+temporary view before staging updated signatures and checksums. It preserves
+tensor values, score CSVs, and provenance, and refuses corrupt contents or name
+collisions. Interrupted repairs recover the original directory location and
+assay metadata, or finish cleanup if already committed. The repair preview
+creates temporary validation files but changes no cache contents. Validation
+uses hardlinks where possible; allow space for an extra cache copy when
+hardlinks are unavailable, as well as the replacement cache during apply.
+Do not edit `config.json` alone: payload signatures and completion checksums
+must also agree.
+
+For invalid caches that cannot pass repair validation, rerun ProSST preparation;
+it already uses `resume=True` and reuses valid matching embeddings and scores:
+
+```bash
+# BRCA1_HUMAN_Findlay_2018 is task 24 in the shipped catalog.
+sbatch --array=24 sbatch_run/run_prepare_rep/prepare_prosst.sbatch
+# Check every assay and regenerate invalid ProSST caches (GPU inference required).
+sbatch sbatch_run/run_prepare_rep/prepare_prosst.sbatch
+```
+
+Use the same preparation config/output root as the failing run. Replace `24`
+with a comma-separated list of affected catalog indices to limit regeneration,
+then rerun the failed training tasks after preparation succeeds. The Kermut
+all-assays launcher's task indices match the shipped preparation catalog.
 
 If ProteinGym structure manifests were deleted but the ProteinMPNN feature
 caches and referenced raw structure files remain, recover the original JSON

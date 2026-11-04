@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 import torch
 
+from data_loading.features import _load_leaf
 from feature_generation.inputs import prepare_assay, sha256_file, stable_json
 from feature_generation.prosst_config import ProSSTConfig
 from feature_generation.prosst_runner import extract
@@ -178,6 +179,27 @@ class ProSSTPipelineTests(unittest.TestCase):
         self.assertEqual(sum(adapter.load_count for adapter in self.adapters), 1)
         self.assertEqual(sum(len(adapter.bindings) for adapter in self.adapters), 1)
         self.assertEqual(len(self.quantizations), 2)
+
+    def test_resume_regenerates_a_directory_renamed_without_updating_metadata(self):
+        self.config = replace(self.config, structure_source="protssn_proteingym",
+                              cache_id="protssn_proteingym--tiny_test")
+        self.run_extraction()
+        original = self.leaf
+        self.config = replace(self.config, cache_id="tiny_test")
+        original.rename(self.leaf)
+        source = "sequence/prosst/tiny_test"
+        with self.assertRaisesRegex(ValueError, "Feature configuration does not match its directory"):
+            _load_leaf(self.assay_root, source, "tiny", 2)
+
+        self.assertEqual(self.run_extraction(resume=True)[0]["status"], "completed")
+        report = validate_sequence_cache(self.assay_root, "tiny_test", model_family="prosst")
+        self.assertEqual(report["cache_id"], "tiny_test")
+        store, config = _load_leaf(self.assay_root, source, "tiny", 2)
+        self.assertEqual(config["checkpoint"], "tiny_test")
+        torch.testing.assert_close(store["embeddings"], torch.stack([
+            residue_values(sequence, self.tokens) for sequence in self.sequences
+        ]))
+        self.assertEqual(self.run_extraction(resume=True)[0]["status"], "skipped")
 
     def test_cleanup_respects_resume_and_removes_only_old_recipes(self):
         self.run_extraction()

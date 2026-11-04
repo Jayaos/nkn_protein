@@ -1,6 +1,7 @@
 """Remove the historical ProtSSN prefix from ProSST and ESM-IF1 cache IDs.
 
-Applies by default; --dry-run validates and previews without writing files.
+Applies by default; --dry-run validates and previews without changing caches.
+--repair-renamed also repairs directory-only renames with intact old metadata.
 Only completed caches are migrated. No models, structures, or network needed.
 """
 
@@ -8,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 from contextlib import nullcontext
+import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -21,7 +24,7 @@ import torch
 
 from feature_generation.inputs import safe_component, sha256_file
 from feature_generation.storage import (
-    _assay_lock, _atomic_json, _read_json, _signature, _validate_saved_cache, _write_json,
+    _assay_lock, _atomic_bytes, _atomic_json, _read_json, _signature, _validate_saved_cache, _write_json,
 )
 
 
@@ -65,8 +68,9 @@ def _remove_work(root, work):
     work.rmdir()
 
 
-def _updated_metadata(root, kind, family, old_id, new_id):
-    metadata = _read_json(root / "assay.json")
+def _updated_metadata(root, kind, family, old_id, new_id, *, metadata=None):
+    if metadata is None:
+        metadata = _read_json(root / "assay.json")
     descriptor = metadata.get("features", {}).get(kind)
     if isinstance(descriptor, dict) and descriptor.get("model_family") == family:
         old_path = f"{kind}/{family}/{old_id}"
@@ -83,6 +87,47 @@ def _update_default(root, kind, family, old_id, new_id):
         _atomic_json(root / "assay.json", metadata)
 
 
+def _link_or_copy(source, destination):
+    # The validation view is read-only; links avoid duplicating large tensors.
+    try:
+        os.link(source, destination)
+    except OSError:
+        shutil.copyfile(source, destination)
+    return destination
+
+
+def _validate_source(root, kind, family, old_id, source_id):
+    if source_id == old_id:
+        _validate_saved_cache(root, kind, family, old_id)
+        return
+    source = root / kind / family / source_id
+    _check_tree(root, source)
+    # Present the unchanged files under their recorded identity to the existing
+    # full validators. Never rename live caches just to validate or preview them.
+    with tempfile.TemporaryDirectory(prefix="cache-name-validation-") as directory:
+        view = Path(directory)
+        for name in ("assay.json", "variants.csv"):
+            shutil.copyfile(root / name, view / name)
+        shutil.copytree(source, view / kind / family / old_id, copy_function=_link_or_copy)
+        _validate_saved_cache(view, kind, family, old_id)
+
+
+def _check_assay_snapshot(root, receipt):
+    """Avoid rolling back over unrelated edits made outside the assay lock."""
+    original = receipt["original_assay_json"].encode("utf-8")
+    metadata = json.loads(original)
+    updated = _updated_metadata(
+        root, receipt["kind"], receipt["family"], receipt["old_id"], receipt["new_id"],
+        metadata=json.loads(original),
+    )
+    published = original if updated == metadata else (
+        json.dumps(updated, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    ).encode("utf-8")
+    if (root / "assay.json").read_bytes() not in (original, published):
+        raise ValueError(f"Assay metadata conflicts with its migration transaction: {root}")
+    return original
+
+
 def _receipt(root, work):
     _check_tree(root, work)
     receipt = _read_json(work / "transaction.json")
@@ -90,9 +135,14 @@ def _receipt(root, work):
     old_id, new_id = receipt["old_id"], receipt["new_id"]
     safe_component(old_id, "old cache ID")
     safe_component(new_id, "new cache ID")
-    if (receipt.get("version") != 1 or (kind, family) not in TARGETS
+    if (receipt.get("version") not in (1, 2) or (kind, family) not in TARGETS
             or old_id != PREFIX + new_id or receipt.get("phase") not in ("pending", "prepared", "committed")):
         raise ValueError(f"Invalid migration transaction: {work}")
+    if receipt["version"] == 2:
+        if (receipt.get("source_id") not in (old_id, new_id)
+                or not isinstance(receipt.get("original_assay_json"), str)
+                or not isinstance(json.loads(receipt["original_assay_json"]), dict)):
+            raise ValueError(f"Invalid migration source or assay snapshot: {work}")
     return receipt
 
 
@@ -110,20 +160,23 @@ def _recover(root, work):
     receipt = _receipt(root, work)
     kind, family = receipt["kind"], receipt["family"]
     old_id, new_id = receipt["old_id"], receipt["new_id"]
-    source = root / kind / family / old_id
+    source_id = receipt.get("source_id", old_id) if receipt["version"] == 2 else old_id
+    source = root / kind / family / source_id
     destination = source.with_name(new_id)
     backup = work / "old"
     replacement = work / "new" / kind / family / new_id
     for path in (source, destination):
         _check_path(root, path)
+    original_assay = _check_assay_snapshot(root, receipt) if receipt["version"] == 2 else None
     if receipt["phase"] == "committed":
-        if source.exists():
+        if source != destination and source.exists():
             raise ValueError(f"Original name unexpectedly exists after commit: {source}")
         _validate_saved_cache(root, kind, family, new_id)
         _update_default(root, kind, family, old_id, new_id)
     else:
         if backup.exists():
-            if source.exists() or sha256_file(backup / "completion.json") != receipt["original_completion"]:
+            if ((source != destination and source.exists())
+                    or sha256_file(backup / "completion.json") != receipt["original_completion"]):
                 raise ValueError(f"Migration backup conflicts with current cache: {work}")
             if destination.exists():
                 if (replacement.exists() or sha256_file(destination / "completion.json")
@@ -131,10 +184,15 @@ def _recover(root, work):
                     raise ValueError(f"Migration destination conflicts with its transaction: {destination}")
                 destination.rename(replacement)
             backup.rename(source)
-        elif destination.exists():
+        elif source != destination and destination.exists():
             raise ValueError(f"Destination exists without a migration backup: {destination}")
-        _validate_saved_cache(root, kind, family, old_id)
-        _update_default(root, kind, family, new_id, old_id)
+        if sha256_file(source / "completion.json") != receipt["original_completion"]:
+            raise ValueError(f"Original cache conflicts with its migration transaction: {source}")
+        _validate_source(root, kind, family, old_id, source_id)
+        if original_assay is None:
+            _update_default(root, kind, family, new_id, old_id)
+        elif (root / "assay.json").read_bytes() != original_assay:
+            _atomic_bytes(root / "assay.json", original_assay)
     _remove_work(root, work)
 
 
@@ -170,13 +228,15 @@ def _stage(root, source, work, kind, family, new_id):
     return replacement
 
 
-def _migrate_leaf(root, kind, family, old_id):
-    source = root / kind / family / old_id
+def _migrate_leaf(root, kind, family, old_id, *, source_id=None):
+    source_id = old_id if source_id is None else source_id
+    source = root / kind / family / source_id
     new_id = old_id.removeprefix(PREFIX)
     destination = source.with_name(new_id)
     work = Path(tempfile.mkdtemp(prefix=WORK_PREFIX, dir=root))
     receipt = {
-        "version": 1, "kind": kind, "family": family, "old_id": old_id, "new_id": new_id,
+        "version": 2, "kind": kind, "family": family, "old_id": old_id, "new_id": new_id,
+        "source_id": source_id, "original_assay_json": (root / "assay.json").read_bytes().decode("utf-8"),
         "phase": "pending", "original_completion": sha256_file(source / "completion.json"),
     }
     try:
@@ -188,8 +248,11 @@ def _migrate_leaf(root, kind, family, old_id):
         replacement = _stage(root, source, work, kind, family, new_id)
         receipt.update(phase="prepared", replacement_completion=sha256_file(replacement / "completion.json"))
         _atomic_json(work / "transaction.json", receipt)
-        if destination.exists() or destination.is_symlink():
+        if source != destination and (destination.exists() or destination.is_symlink()):
             raise FileExistsError(f"Refusing to overwrite destination: {destination}")
+        _check_tree(root, source)
+        if sha256_file(source / "completion.json") != receipt["original_completion"]:
+            raise ValueError(f"Original cache changed during migration: {source}")
         source.rename(work / "old")
         replacement.rename(destination)
         _update_default(root, kind, family, old_id, new_id)
@@ -203,7 +266,7 @@ def _migrate_leaf(root, kind, family, old_id):
     _remove_work(root, work)
 
 
-def migrate_assay(root: Path, *, dry_run=False):
+def migrate_assay(root: Path, *, dry_run=False, repair_renamed=False):
     root = Path(root)
     if root.is_symlink() or not root.is_dir():
         raise ValueError(f"Expected a real assay directory: {root}")
@@ -211,7 +274,8 @@ def migrate_assay(root: Path, *, dry_run=False):
     counts = {"migrated": 0, "planned": 0, "recovered": 0}
     for name in ("assay.json", "variants.csv", "extraction.lock"):
         _check_path(root, root / name)
-    # Dry runs perform no writes, including lock-file creation. Run with writers idle.
+    # Dry runs leave caches unchanged, including no lock-file creation. Validation
+    # of renamed leaves uses temporary files outside the assay. Keep writers idle.
     with nullcontext() if dry_run else _assay_lock(root):
         for work in sorted(root.glob(WORK_PREFIX + "*")):
             if dry_run:
@@ -223,6 +287,33 @@ def migrate_assay(root: Path, *, dry_run=False):
         for kind, family in TARGETS:
             parent = root / kind / family
             _check_path(root, parent)
+            # A directory-only rename is not a completed migration. Detect it
+            # before publishing any sibling cache instead of reporting UNCHANGED.
+            for config_path in sorted(parent.glob("*/config.json")):
+                source = config_path.parent
+                if source.name.startswith((PREFIX, ".")):
+                    continue
+                _check_path(root, config_path)
+                checkpoint = _read_json(config_path).get("checkpoint")
+                if checkpoint == PREFIX + source.name:
+                    original = source.with_name(checkpoint)
+                    if not repair_renamed:
+                        raise ValueError(
+                            f"Cache directory still has prefixed metadata: {config_path} records "
+                            f"checkpoint={checkpoint!r}, but its directory is {source.name!r}. "
+                            "Rerun with --repair-renamed to validate and repair this cache. "
+                            "Alternatively, with readers and writers idle, restore the original "
+                            f"directory name only if {original} is absent, then rerun this migration. "
+                            "Do not edit config.json alone."
+                        )
+                    safe_component(source.name, "new cache ID")
+                    safe_component(checkpoint, "old cache ID")
+                    _check_path(root, original)
+                    if original.exists() or original.is_symlink():
+                        raise FileExistsError(f"Original name also exists; refusing ambiguous repair: {original}")
+                    _updated_metadata(root, kind, family, checkpoint, source.name)
+                    _validate_source(root, kind, family, checkpoint, source.name)
+                    candidates.append((kind, family, checkpoint, source.name, source.name))
             for source in sorted(parent.glob(PREFIX + "*")):
                 safe_component(source.name, "old cache ID")
                 new_id = safe_component(source.name.removeprefix(PREFIX), "new cache ID")
@@ -232,16 +323,17 @@ def migrate_assay(root: Path, *, dry_run=False):
                     raise FileExistsError(f"Refusing to overwrite destination: {destination}")
                 _updated_metadata(root, kind, family, source.name, new_id)
                 _validate_saved_cache(root, kind, family, source.name)
-                candidates.append((kind, family, source.name, new_id))
+                candidates.append((kind, family, source.name, new_id, source.name))
         # All candidates in an assay pass preflight before any of them is changed.
-        for kind, family, old_id, new_id in candidates:
+        for kind, family, old_id, new_id, source_id in candidates:
+            repairing = source_id == new_id
             if dry_run:
                 counts["planned"] += 1
-                status = "WOULD_MIGRATE"
+                status = "WOULD_REPAIR" if repairing else "WOULD_MIGRATE"
             else:
-                _migrate_leaf(root, kind, family, old_id)
+                _migrate_leaf(root, kind, family, old_id, source_id=source_id)
                 counts["migrated"] += 1
-                status = "MIGRATED"
+                status = "REPAIRED" if repairing else "MIGRATED"
             print(f"{status} {root.name}: {kind}/{family}/{old_id} -> {new_id}", flush=True)
     return counts
 
@@ -250,7 +342,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", type=Path, default=ROOT / "data/features/pretrained/singles")
     parser.add_argument("--assay", action="append", help="Limit to selected assay IDs; repeatable. Default: all assays.")
-    parser.add_argument("--dry-run", action="store_true", help="Validate and preview without changing files.")
+    parser.add_argument("--dry-run", action="store_true", help="Validate and preview without changing cache files.")
+    parser.add_argument("--repair-renamed", action="store_true",
+                        help="Also repair recipe-only directories whose intact metadata still has the ProtSSN prefix.")
     args = parser.parse_args(argv)
     root = args.output_root.expanduser().resolve()
     if not root.is_dir():
@@ -270,11 +364,11 @@ def main(argv=None):
     print(f"{'DRY RUN' if args.dry_run else 'APPLY'}: {root}; assays={len(assays)}", flush=True)
     for assay in assays:
         try:
-            counts = migrate_assay(root / assay, dry_run=args.dry_run)
+            counts = migrate_assay(root / assay, dry_run=args.dry_run, repair_renamed=args.repair_renamed)
             for key, value in counts.items():
                 totals[key] += value
             if not any(counts.values()):
-                print(f"UNCHANGED {assay}: no matching prefixed caches", flush=True)
+                print(f"UNCHANGED {assay}: no matching caches need migration or repair", flush=True)
         except Exception as error:
             totals["failed"] += 1
             print(f"FAILED {assay}: {error}", flush=True)

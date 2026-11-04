@@ -164,6 +164,45 @@ class StructureCacheMigrationTests(unittest.TestCase):
         self.assertEqual(snapshot(self.root), before)
         self.validate_all()
 
+    def test_directory_only_rename_fails_before_changing_any_cache(self):
+        for key in self.recipes:
+            original = self.leaf(*key)
+            renamed = self.leaf(*key, old=False)
+            original.rename(renamed)
+            try:
+                for dry_run in (True, False):
+                    with self.subTest(kind=key, dry_run=dry_run):
+                        before = snapshot(self.root)
+                        with self.assertRaisesRegex(ValueError, "still has prefixed metadata") as raised:
+                            migration.migrate_assay(self.root, dry_run=dry_run)
+                        message = str(raised.exception)
+                        self.assertIn(str(renamed / "config.json"), message)
+                        self.assertIn(f"checkpoint={original.name!r}", message)
+                        self.assertIn(f"only if {original} is absent", message)
+                        self.assertIn("then rerun this migration", message)
+                        self.assertEqual(snapshot(self.root), before)
+                        self.assertFalse(original.exists())
+                        self.assertTrue(renamed.is_dir())
+            finally:
+                renamed.rename(original)
+        self.validate_all(old=True)
+
+    def test_cli_reports_directory_only_rename_as_failure(self):
+        # No prefixed candidates remain, which previously printed UNCHANGED.
+        for key in self.recipes:
+            self.leaf(*key).rename(self.leaf(*key, old=False))
+        before = snapshot(self.root)
+        for dry_run in (True, False):
+            with self.subTest(dry_run=dry_run):
+                output = io.StringIO()
+                arguments = ["--output-root", str(self.output_root), "--assay", "tiny"]
+                with contextlib.redirect_stdout(output):
+                    status = migration.main(arguments + (["--dry-run"] if dry_run else []))
+                self.assertEqual(status, 1)
+                self.assertIn("FAILED tiny:", output.getvalue())
+                self.assertNotIn("UNCHANGED", output.getvalue())
+                self.assertEqual(snapshot(self.root), before)
+
     def test_unrelated_defaults_and_models_are_preserved(self):
         path = self.root / "assay.json"
         metadata = read_json(path)

@@ -200,12 +200,25 @@ def _inside(root: Path, relative: str, parts: int | None = None) -> Path:
     return path
 
 
+def _validate_directory_identity(config: Mapping, source: str, config_path: Path, *, label: str) -> None:
+    expected = dict(zip(("feature_type", "model_family", "checkpoint"), source.split("/")))
+    mismatches = [
+        f"{key}: expected {value!r}, got {config.get(key)!r}"
+        for key, value in expected.items() if config.get(key) != value
+    ]
+    if mismatches:
+        raise ValueError(
+            f"{label} configuration does not match its directory: {source}; "
+            f"config: {config_path}; " + "; ".join(mismatches)
+        )
+
+
 def _load_leaf(root: Path, source: str, assay_id: str, schema: int) -> tuple[dict, dict]:
     leaf = _inside(root, source, parts=3)
-    name, family, checkpoint = source.split("/")
-    config = json.loads(_inside(root, f"{source}/config.json").read_text(encoding="utf-8"))
-    if any(config.get(k) != v for k, v in (("feature_type", name), ("model_family", family), ("checkpoint", checkpoint))):
-        raise ValueError(f"Feature configuration does not match its directory: {source}")
+    name, _, _ = source.split("/")
+    config_path = _inside(root, f"{source}/config.json")
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    _validate_directory_identity(config, source, config_path, label="Feature")
     compact = compact_sequence_recipe(config) if name == "sequence" else None
     store = torch.load(
         _inside(root, f"{source}/features.pt"), map_location="cpu", weights_only=True,
@@ -579,10 +592,10 @@ def load_feature_bundle(
         signature[f"{name}.config_sha256"] = _config_fingerprint(config)
     for source in selected_scores:
         leaf = _inside(root, source, parts=3)
-        config = json.loads(_inside(root, f"{source}/config.json").read_text(encoding="utf-8"))
+        config_path = _inside(root, f"{source}/config.json")
+        config = json.loads(config_path.read_text(encoding="utf-8"))
         source_type, family, checkpoint = source.split("/")
-        if any(config.get(key) != value for key, value in (("feature_type", source_type), ("model_family", family), ("checkpoint", checkpoint))):
-            raise ValueError(f"Score configuration does not match its directory: {source}")
+        _validate_directory_identity(config, source, config_path, label="Score")
         if source_type == "scores":
             from feature_generation.score_storage import validate_score_cache
 

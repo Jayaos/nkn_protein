@@ -124,6 +124,38 @@ class FeatureLoaderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Score IDs"):
             load_feature_bundle(self.root)
 
+    def test_feature_directory_mismatch_identifies_config_and_each_field(self):
+        path = self.root / "sequence/synthetic/v1/config.json"
+        original = json.loads(path.read_text(encoding="utf-8"))
+        changes = {
+            "feature_type": "scores", "model_family": "prosst",
+            "checkpoint": "protssn_proteingym--v1",
+        }
+        for overrides in ({key: value} for key, value in changes.items()):
+            with self.subTest(overrides=overrides):
+                path.write_text(json.dumps({**original, **overrides}), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "^Feature configuration does not match its directory:") as raised:
+                    load_feature_bundle(self.root)
+                message = str(raised.exception)
+                self.assertIn(str(path.resolve()), message)
+                for key, actual in overrides.items():
+                    self.assertIn(f"{key}: expected {original[key]!r}, got {actual!r}", message)
+
+    def test_score_directory_mismatch_reports_all_fields_before_reading_scores(self):
+        source = "scores/prosst/new_recipe"
+        path = self.root / source / "config.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({
+            "feature_type": "sequence", "checkpoint": "protssn_proteingym--new_recipe",
+        }), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "^Score configuration does not match its directory:") as raised:
+            load_feature_bundle(self.root, score_sources=[source])
+        message = str(raised.exception)
+        self.assertIn(str(path.resolve()), message)
+        self.assertIn("feature_type: expected 'scores', got 'sequence'", message)
+        self.assertIn("model_family: expected 'prosst', got None", message)
+        self.assertIn("checkpoint: expected 'new_recipe', got 'protssn_proteingym--new_recipe'", message)
+
     def test_hash_and_probability_validation(self):
         path = self.root / "sequence/synthetic/v1/features.pt"
         payload = torch.load(path, weights_only=True)

@@ -14,12 +14,20 @@
 # CPU only; updates cache identities/checksums without model inference.
 # Submit while preparation/training jobs using these caches are idle.
 # Temporary space: one replacement cache at a time; no permanent duplicate.
+# --repair-renamed also handles directories already renamed without metadata updates.
+# Repair validates the original cache and refuses corruption or name collisions.
+# Its preview uses temporary validation files without changing cache contents.
+# Allow space for an extra cache copy if validation hardlinks are unavailable.
+# Tensor values, score CSVs, and provenance are preserved; do not edit JSON alone.
 # An interrupted migration is recovered automatically on the next apply run.
 #
 # Apply to all assays:
 #   sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch
 # Preview only:
 #   sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch --dry-run
+# Preview directory-only rename repairs, then apply after a successful preview:
+#   sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch --repair-renamed --dry-run
+#   sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch --repair-renamed
 # Custom root or selected assay:
 #   sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch --output-root /path/to/singles --assay BLAT_ECOLX_Jacquier_2013
 set -eo pipefail
