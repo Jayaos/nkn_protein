@@ -39,7 +39,9 @@
 #   sbatch sbatch_run/run_kermut/run_kermut_prosst_esmif_small_assays.sbatch singles --config configs/kermut_prosst_esmif.json --experiment-suffix comparison_v1
 # Print the task-to-assay mapping without submitting or training:
 #   bash sbatch_run/run_kermut/run_kermut_prosst_esmif_small_assays.sbatch --help
-# Results: results/[EXPERIMENT_SUFFIX/]<assay>/kermut_prosst_esmif_<selection>_<job-id>/
+# Results: <output-root>/[EXPERIMENT_SUFFIX/]<assay>/kermut_prosst_esmif_<selection>_<job-id>/
+# --output-root PATH overrides KERMUT_OUTPUT_ROOT (default results/).
+# Relative output roots are resolved from the repository root.
 set -eo pipefail
 
 assays=(
@@ -103,7 +105,8 @@ assays=(
 )
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-  printf 'Usage: sbatch sbatch_run/run_kermut/run_kermut_prosst_esmif_small_assays.sbatch [singles|all|SETTING] [--config PATH] [--parallel] [--experiment-suffix NAME]\n'
+  printf 'Output root: --output-root PATH, then KERMUT_OUTPUT_ROOT, then results/. Relative paths use the repository root.\n'
+  printf 'Usage: sbatch sbatch_run/run_kermut/run_kermut_prosst_esmif_small_assays.sbatch [singles|all|SETTING] [--config PATH] [--parallel] [--output-root PATH] [--experiment-suffix NAME]\n'
   printf 'Default array: 0-56; 1-1000 single mutants (inclusive), one assay per task.\n'
   printf 'Uses run_kermut_esm2_proteinmpnn.sbatch with all arguments forwarded.\n'
   printf 'Default config: configs/kermut_prosst_esmif.json; --config overrides KERMUT_CONFIG.\n'

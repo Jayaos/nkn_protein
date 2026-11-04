@@ -50,7 +50,9 @@
 # SAMPLE_RATIO=1.0 trains on all singles. Relative paths use the repository root.
 # Logs go to the submission directory. Every job creates a new results directory.
 # --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) groups results under
-# results/NAME/<assay>/<model-run>/. Without it, existing paths are preserved.
+# <output-root>/NAME/<assay>/<model-run>/. Without it, NAME is omitted.
+# --output-root PATH overrides KERMUT_OUTPUT_ROOT (default results/).
+# Relative output roots are resolved from the repository root.
 # KERMUT_RUN_PREFIX changes the result-folder prefix (default kermut_esm2_proteinmpnn).
 # ASSAY_INDEX overrides catalog detection: data/DMS_ProteinGym_substitutions/
 # DMS_substitutions.csv first, then data/DMS_substitutions.csv, then the legacy
@@ -71,10 +73,20 @@ selection="singles"
 selection_given=false
 parallel=false
 experiment_suffix="${EXPERIMENT_SUFFIX:-}"
+output_root="${KERMUT_OUTPUT_ROOT:-results}"
 run_prefix="${KERMUT_RUN_PREFIX:-kermut_esm2_proteinmpnn}"
 config_template="${KERMUT_CONFIG:-configs/kermut_esm2_proteinmpnn.json}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --output-root)
+      if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+        echo "error: --output-root requires a directory path." >&2
+        exit 1
+      fi
+      output_root="$2"
+      shift 2 ;;
+    --output-root=*)
+      set -- --output-root "${1#*=}" "${@:2}" ;;
     --experiment-suffix)
       if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
         echo "error: --experiment-suffix requires a folder name." >&2
@@ -102,8 +114,9 @@ while [[ $# -gt 0 ]]; do
       fi
       shift ;;
     -h|--help)
+      printf 'Output root: --output-root PATH, then KERMUT_OUTPUT_ROOT, then results/. Relative paths use the repository root.\n'
       printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
-      printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH] [--parallel]\n' "sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch"
+      printf 'Usage: sbatch %s [singles|all|SETTING] [--config PATH] [--parallel] [--output-root PATH] [--experiment-suffix NAME]\n' "sbatch_run/run_kermut/run_kermut_esm2_proteinmpnn.sbatch"
       printf 'Config precedence: --config, KERMUT_CONFIG, configs/kermut_esm2_proteinmpnn.json\n'
       printf 'Default cache IDs use model recipes without a structure-collection prefix; custom JSON selections are used exactly.\n'
       printf 'Migrate existing prefixed ProSST/ESM-IF1 caches first: sbatch sbatch_run/run_prepare_rep/migrate_structure_cache_names.sbatch\n'
@@ -241,7 +254,7 @@ if [[ -z "$assay_index" || ! -f "$assay_index" ]]; then
 fi
 printf 'Catalog: %s\n' "$assay_index"
 run_id="${SLURM_JOB_ID:-manual_$(date -u +%Y%m%dT%H%M%SZ)}"
-run_root="results/${experiment_suffix:+$experiment_suffix/}$assay/${run_prefix}_${selection}_${run_id}"
+run_root="$output_root/${experiment_suffix:+$experiment_suffix/}$assay/${run_prefix}_${selection}_${run_id}"
 runtime_config="$run_root/config.json"
 
 # Refuse to reuse a previous run's directory or overwrite its results.

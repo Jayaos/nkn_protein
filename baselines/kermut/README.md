@@ -380,12 +380,29 @@ Default assay: `FKBP3_HUMAN_Tsuboyama_2023_2KFV`. Default selection: all three
 singles protocols, for 15 fits. The launcher accepts `ASSAY`, `FEATURES`,
 `KERMUT_CONFIG` (overridden by `--config`), `SINGLES_FOLDS_CSV`, and
 `MULTIPLES_FOLDS_CSV`. It snapshots published fold files and the resolved JSON.
-Results go under `results/<assay>/kermut_esm2_proteinmpnn_<selection>_<job_id>/`.
-Add `--experiment-suffix NAME` to either sbatch script to save under
-`results/NAME/<assay>/<model-run>/`. This overrides `EXPERIMENT_SUFFIX=NAME`
-if set when submitting. The suffix must be one folder name; omitting it preserves
-the existing paths. Use the same suffix across related NKN and Kermut submissions,
-then aggregate with `PYTHONPATH=src python -m reporting --results results/NAME --output results/NAME/aggregate`.
+Results default to `results/<assay>/kermut_esm2_proteinmpnn_<selection>_<job_id>/`.
+All Kermut training sbatch launchers accept `--output-root PATH` (or `--output-root=PATH`)
+to choose the base directory. Precedence is **`--output-root`, then
+`KERMUT_OUTPUT_ROOT`, then `results/`**. Absolute paths are used directly;
+relative paths are resolved from the repository root, including when submitting
+from a subdirectory. Quote paths containing spaces.
+
+Add `--experiment-suffix NAME` to save under
+`<output-root>/NAME/<assay>/<model-run>/`. This overrides `EXPERIMENT_SUFFIX=NAME`
+if set when submitting. The suffix must be one folder name. For example:
+
+```bash
+sbatch sbatch_run/run_kermut/run_kermut_prosst_esmif_all_assays.sbatch \
+  singles --output-root /scratch/your_username/results --experiment-suffix comparison_v1
+```
+
+This saves runs under
+`/scratch/your_username/results/comparison_v1/<assay>/kermut_prosst_esmif_singles_<job-id>/`.
+Omitting both options preserves the existing paths. Existing run directories
+are never overwritten. Slurm `.out` files still follow the launcher's
+`#SBATCH --output` setting in the submission directory.
+Use the same output root and suffix across related NKN and Kermut submissions,
+then pass that group's path to `python -m reporting --results`.
 Like the NKN launcher, it activates the cluster's `nkn_protein` Conda environment.
 
 Singles selections use `data/features/pretrained/singles/<assay>` and require
