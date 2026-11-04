@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=15
-#SBATCH --mem=16G
+#SBATCH --mem=192G
 #SBATCH --time=12:00:00
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%A_%a.out
@@ -41,11 +41,11 @@
 set -eo pipefail
 
 assays=(
-  "BRCA1_HUMAN_Findlay_2018"
-  "CAR11_HUMAN_Meitlis_2020_gof"
-  "CAR11_HUMAN_Meitlis_2020_lof"
-  "CAS9_STRP1_Spencer_2017_positive"
-  "DLG4_HUMAN_Faure_2021"
+  "POLG_CXB3N_Mattenberger_2021"
+  "POLG_DEN26_Suphatrakul_2023"
+  "A4D664_9INFA_Soh_2019"
+  "HMDH_HUMAN_Jiang_2019"
+  "MSH2_HUMAN_Jia_2020"
 )
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
