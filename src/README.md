@@ -484,6 +484,12 @@ The other GPU launchers accept the same invocation. CPU result directories use
 `NKN_CONFIG`, followed by the ProSST/ESM-IF1 default. Output-root and
 experiment-suffix overrides remain available.
 
+The four GPU launchers prefer the assay catalog at
+`data/DMS_ProteinGym_substitutions/DMS_substitutions.csv`. If absent, they check
+`data/DMS_substitutions.csv`, then the legacy
+`data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv`.
+Pass `--assay-index PATH` to select a catalog explicitly.
+
 You can edit the default preset directly or copy it to keep separate experiments.
 `--config PATH` can appear before or after the optional setting; omitting the
 setting still runs `singles`. Alternatively, set `NKN_CONFIG=PATH` when submitting.

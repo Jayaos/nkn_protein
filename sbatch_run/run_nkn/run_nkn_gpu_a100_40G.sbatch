@@ -42,7 +42,7 @@
 set -eo pipefail
 
 # 12000 < DMS_number_single_mutants <= 15000, in catalog order, from
-# data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv.
+# data/DMS_ProteinGym_substitutions/DMS_substitutions.csv.
 assays=(
   "A0A192B1T2_9HIV1_Haddox_2018"
   "A4D664_9INFA_Soh_2019"
@@ -83,6 +83,9 @@ GPU request: A100 with 40GB or 80GB VRAM (A100-40GB|A100-80GB).
 Set the Slurm array range to match the list; current entries are shown below.
 Prepared features and scores: data/features/pretrained/singles/<assay>/
 Published folds: data/DMS_ProteinGym_substitutions/cv_folds_singles_substitutions/<assay>.csv
+Catalog: data/DMS_ProteinGym_substitutions/DMS_substitutions.csv (preferred).
+         Falls back to data/DMS_substitutions.csv, then the legacy raw_substitutions location.
+         Override with --assay-index PATH.
 Options: --config PATH --max-steps N --min-steps N --log-every N
          --output-root PATH (overrides NKN_OUTPUT_ROOT; default results/)
          --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX)

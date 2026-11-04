@@ -29,6 +29,16 @@ def _write_json(path, value):
     path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n", encoding="utf-8")
 
 
+def _default_assay_index():
+    """Prefer the current catalog layout while accepting older checkouts."""
+    candidates = [ROOT / relative for relative in (
+        "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv",
+        "data/DMS_substitutions.csv",
+        "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv",
+    )]
+    return next((path for path in candidates if path.is_file()), candidates[0])
+
+
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("selection", nargs="?", default="singles", choices=("singles", *SETTINGS))
@@ -45,8 +55,9 @@ def _parser():
                         help="Prepared feature directory; defaults to data/features/pretrained/singles/ASSAY")
     parser.add_argument("--folds", type=Path,
                         help="Published fold CSV; defaults to cv_folds_singles_substitutions/ASSAY.csv")
-    parser.add_argument("--assay-index", type=Path, default=ROOT
-                        / "data/DMS_ProteinGym_substitutions/raw_substitutions/DMS_substitutions.csv")
+    parser.add_argument("--assay-index", type=Path, default=_default_assay_index(),
+                        help="ProteinGym catalog; defaults to data/DMS_ProteinGym_substitutions/"
+                             "DMS_substitutions.csv, falling back to data/ then raw_substitutions/")
     add_inference_arguments(parser)
     return parser
 
@@ -85,6 +96,7 @@ def main(argv=None):
         torch.set_num_threads(config.num_threads)
         inference = inference_metadata(config.training)
         print(f"Inference: {json.dumps(inference)}", flush=True)
+        print(f"Catalog: {args.assay_index}", flush=True)
         print(f"Assay: {assay}; features: {args.features}", flush=True)
         print(f"Folds: {args.folds}; kernel branches: {', '.join(config.model.enabled_branches)}; "
               f"score sources: {config.score_sources}", flush=True)

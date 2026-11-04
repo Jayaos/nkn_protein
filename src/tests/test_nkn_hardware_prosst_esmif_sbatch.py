@@ -8,6 +8,8 @@ import re
 import unittest
 from unittest.mock import patch
 
+from experiments import large_assay_gpu as gpu
+
 from . import test_gpu_array_sbatch as gpu_tests
 
 
@@ -66,7 +68,23 @@ class HardwareGpuDispatchTests(unittest.TestCase):
     def parsed_record(self):
         record = json.loads(self.fixture.record.read_text())
         self.assertEqual(record["args"][:3], ["-u", "-m", "experiments.large_assay_gpu"])
-        return gpu_tests._parser().parse_args(record["args"][3:]), record
+        with patch.object(gpu, "ROOT", self.fixture.root):
+            return gpu_tests._parser().parse_args(record["args"][3:]), record
+
+    def test_catalog_location_and_explicit_override(self):
+        current = self.fixture.root / "data/DMS_ProteinGym_substitutions/DMS_substitutions.csv"
+        legacy = current.parent / "raw_substitutions/DMS_substitutions.csv"
+        for catalog in (current, legacy):
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            catalog.write_text("DMS_id\n", encoding="utf-8")
+        custom = Path("custom catalogs/selected.csv")
+        for name in GPU_SCRIPTS:
+            for options, expected in (((), current), (("--assay-index", str(custom)), custom)):
+                with self.subTest(script=name, options=options):
+                    result = self.invoke(name, 0, *options)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    parsed, _ = self.parsed_record()
+                    self.assertEqual(parsed.assay_index, expected)
 
     def test_defaults_and_result_names_at_array_boundaries(self):
         for name, size in GPU_SCRIPTS.items():
@@ -113,6 +131,8 @@ class HardwareGpuDispatchTests(unittest.TestCase):
                 self.assertIn(PRESET.as_posix(), result.stdout)
                 self.assertIn("Result prefix: nkn_prosst_esmif", result.stdout)
                 self.assertIn("ProSST-2048 and ESM-IF1", result.stdout)
+                self.assertIn("Catalog: data/DMS_ProteinGym_substitutions/DMS_substitutions.csv", result.stdout)
+                self.assertIn("Override with --assay-index PATH", result.stdout)
                 self.assertFalse(self.fixture.record.exists())
 
 
