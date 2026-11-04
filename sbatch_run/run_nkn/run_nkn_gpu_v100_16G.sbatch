@@ -8,7 +8,7 @@
 #SBATCH --constraint="V100-16GB|V100-32GB"
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=192G
-#SBATCH --time=03:00:00
+#SBATCH --time=06:00:00
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%A_%a.out
 #SBATCH --mail-type=ALL
@@ -16,9 +16,13 @@
 
 # 61 assays with 2,000 < n <= 8,000 single-mutant variants; array indices 0-60.
 # GPU: V100 with 16GB or 32GB VRAM.
-# Same default four-branch NKN preset as run_nkn_cpu.sbatch:
+# Same ProSST/ESM-IF1 four-branch NKN preset as run_nkn_cpu.sbatch:
 # initial noise variance 0.5, in float64.
-# ProteinMPNN features and scores use unprefixed v_48_020-* cache directories.
+# ProSST-2048 supplies sequence-site/global embeddings and masked-marginal scores.
+# ESM-IF1 supplies normalized inverse-folding probabilities and mean scores.
+# Shared structure manifests: data/structures/protssn_proteingym/manifests.
+# BRCA2 disables structure distance while retaining both mean scores.
+# Results use nkn_prosst_esmif; NKN_RUN_PREFIX overrides this prefix.
 # Load prepared features/scores and published singles assignments; run populated folds.
 # Default: all three singles settings; assay-specific config rules still apply.
 # Settings and folds run sequentially on one GPU per task.
@@ -122,9 +126,11 @@ Usage: sbatch sbatch_run/run_nkn/run_nkn_gpu_v100_16G.sbatch [NAME] [singles|SET
 SETTINGS: singles_random, singles_modulo, singles_contiguous
 NAME: optional leading results-group folder name (must not be a setting).
 Default singles runs all three sequentially, using each scheme's populated folds.
-Default config: configs/esm2_proteinmpnn_nkn_four_branches_noise_initial_0p5.json
+Default config: configs/prosst_esm_if1_nkn_four_branches_noise_initial_0p5.json
 Initial noise variance: 0.5; same model/training defaults as run_nkn_cpu.sbatch.
-ProteinMPNN features/scores: unprefixed v_48_020-* cache directories, matching run_nkn_cpu.sbatch.
+Inputs and GP mean scores: ProSST-2048 and ESM-IF1, matching run_nkn_prosst_esmif_small_assays.sbatch.
+Structure manifests: data/structures/protssn_proteingym/manifests; normalized inverse-folding probabilities.
+Result prefix: nkn_prosst_esmif (NKN_RUN_PREFIX overrides).
 Config precedence: --config PATH, NKN_CONFIG, then the default above.
 Default: 61 ProteinGym assays with 2,000 < n <= 8,000 single-mutant variants.
 GPU request: V100 with 16GB or 32GB VRAM (V100-16GB|V100-32GB).
@@ -167,6 +173,7 @@ HELP
 done
 
 experiment_suffix="${EXPERIMENT_SUFFIX:-}"
+run_prefix="${NKN_RUN_PREFIX:-nkn_prosst_esmif}"
 output_root="${NKN_OUTPUT_ROOT:-results}"
 # Consume a leading results-group name before forwarding runner arguments.
 # Known selections and options retain their existing meaning.
@@ -202,6 +209,10 @@ while [[ $# -gt 0 ]]; do
 done
 if [[ "$experiment_suffix" == *[/\\]* || "$experiment_suffix" == "." || "$experiment_suffix" == ".." ]]; then
   echo "error: Experiment suffix must be a single folder name, not a path." >&2
+  exit 1
+fi
+if [[ ! "$run_prefix" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+  echo "error: NKN_RUN_PREFIX must be a name using letters, digits, dots, underscores, or hyphens, starting with a letter or digit." >&2
   exit 1
 fi
 set -- "${runner_args[@]}"
@@ -255,8 +266,8 @@ selection="singles"
 case "${1:-}" in
   singles|singles_random|singles_modulo|singles_contiguous) selection="$1" ;;
 esac
-run_root="$output_root/${experiment_suffix:+$experiment_suffix/}$assay/nkn_esm2_proteinmpnn_${selection}_gpu_${run_id}_${task_index}"
-config="${NKN_CONFIG:-configs/esm2_proteinmpnn_nkn_four_branches_noise_initial_0p5.json}"
+run_root="$output_root/${experiment_suffix:+$experiment_suffix/}$assay/${run_prefix}_${selection}_gpu_${run_id}_${task_index}"
+config="${NKN_CONFIG:-configs/prosst_esm_if1_nkn_four_branches_noise_initial_0p5.json}"
 printf 'Job: %s\nRepository: %s\nPython: %s\n' "$run_id" "$project_root" "$python_exec"
 printf 'Array task: %s_%s; assay: %s\n' \
   "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$assay"

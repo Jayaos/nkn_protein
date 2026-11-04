@@ -464,6 +464,26 @@ evaluation settings, and resources match the ESM2 reference. BRCA2 disables
 structure distance while retaining both mean scores. Results use
 `nkn_prosst_esmif_<selection>_<job-id>`; all shared-runner overrides remain supported.
 
+The hardware-specific launchers also default to this ProSST/ESM-IF1 preset:
+`run_nkn_cpu.sbatch`, `run_nkn_gpu_v100_16G.sbatch`,
+`run_nkn_gpu_v100_32G.sbatch`, `run_nkn_gpu_a100_40G.sbatch`, and
+`run_nkn_gpu_a100_80G.sbatch`, under `sbatch_run/run_nkn/`. Together their
+131/61/14/7/4-assay arrays cover all 217 assays in the local substitutions catalog.
+Their assay indices and Slurm resource allocations are unchanged. Prepare the
+ProSST and ESM-IF1 caches for each selected assay before submitting.
+
+```bash
+sbatch sbatch_run/run_nkn/run_nkn_cpu.sbatch singles --experiment-suffix nkn_prosst_esmif_all
+sbatch sbatch_run/run_nkn/run_nkn_gpu_v100_16G.sbatch singles --experiment-suffix nkn_prosst_esmif_all
+```
+
+The other GPU launchers accept the same invocation. CPU result directories use
+`nkn_prosst_esmif_<selection>_<job-id>`; GPU directories use
+`nkn_prosst_esmif_<selection>_gpu_<job-id>_<task-index>`. All five support
+`NKN_RUN_PREFIX` to override that prefix. `--config` takes precedence over
+`NKN_CONFIG`, followed by the ProSST/ESM-IF1 default. Output-root and
+experiment-suffix overrides remain available.
+
 You can edit the default preset directly or copy it to keep separate experiments.
 `--config PATH` can appear before or after the optional setting; omitting the
 setting still runs `singles`. Alternatively, set `NKN_CONFIG=PATH` when submitting.

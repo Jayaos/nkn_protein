@@ -6,7 +6,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=15
 #SBATCH --mem=64G
-#SBATCH --time=02:00:00
+#SBATCH --time=06:00:00
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%A_%a.out
 #SBATCH --mail-type=ALL
@@ -17,8 +17,11 @@
 # shared NKN runner with four branches and initial noise variance 0.5.
 # Default: singles (random, modulo, contiguous; populated published folds), with the
 # additive two-score preset and caches under data/features/pretrained/singles.
-# Uses the same default config as the ESM2 small-assay launcher; ProteinMPNN
-# features and scores use unprefixed v_48_020-* cache directories.
+# Uses the same ProSST/ESM-IF1 preset as run_nkn_prosst_esmif_small_assays.sbatch.
+# ProSST-2048 supplies sequence-site/global embeddings and masked-marginal scores.
+# ESM-IF1 supplies normalized inverse-folding probabilities and mean scores.
+# Shared structure manifests: data/structures/protssn_proteingym/manifests.
+# BRCA2 disables structure distance while retaining both mean scores.
 # Branches: [1]; final NKN: [8, 4, 4, 2, 1]. Minimum optimizer steps: 1000.
 # Observation-noise variance prior: none. Initial noise variance: 0.5.
 # Enabled: sequence_site, sequence_global, inverse_folding, structure_distance.
@@ -30,14 +33,13 @@
 # one test folds. --validation-interval 100 --patience 100 --min-steps 1000 are defaults.
 # For random CV only, pass singles_random instead of the default singles.
 # Logs: nkn_assays-<array-job-id>_<task-index>.out in the submission directory.
-# Results: results/<assay>/nkn_esm2_proteinmpnn_<selection>_<task-job-id>/
+# Results: results/<assay>/nkn_prosst_esmif_<selection>_<task-job-id>/
+# NKN_RUN_PREFIX overrides the result-directory prefix.
 # --output-root PATH overrides NKN_OUTPUT_ROOT (default results/).
 # Relative output roots are resolved from the repository root.
 # Add --experiment-suffix NAME (or EXPERIMENT_SUFFIX=NAME) under that output root.
 # Config precedence: --config PATH, NKN_CONFIG, then the four-branch additive
 # noise_initial_0p5 preset for every assay.
-# Four-branch alternative with the original noise_initial=0.01:
-#   --config configs/esm2_proteinmpnn_nkn_two_scores_additive_four_branches.json
 # Optional: --noise-prior half_cauchy --noise-prior-scale 0.1.
 set -eo pipefail
 
@@ -183,8 +185,10 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   printf 'Results grouping: --experiment-suffix NAME (overrides EXPERIMENT_SUFFIX); omitted keeps existing paths.\n'
   printf 'Usage: sbatch sbatch_run/run_nkn/run_nkn_cpu.sbatch [singles|SETTING] [--config PATH] [--parallel] [--held-out-interval N]\n'
   printf 'Default array: 0-130; 131 assays with fewer than 2,000 single-mutant variants.\n'
-  printf 'Default config for every assay: configs/esm2_proteinmpnn_nkn_four_branches_noise_initial_0p5.json\n'
-  printf 'ProteinMPNN features/scores: unprefixed v_48_020-* cache directories, matching the ESM2 small-assay launcher.\n'
+  printf 'Default config for every assay: configs/prosst_esm_if1_nkn_four_branches_noise_initial_0p5.json\n'
+  printf 'Inputs and GP mean scores: ProSST-2048 and ESM-IF1, matching run_nkn_prosst_esmif_small_assays.sbatch.\n'
+  printf 'Structure manifests: data/structures/protssn_proteingym/manifests; normalized inverse-folding probabilities.\n'
+  printf 'Result prefix: nkn_prosst_esmif (NKN_RUN_PREFIX overrides).\n'
   printf 'Initial noise variance: 0.5 (explicit --config or NKN_CONFIG overrides the default).\n'
   printf 'Branches: sequence_site, sequence_global, inverse_folding, structure_distance\n'
   printf 'Stopping: --stopping-criterion training_nll|validation_spearman (default training_nll)\n'
@@ -215,7 +219,8 @@ done
 
 export ASSAY="${assays[$task_index]}"
 export NKN_ASSAY_OVERRIDE="$ASSAY"
-default_config="configs/esm2_proteinmpnn_nkn_four_branches_noise_initial_0p5.json"
+default_config="configs/prosst_esm_if1_nkn_four_branches_noise_initial_0p5.json"
 export NKN_CONFIG="${NKN_CONFIG:-$default_config}"
+export NKN_RUN_PREFIX="${NKN_RUN_PREFIX:-nkn_prosst_esmif}"
 printf 'Array task: %s_%s; assay: %s\n' "${SLURM_ARRAY_JOB_ID:-manual}" "$task_index" "$ASSAY"
 exec bash "$project_root/sbatch_run/run_nkn/run_nkn_esm2_proteinmpnn_small_assays.sbatch" "$@"

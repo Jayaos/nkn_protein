@@ -296,6 +296,31 @@ BRCA2 retains both mean scores with structure distance disabled. Results use
 `kermut_prosst_esmif_<selection>_<job-id>`; the usual config, result-prefix,
 parallelism, and experiment-suffix overrides are supported.
 
+To run the same ProSST/ESM-IF model on **all 217 assays** in the local ProteinGym
+substitutions catalog, use
+[`run_kermut_prosst_esmif_all_assays.sbatch`](../../sbatch_run/run_kermut/run_kermut_prosst_esmif_all_assays.sbatch):
+
+```bash
+sbatch sbatch_run/run_kermut/run_kermut_prosst_esmif_all_assays.sbatch singles --experiment-suffix kermut_prosst_esmif_all_assays
+
+# At most four assays running at once:
+sbatch --array=0-216%4 sbatch_run/run_kermut/run_kermut_prosst_esmif_all_assays.sbatch singles --experiment-suffix kermut_prosst_esmif_all_assays
+
+# Inspect the full task-to-assay mapping:
+bash sbatch_run/run_kermut/run_kermut_prosst_esmif_all_assays.sbatch --help
+```
+
+The default array is `0-216`, with one assay per task and no assay-size filter.
+Indices follow the full catalog order and differ from the small-assay launcher.
+The list is a fixed catalog snapshot; update it and the array bounds together
+when changing catalogs. Each task defaults to random, modulo, and contiguous
+singles evaluation. All assays need prepared ProSST/ESM-IF caches and published
+fold CSVs. The preset, options, and resources (15 CPUs, 16 GB RAM, 24 hours)
+match the small-assay job; larger assays may require `sbatch --mem=...` and
+`--time=...` overrides. `--parallel` also increases concurrent memory use.
+With the example suffix, outputs go to
+`results/kermut_prosst_esmif_all_assays/<assay>/kermut_prosst_esmif_singles_<job-id>/`.
+
 Use the five-assay CPU array launcher from the repository root on the cluster:
 
 ```bash

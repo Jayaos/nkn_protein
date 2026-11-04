@@ -86,8 +86,8 @@ class SmallAssayDispatchTests(unittest.TestCase):
     def test_wrappers_preserve_their_own_assay_selection_and_model_config(self):
         for filename, index, config_path, prefix in (
             ("run_nkn_cpu.sbatch", 130,
-             runner_tests.NknSbatchTests.config_file,
-             "nkn_esm2_proteinmpnn"),
+             "configs/prosst_esm_if1_nkn_four_branches_noise_initial_0p5.json",
+             "nkn_prosst_esmif"),
             (prosst_tests.SCRIPT.name, 56, prosst_tests.PRESET.as_posix(), "nkn_prosst_proteinmpnn"),
         ):
             with self.subTest(wrapper=filename):
