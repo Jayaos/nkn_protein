@@ -532,3 +532,35 @@ python -m unittest discover -s baselines/kermut/tests -v
 Tests cover the independent kernel formula, exact likelihood/prior and Gaussian
 conditioning, final-iterate AdamW updates, training-only transforms, frozen
 features, configurable means, checkpoint round trips and all six settings.
+
+## Check completion across all assays
+
+Pass an experiment results directory containing `<assay>/<run>/` directories to
+the CPU-only checker:
+
+```bash
+sbatch sbatch_run/run_kermut/check_kermut_results.sbatch results/kermut_prosst_esmif_all_assays
+# Optional machine-readable report:
+sbatch sbatch_run/run_kermut/check_kermut_results.sbatch results/kermut_prosst_esmif_all_assays --report reports/kermut_completion.json
+```
+
+By default it checks every assay in the ProteinGym catalog for a complete
+`kermut_prosst_esmif` run with `singles_random`, `singles_modulo`, and
+`singles_contiguous` results. Any one complete matching run satisfies the assay;
+an older failed attempt does not invalidate a successful rerun. All requested
+settings must be complete within that same run. The audit checks saved metadata,
+prediction coverage, populated fold artifacts, and failure markers without
+deserializing checkpoint tensors or rerunning training. It leaves results
+unchanged, reports each assay and missing/incomplete catalog indices, and exits
+with status 0 when all assays are complete, 1 when any are missing/incomplete,
+or 2 for invalid inputs.
+The optional JSON report path must not already exist.
+
+Use `--run-prefix NAME` for another Kermut experiment, `--settings NAME...` for a
+subset of the three singles settings, and `--assay-index PATH` for a different
+catalog. Catalog discovery otherwise uses `ASSAY_INDEX`, then the same standard
+catalog locations as the training launcher. Relative results, catalog, and
+report paths resolve from the repository root. Submit from the repository or a
+subdirectory; direct `bash` execution also locates the repository from the
+script path. `bash sbatch_run/run_kermut/check_kermut_results.sbatch --help`
+prints options without activating Conda.
