@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=nkn_gpu_a100_40G
 #SBATCH --account=gts-yxie77-paid
-#SBATCH --array=0-6
+#SBATCH --array=0-3
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:a100:1
@@ -14,7 +14,7 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
-# 7 assays with 12,000 < n <= 15,000 single-mutant variants; array indices 0-6.
+# 4 assays with 12,000 < n <= 15,000 single-mutant variants; array indices 0-6.
 # GPU: A100 with 40GB or 80GB VRAM.
 # Same ProSST/ESM-IF1 four-branch NKN preset as run_nkn_cpu.sbatch:
 # initial noise variance 0.5, in float64.
@@ -45,9 +45,6 @@ set -eo pipefail
 # data/DMS_ProteinGym_substitutions/DMS_substitutions.csv.
 assays=(
   "A0A192B1T2_9HIV1_Haddox_2018"
-  "A4D664_9INFA_Soh_2019"
-  "ENV_HV1BR_Haddox_2016"
-  "HSP82_YEAST_Flynn_2019"
   "MTHR_HUMAN_Weile_2021"
   "Q2N0S5_9HIV1_Haddox_2018"
   "RDRP_I33A0_Li_2023"

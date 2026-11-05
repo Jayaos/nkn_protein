@@ -1,20 +1,23 @@
 #!/bin/bash
 #SBATCH --job-name=nkn_gpu_a100_80G
 #SBATCH --account=gts-yxie77-paid
-#SBATCH --array=0-3
+#SBATCH --array=0-6
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:a100:1
 #SBATCH --constraint=A100-80GB
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=192G
-#SBATCH --time=06:00:00
+#SBATCH --time=12:00:00
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%A_%a.out
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
 # 4 assays with n > 15,000 single-mutant variants; array indices 0-3.
+#  "A4D664_9INFA_Soh_2019"
+#  "ENV_HV1BR_Haddox_2016"
+#  "HSP82_YEAST_Flynn_2019"
 # GPU: A100 with 80GB VRAM.
 # Same ProSST/ESM-IF1 four-branch NKN preset as run_nkn_cpu.sbatch:
 # initial noise variance 0.5, in float64.
@@ -48,6 +51,9 @@ assays=(
   "MSH2_HUMAN_Jia_2020"
   "POLG_CXB3N_Mattenberger_2021"
   "POLG_DEN26_Suphatrakul_2023"
+  "A4D664_9INFA_Soh_2019"
+  "ENV_HV1BR_Haddox_2016"
+  "HSP82_YEAST_Flynn_2019"
 )
 
 assay_count="${#assays[@]}"
