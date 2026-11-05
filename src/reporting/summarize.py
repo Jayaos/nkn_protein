@@ -6,8 +6,9 @@ Defaults: training-standardized out-of-fold Spearman and MSE, interval ECE,
 ENCE, uncertainty CV, and PairECE. Each complete CV row contributes its saved metric with
 equal assay weight. Standard deviation is across assays (population SD,
 ddof=0), not the saved within-assay fold SD. Runs sharing a prefix are grouped
-after removing numeric job/task suffixes. For each metric independently, use
-the latest valid job per assay and split; missing metric columns yield N/A.
+after removing numeric job/task suffixes and a trailing _gpu marker, combining
+general and GPU runs before computing statistics. For each metric independently,
+use the latest valid job per assay and split across both; missing metric columns yield N/A.
 The average row combines all three splits within each assay, then summarizes
 those per-assay averages. Only assays with three valid values contribute.
 """
@@ -40,10 +41,11 @@ METRIC_LABELS = {
 
 
 def _run_group(run_id: str) -> tuple[str, int]:
-    """Remove a numeric Slurm job ID and optional array task index."""
+    """Remove Slurm job/task suffixes and merge trailing GPU run markers."""
     # A manual run's trailing task index is not a job ID.
     match = None if "_manual_" in run_id else re.search(r"_(\d+)(?:_\d+)?$", run_id)
-    return (run_id[:match.start()], int(match[1])) if match else (run_id, -1)
+    prefix, job_id = (run_id[:match.start()], int(match[1])) if match else (run_id, -1)
+    return prefix.removesuffix("_gpu"), job_id
 
 
 def summarize_csv(path: str | Path, metric: str = "spearman_oof_standardized") -> list[dict]:
@@ -154,7 +156,8 @@ def main() -> None:
                      for metric in dict.fromkeys(args.metrics)]
     except (OSError, UnicodeError, csv.Error, ValueError) as error:
         parser.error(str(error))
-    print("Grouped by run prefix; numeric job/task suffixes are ignored; assays have equal weight.")
+    print("Grouped by run prefix; numeric job/task suffixes and trailing _gpu are ignored; "
+          "general and GPU runs are combined with equal assay weight.")
     print("Each metric uses its latest valid job per assay and split independently.")
     print("Skipped: incomplete/invalid rows, missing/non-finite/non-numeric values, or superseded jobs.")
     print("Missing columns yield N/A. Average requires all three settings per assay, separately for each metric.")

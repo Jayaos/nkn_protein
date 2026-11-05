@@ -92,6 +92,43 @@ class ReportingSummaryTests(unittest.TestCase):
         self.assertGreater(summary[0]["std"], 0)
         self.assertGreater(summary[1]["std"], 0)
 
+    def test_general_and_gpu_runs_pool_assays_before_computing_metrics(self):
+        prefix = "nkn_prosst_esmif_singles"
+        rows = []
+        for assay, run, scores in (
+            ("a", f"{prefix}_10", (.2, .4, .6)),
+            ("b", f"{prefix}_10", (.4, .6, .8)),
+            ("c", f"{prefix}_gpu_11_0", (.9, .3, 0)),
+        ):
+            for setting, value in zip(("random", "modulo", "contiguous"), scores):
+                rows.append(self.row(assay, value, run=run, setting=f"singles_{setting}",
+                                     **{metric: value for metric in METRIC_LABELS}))
+        self.write(rows)
+        for metric in METRIC_LABELS:
+            with self.subTest(metric=metric):
+                summary = summarize_csv(self.path, metric)
+                self.assertEqual(len(summary), 4)
+                self.assertEqual({row["run_id"] for row in summary}, {prefix})
+                for row, mean, variance in zip(summary,
+                        (.5, 13 / 30, 7 / 15, 7 / 15),
+                        (13 / 150, 7 / 450, 26 / 225, 2 / 225)):
+                    self.assertEqual((row["n_assays"], row["skipped"]), (3, 0))
+                    self.assertAlmostEqual(row["mean"], mean)
+                    self.assertAlmostEqual(row["std"], variance ** .5)
+
+    def test_average_combines_settings_across_general_and_gpu_runs(self):
+        self.write([
+            self.row("a", .25, run="nkn_singles_10"),
+            self.row("a", .5, run="nkn_singles_gpu_11_0", setting="singles_modulo"),
+            self.row("a", .75, run="nkn_singles_gpu_11_0", setting="singles_contiguous"),
+        ])
+        summary = summarize_csv(self.path)
+        self.assertEqual(len(summary), 4)
+        self.assertEqual(summary[-1], {
+            "run_id": "nkn_singles", "setting": "average", "n_assays": 1,
+            "mean": .5, "std": 0.0, "skipped": 0,
+        })
+
     def test_skipped_scores_and_unrelated_settings(self):
         rows = [self.row(str(i), value) for i, value in enumerate(("", "nan", "inf", "bad"))]
         rows.extend([self.row("incomplete", 0.7, status="incomplete"),
@@ -114,7 +151,7 @@ class ReportingSummaryTests(unittest.TestCase):
 
     def test_cli_prints_both_runs_without_writing_files(self):
         self.write([self.row("a", 0.2, run="nkn_singles_10"),
-                    self.row("b", 0.6, run="nkn_singles_11"),
+                    self.row("b", 0.6, run="nkn_singles_gpu_11_0"),
                     self.row("a", 0.9, run="kermut_singles_12")])
         original = self.path.read_bytes()
         output = io.StringIO()
@@ -123,7 +160,7 @@ class ReportingSummaryTests(unittest.TestCase):
         self.assertIn("run prefix: nkn_singles\n", output.getvalue())
         self.assertIn("run prefix: kermut_singles\n", output.getvalue())
         self.assertNotIn("nkn_singles_10", output.getvalue())
-        self.assertNotIn("nkn_singles_11", output.getvalue())
+        self.assertNotIn("nkn_singles_gpu", output.getvalue())
         self.assertIn("0.400000", output.getvalue())
         self.assertIn("0.200000", output.getvalue())
         self.assertEqual(sum(line.startswith("average ") for line in output.getvalue().splitlines()), 2)
@@ -205,11 +242,11 @@ class ReportingSummaryTests(unittest.TestCase):
 
     def test_latest_valid_jobs_are_selected_independently_for_each_metric(self):
         rows = [
-            self.row("a", .9, run="nkn_singles_9", mse_oof_standardized=4, ence=.8),
+            self.row("a", .9, run="nkn_singles_gpu_9_99", mse_oof_standardized=4, ence=.8),
             self.row("a", .2, run="nkn_singles_10", mse_oof_standardized=2, ence=None),
-            self.row("a", .5, run="nkn_singles_11", status="incomplete",
+            self.row("a", .5, run="nkn_singles_gpu_11_1", status="incomplete",
                      mse_oof_standardized=10, ence=10),
-            self.row("a", "nan", run="nkn_singles_12", mse_oof_standardized="nan", ence=.4),
+            self.row("a", "nan", run="nkn_singles_gpu_12_1", mse_oof_standardized="nan", ence=.4),
         ]
         for order in (rows, list(reversed(rows))):
             self.write(order)
@@ -278,11 +315,11 @@ class ReportingSummaryTests(unittest.TestCase):
                     self.row("a", 0.9, run="nkn_prosst_proteinmpnn_singles_gpu_14522762_0")])
         summary = summarize_csv(self.path)
         self.assertEqual(len(summary), 8)
-        self.assertEqual(summary[0]["run_id"], "nkn_esm2_proteinmpnn_singles_gpu")
+        self.assertEqual(summary[0]["run_id"], "nkn_esm2_proteinmpnn_singles")
         self.assertEqual(summary[0]["n_assays"], 2)
         self.assertAlmostEqual(summary[0]["mean"], 0.4)
         self.assertAlmostEqual(summary[0]["std"], 0.2)
-        self.assertEqual(summary[4]["run_id"], "nkn_prosst_proteinmpnn_singles_gpu")
+        self.assertEqual(summary[4]["run_id"], "nkn_prosst_proteinmpnn_singles")
 
     def test_latest_valid_job_per_assay_is_independent_of_csv_order(self):
         rows = [self.row("a", 0.9, run="nkn_singles_gpu_9_99"),
@@ -301,7 +338,7 @@ class ReportingSummaryTests(unittest.TestCase):
                 self.assertAlmostEqual(summary[0]["std"], 0.2)
 
     def test_names_without_job_ids_and_manual_runs_keep_their_names(self):
-        names = ("nkn_esm2_proteinmpnn_singles", "nkn_custom_v2",
+        names = ("nkn_esm2_proteinmpnn_singles", "nkn_custom_v2", "nkn_gpu_custom_singles",
                  "nkn_singles_gpu_manual_20261017T120000Z_99")
         self.write([self.row("a", 0.2, run=name) for name in names])
         self.assertEqual({row["run_id"] for row in summarize_csv(self.path)}, set(names))

@@ -583,16 +583,18 @@ incomplete/invalid rows are skipped independently. No usable values or a missing
 metric column prints `N/A`; one usable assay has standard deviation zero.
 Older results without saved metrics remain `N/A`: reporting does not recompute
 them from predictions or import the plotting script's recovered metrics.
-Numeric job IDs and optional
-array task suffixes are removed for grouping: for example,
-`nkn_esm2_proteinmpnn_singles_14521140` and
-`nkn_esm2_proteinmpnn_singles_14521255` share the group
-`nkn_esm2_proteinmpnn_singles`. Different prefixes remain separate. For repeated
+Numeric job IDs and optional array task suffixes are removed for grouping,
+followed by a trailing `_gpu` marker: for example,
+`nkn_prosst_esmif_singles_14521140` and
+`nkn_prosst_esmif_singles_gpu_14521255_0` share the group
+`nkn_prosst_esmif_singles`. General and GPU assay values are pooled before
+computing the mean and population standard deviation. Other prefixes remain separate. For repeated
 assays within a group and split, the highest numeric job ID with a valid value
 wins independently for each metric; different metrics can select different jobs
 when some values are missing. Superseded values count as skipped so each assay
 contributes once per metric.
-Names without numeric job IDs, including manual run names, are kept intact.
+Names without numeric job IDs also have a trailing `_gpu` removed; internal
+`_gpu` tokens and full manual run names are kept intact.
 The script only prints and creates no report files.
 
 Each metric and run group also has an `average` row: compute `(random + modulo + contiguous) / 3`
