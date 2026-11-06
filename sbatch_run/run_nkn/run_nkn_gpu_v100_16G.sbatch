@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=nkn_gpu_v100_16G
 #SBATCH --account=gts-yxie77-paid
-#SBATCH --array=0-60
+#SBATCH --array=0-59
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:v100:1
@@ -14,7 +14,8 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
-# 61 assays with 2,000 < n <= 8,000 single-mutant variants; array indices 0-60.
+# 60 assays with 2,000 < n <= 8,000 single-mutant variants; array indices 0-60.
+# exclude "LGK_LIPST_Klesmith_2015"
 # GPU: V100 with 16GB or 32GB VRAM.
 # Same ProSST/ESM-IF1 four-branch NKN preset as run_nkn_cpu.sbatch:
 # initial noise variance 0.5, in float64.
@@ -71,7 +72,6 @@ assays=(
   "KCNJ2_MOUSE_Coyote-Maestas_2022_function"
   "KCNJ2_MOUSE_Coyote-Maestas_2022_surface"
   "KKA2_KLEPN_Melnikov_2014"
-  "LGK_LIPST_Klesmith_2015"
   "MET_HUMAN_Estevam_2023"
   "MK01_HUMAN_Brenan_2016"
   "MLAC_ECOLI_MacRae_2023"
@@ -132,7 +132,7 @@ Inputs and GP mean scores: ProSST-2048 and ESM-IF1, matching run_nkn_prosst_esmi
 Structure manifests: data/structures/protssn_proteingym/manifests; normalized inverse-folding probabilities.
 Result prefix: nkn_prosst_esmif (NKN_RUN_PREFIX overrides).
 Config precedence: --config PATH, NKN_CONFIG, then the default above.
-Default: 61 ProteinGym assays with 2,000 < n <= 8,000 single-mutant variants.
+Default: 60 ProteinGym assays with 2,000 < n <= 8,000 single-mutant variants.
 GPU request: V100 with 16GB or 32GB VRAM (V100-16GB|V100-32GB).
 Set the Slurm array range to match the list; current entries are shown below.
 Prepared features and scores: data/features/pretrained/singles/<assay>/
