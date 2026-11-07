@@ -8,14 +8,16 @@
 #SBATCH --constraint="V100-32GB|A100-40GB|A100-80GB"
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=192G
-#SBATCH --time=06:00:00
+#SBATCH --time=02:00:00
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%A_%a.out
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jlee3541@gatech.edu
 
-# 14 assays with 8,000 < n <= 12,000 single-mutant variants; array indices 0-13.
+# 14 assays with 8,000 < n <= 12,000 single-mutant variants; array indices 0-15.
 # + "LGK_LIPST_Klesmith_2015"
+# + "PPM1D_HUMAN_Miller_2022"
+# exclude "SC6A4_HUMAN_Young_2021"
 # GPU: V100 with 32GB VRAM or A100 with 40GB or 80GB VRAM.
 # Same ProSST/ESM-IF1 four-branch NKN preset as run_nkn_cpu.sbatch:
 # initial noise variance 0.5, in float64.
@@ -57,9 +59,9 @@ assays=(
   "PRKN_HUMAN_Clausen_2023"
   "S22A1_HUMAN_Yee_2023_abundance"
   "S22A1_HUMAN_Yee_2023_activity"
-  "SC6A4_HUMAN_Young_2021"
   "SHOC2_HUMAN_Kwon_2022"
   "LGK_LIPST_Klesmith_2015"
+  "PPM1D_HUMAN_Miller_2022"
 )
 
 assay_count="${#assays[@]}"

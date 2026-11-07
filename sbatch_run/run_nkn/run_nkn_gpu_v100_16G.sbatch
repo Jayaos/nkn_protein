@@ -8,7 +8,7 @@
 #SBATCH --constraint="V100-16GB|V100-32GB"
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=192G
-#SBATCH --time=06:00:00
+#SBATCH --time=02:00:00
 #SBATCH --qos=inferno
 #SBATCH --output=%x-%A_%a.out
 #SBATCH --mail-type=ALL
@@ -16,6 +16,7 @@
 
 # 60 assays with 2,000 < n <= 8,000 single-mutant variants; array indices 0-60.
 # exclude "LGK_LIPST_Klesmith_2015"
+# exclude "PPM1D_HUMAN_Miller_2022"
 # GPU: V100 with 16GB or 32GB VRAM.
 # Same ProSST/ESM-IF1 four-branch NKN preset as run_nkn_cpu.sbatch:
 # initial noise variance 0.5, in float64.
@@ -83,7 +84,6 @@ assays=(
   "P53_HUMAN_Giacomelli_2018_WT_Nutlin"
   "PAI1_HUMAN_Huttinger_2021"
   "PHOT_CHLRE_Chen_2023"
-  "PPM1D_HUMAN_Miller_2022"
   "PTEN_HUMAN_Matreyek_2021"
   "PTEN_HUMAN_Mighell_2018"
   "Q53Z42_HUMAN_McShan_2019_binding-TAPBPR"
