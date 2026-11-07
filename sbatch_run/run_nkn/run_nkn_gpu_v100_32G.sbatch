@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=nkn_gpu_v100_32G
 #SBATCH --account=gts-yxie77-paid
-#SBATCH --array=0-14
+#SBATCH --array=14
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
