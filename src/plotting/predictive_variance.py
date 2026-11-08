@@ -20,7 +20,7 @@ from plotting.calibration import _expected_fold_ids, _read, discover_runs
 SETTINGS = ("singles_random", "singles_modulo", "singles_contiguous")
 MODELS = ("kermut", "nkn")
 COLORS = {"kermut": "#4575B4", "nkn": "#D95F02"}
-LABELS = {"kermut": "Kermut", "nkn": "NKN"}
+LABELS = {"kermut": "Kermut", "nkn": "PHKN"}
 
 
 def _count(value, name: str, minimum: int = 0) -> int:
@@ -228,14 +228,11 @@ def render_comparison(summary: dict, output_dir: Path, formats=("png", "pdf"), d
                     ax.scatter(position + jitter, values, color=color, s=13, alpha=0.45, zorder=4)
                     ax.plot(position, median, marker="_", markersize=10,
                             markeredgewidth=2, color="black", zorder=5)
-            ax.set_xticks(range(3), ["1M → 1M\nRandom", "1M → 1M\nModulo", "1M → 1M\nContiguous"])
+            ax.set_xticks(range(3), ["Random", "Modulo", "Contiguous"])
             ax.set_xlim(-0.6, 2.6)
             ax.set_ylim(bottom=0)
-            ax.set_ylabel("Mean predictive variance $\\hat{\\sigma}^2$\n(saved training-standardized units)")
+            ax.set_ylabel("Avg. predictive variance $\\hat{\\sigma}^2$")
             ax.set_xlabel("Split scheme")
-            kind = "Observation" if summary["variance_kind"] == "observation" else "Latent"
-            count = summary["n_assays"]
-            ax.set_title(f"{kind} predictive uncertainty\n{count} matched assay{'s' if count != 1 else ''}; one point per assay", pad=12)
             ax.legend(handles=[Patch(facecolor=COLORS[m], label=LABELS[m], alpha=0.7) for m in MODELS],
                       loc="upper left", bbox_to_anchor=(1.01, 1), frameon=False)
             ax.grid(axis="y", alpha=0.22)
