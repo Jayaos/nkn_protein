@@ -1,4 +1,78 @@
-# NKN and Kermut calibration plots
+# NKN and Kermut plots
+
+## Predictive variance comparison (Figure 2)
+
+To compare Kermut and NKN side by side for **1M -> 1M random, modulo, and
+contiguous** schemes, submit:
+
+```bash
+sbatch sbatch_run/run_plotting/plot_predictive_variance.sbatch \
+  --kermut-results-dir results/kermut_experiment \
+  --nkn-results-dir results/nkn_experiment \
+  --output-dir plots/kermut_vs_nkn_variance
+```
+
+Each input root has the layout `<root>/<assay>/{kermut,nkn}_*/cv/`. If both
+models are in one collection, pass the same path to both options (for example,
+`results/hierarchical_nkn`). Each root defaults to `results`; discovery does
+not recursively combine result collections.
+
+The grouped violins follow [Figure 2 of the Kermut paper](https://arxiv.org/pdf/2407.00002),
+with adjacent Kermut and NKN distributions for each of the three schemes.
+They use **observation predictive variance**, including observation noise,
+in saved training-standardized target units. Each plotted value is the mean across
+an assay's held-out single-mutant variants, pooled across its CV folds. Each
+assay then contributes one value to its model/scheme distribution, regardless
+of assay size. Use `--variance-kind latent` to compare latent variances instead.
+The code reads `variance_summary.single_mutants` from saved aggregate
+`metrics.json` files; when that summary is absent, it weights the saved fold
+means by their variant counts. It does not load models or recompute predictions.
+Saved units are preserved: legacy Kermut runs may use training sample SD,
+while current runs use population SD; the plotter does not rescale those runs.
+
+Dots represent assays, thick bars span the 25th to 75th percentiles, black ticks
+mark medians, and whiskers extend to the most extreme values within 1.5 IQR.
+Singleton or constant groups use points and summary bars without a density.
+
+Only assays with complete results for both models in all three schemes enter
+the comparison; the same assay cohort is used throughout. Mixed-mutant and
+single-to-double settings are excluded. This uses all eligible shared assays,
+without requiring the double-mutant data used to select assays in the paper.
+Saved variant/fold assignments must agree when available; otherwise matching
+uses fold counts and the summary records this limitation.
+The JSON summary records the included assays, omitted results, source paths,
+and aggregation choices. Multiple runs for the same model and assay require
+explicit selection with repeatable `--kermut-run-dir` or `--nkn-run-dir`; these
+options bypass discovery for that model. Use repeatable `--assay` to restrict
+the comparison to particular assays.
+
+The job writes directly to `--output-dir` (default `plots/predictive_variance`):
+
+```text
+predictive_variance.png
+predictive_variance.pdf
+predictive_variance_per_assay.csv
+predictive_variance_summary.json
+```
+
+Use `--formats png pdf svg` and `--dpi 300` to customize exports. Rerunning at
+the same destination replaces these outputs, so choose a separate output
+directory for each model configuration comparison. Source results are read only.
+The launcher uses the existing `nkn_protein` environment with Matplotlib, one
+CPU, 2 GB RAM, and 10 minutes. `PLOT_KERMUT_RESULTS_DIR`,
+`PLOT_NKN_RESULTS_DIR`, and `PLOT_OUTPUT_DIR` provide environment defaults;
+explicit command-line values take precedence. Relative paths use the repository
+root. Launcher help works without Conda or Slurm:
+
+```bash
+bash sbatch_run/run_plotting/plot_predictive_variance.sbatch --help
+PYTHONPATH=src python -m plotting.predictive_variance \
+  --kermut-results-dir results/hierarchical_nkn \
+  --nkn-results-dir results/hierarchical_nkn \
+  --output-dir plots/hierarchical_nkn_variance
+```
+
+## Calibration plots
 
 Submit from the repository root or a subdirectory:
 
