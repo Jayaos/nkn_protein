@@ -232,7 +232,6 @@ def render_comparison(summary: dict, output_dir: Path, formats=("png", "pdf"), d
             ax.set_xlim(-0.6, 2.6)
             ax.set_ylim(bottom=0)
             ax.set_ylabel("Avg. predictive variance $\\hat{\\sigma}^2$")
-            ax.set_xlabel("Split scheme")
             ax.legend(handles=[Patch(facecolor=COLORS[m], label=LABELS[m], alpha=0.7) for m in MODELS],
                       loc="upper left", bbox_to_anchor=(1.01, 1), frameon=False)
             ax.grid(axis="y", alpha=0.22)
