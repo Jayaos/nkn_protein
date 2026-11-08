@@ -233,7 +233,7 @@ def render_comparison(summary: dict, output_dir: Path, formats=("png", "pdf"), d
             ax.set_ylim(bottom=0)
             ax.set_ylabel("Avg. predictive variance $\\hat{\\sigma}^2$")
             ax.legend(handles=[Patch(facecolor=COLORS[m], label=LABELS[m], alpha=0.7) for m in MODELS],
-                      loc="upper left", bbox_to_anchor=(1.01, 1), frameon=False)
+                      loc="upper left", frameon=False)
             ax.grid(axis="y", alpha=0.22)
             ax.set_axisbelow(True)
             files = []
